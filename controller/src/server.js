@@ -94,6 +94,31 @@ function ffmpegMux(input, output) {
 }
 
 async function processMedia(item, jobDir) {
+  if (item.type === 'video') {
+    const out = path.join(jobDir, 'out.mp4');
+    if (/^https?:\/\//i.test(item.source)) {
+      // For HLS-style sources we feed the URL directly to ffmpeg rather than trying to
+      // download it as a static object.
+      if (/\.m3u8(\?|$)/i.test(item.source)) {
+        await ffmpegMux(item.source, out);
+      } else {
+        const file = path.join(jobDir, 'input.bin');
+        await download(item.source, file, DOWNLOAD_TIMEOUT_MS);
+        const stat = fs.statSync(file);
+        if (stat.size > MAX_MEDIA_BYTES) throw new Error('media-too-large');
+        await ffmpegMux(file, out);
+      }
+    } else if (fs.existsSync(item.source)) {
+      const stat = fs.statSync(item.source);
+      if (stat.size > MAX_MEDIA_BYTES) throw new Error('media-too-large');
+      await ffmpegMux(item.source, out);
+    } else {
+      throw new Error('media-source-invalid');
+    }
+    if (!(await ffprobeOk(out))) throw new Error('ffprobe-validation-failed');
+    return out;
+  }
+
   const file = path.join(jobDir, crypto.randomBytes(6).toString('hex') + '.bin');
   if (/^https?:\/\//i.test(item.source)) {
     await download(item.source, file, DOWNLOAD_TIMEOUT_MS);
@@ -104,13 +129,6 @@ async function processMedia(item, jobDir) {
   }
   const stat = fs.statSync(file);
   if (stat.size > MAX_MEDIA_BYTES) throw new Error('media-too-large');
-
-  if (item.type === 'video') {
-    const out = path.join(jobDir, 'out.mp4');
-    await ffmpegMux(file, out);
-    if (!(await ffprobeOk(out))) throw new Error('ffprobe-validation-failed');
-    return out;
-  }
   return file;
 }
 
@@ -161,8 +179,9 @@ async function sendJob(body) {
     cleanup(jobDir);
     return { ok: true, jobId, sent };
   } catch (e) {
+    try{ console.log('sendJob error:', e && e.message, e && e.stack); }catch{}
     duplicateLog.set(key, { ts: now, status: 'failed', jobId });
-    jobs.set(jobId, { status: 'failed', error: e.message });
+    jobs.set(jobId, { status: 'failed', error: e.message || String(e) });
     cleanup(jobDir);
     return { ok: false, error: e.message, jobId };
   }

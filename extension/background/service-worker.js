@@ -32,7 +32,6 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       const p = msg.post;
       const media = [];
       // Image: resolve tweet-scoped pbs media URL through the article's photo route.
-      // For the video we still rely on the controller-side acquisition pipeline.
       if (p.hasImage && p.photoHrefs && p.photoHrefs.length > 0) {
         try {
           const imageUrl = await resolvePhotoUrl(p.photoHrefs[0]);
@@ -56,7 +55,6 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         return reply(sendResponse, { ok: false, error: 'no-default-channel' });
       }
 
-      // Basic validation
       if (!payload.text && payload.media.length === 0) {
         return reply(sendResponse, { ok: false, error: 'empty-post' });
       }
@@ -68,9 +66,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       });
       const j = await res.json();
       reply(sendResponse, j && j.ok ? { ok: true, jobId: j.jobId, sent: j.sent } : { ok: false, error: (j && j.error) || 'send-failed' });
-    } catch (e) {
-      reply(sendResponse, { ok: false, error: e.message });
-    }
+    } catch (e) { reply(sendResponse, { ok: false, error: e.message }); }
   })();
   return true;
 });

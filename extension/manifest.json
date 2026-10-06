@@ -8,7 +8,7 @@
     "https://x.com/*",
     "https://pbs.twimg.com/*",
     "https://video.twimg.com/*",
-    "http://127.0.0.1:47825/*"
+    "http://127.0.0.1/*"
   ],
   "content_scripts": [
     {
