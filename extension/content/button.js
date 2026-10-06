@@ -14,14 +14,26 @@ function injectButton(article) {
   btn.addEventListener('click', async (ev) => {
     ev.preventDefault();
     ev.stopPropagation();
-    const post = window.__xwapExtractPost(article);
+    if (btn.disabled) return;
+
+    // Resolve the *current* article at click time (X SPA pipelines can reuse
+    // DOM nodes, so the article captured at injection may be stale).
+    const currentArticle = btn.closest('article');
+    if (!currentArticle) { btn.textContent = 'Err'; return; }
+
+    const post = window.__xwapExtractPost(currentArticle);
     if (post.error) { btn.textContent = 'Unsupported'; return; }
+
+    btn.disabled = true;
     btn.textContent = 'Sending…';
     try {
       const result = await chrome.runtime.sendMessage({ type: 'SEND_POST', post });
       btn.textContent = result && result.ok ? 'Sent' : `Err: ${(result && result.error) || 'failed'}`;
     } catch (e) {
       btn.textContent = 'Err';
+    } finally {
+      // Restore the original state after a short timeout so the user can see the result.
+      btn.disabled = false;
     }
     setTimeout(() => { btn.textContent = 'Post to WhatsApp'; }, 4000);
   });

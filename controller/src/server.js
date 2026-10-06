@@ -153,7 +153,7 @@ async function sendJob(body) {
       for (const m of media) {
         if (!validMedia(m)) { jobs.set(jobId, { status: 'failed', error: 'bad-media' }); cleanup(jobDir); return { ok: false, error: 'bad-media', jobId }; }
         try { const f = await processMedia(m, jobDir); mediaFiles.push({ type: m.type, file: f }); }
-        catch (e) { jobs.set(jobId, { status: 'failed', error: e.message }); cleanup(jobDir); return { ok: false, error: e.message, jobId }; }
+        catch (e) { try{ console.log('sendJob media error:', e && e.message, e && e.stack); }catch{} jobs.set(jobId, { status: 'failed', error: e.message }); cleanup(jobDir); return { ok: false, error: e.message, jobId }; }
       }
     }
 

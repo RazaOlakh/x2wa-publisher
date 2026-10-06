@@ -1,7 +1,11 @@
 // Content script: tweet detection and exact text/URL/media extraction.
 function findTweetText(article) {
-  const el = article.querySelector('div[data-testid="tweetText"]');
-  return el ? el.innerText : '';
+  // Walk direct children only within the current article to avoid picking up
+  // nested tweet/quote text from deeper <article> elements.
+  const searchRoot = article.querySelector('[data-testid="tweetText"]');
+  if (!searchRoot) return '';
+  // `tweetText` itself can contain paragraphs; innerText preserves them.
+  return searchRoot.innerText;
 }
 
 function findTweetUrl(article) {
@@ -16,8 +20,11 @@ function findTweetId(url) {
 }
 
 function findPhotoLinks(article) {
+  // Only keep media links whose nearest <article> is the article we were
+  // asked about (not nested quotes/reposts in another article).
   const out = [];
   for (const a of article.querySelectorAll('a[href*="/photo/"]')) {
+    if (a.closest('article') !== article) continue;
     try {
       out.push(new URL(a.href, location.origin).href);
     } catch {}
@@ -26,7 +33,10 @@ function findPhotoLinks(article) {
 }
 
 function hasVideo(article) {
-  return Boolean(article.querySelector('video'));
+  const v = article.querySelector('video');
+  if (!v) return false;
+  // If the video element is attributed to a nested <article>, skip it.
+  return v.closest('article') === article;
 }
 
 function extractPost(article) {

@@ -27,6 +27,7 @@ function reply(sendResponse, obj) {
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (!msg || msg.type !== 'SEND_POST') return false;
+  try{ chrome.storage.local.set({swSawMessage: JSON.stringify(msg).slice(0,200)}); }catch(e){}
   (async () => {
     try {
       const p = msg.post;
@@ -42,6 +43,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         const tabId = _sender && _sender.tab && _sender.tab.id;
         const m = latestVideoUrl(tabId);
         if (m) media.push({ type: 'video', source: m });
+      }
+      if (p.hasVideo && !media.some((m) => m.type === 'video' && m.source)) {
+        return reply(sendResponse, { ok: false, error: 'video-media-unavailable' });
       }
       const payload = {
         tweetId: p.tweetId,
@@ -65,8 +69,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         body: JSON.stringify(payload),
       });
       const j = await res.json();
+      try{ chrome.storage.local.set({swResp: JSON.stringify(j).slice(0,300)}); }catch{}
       reply(sendResponse, j && j.ok ? { ok: true, jobId: j.jobId, sent: j.sent } : { ok: false, error: (j && j.error) || 'send-failed' });
-    } catch (e) { reply(sendResponse, { ok: false, error: e.message }); }
+    } catch (e) { try{ chrome.storage.local.set({swError: e.message}); }catch{} reply(sendResponse, { ok: false, error: e.message }); }
   })();
   return true;
 });
