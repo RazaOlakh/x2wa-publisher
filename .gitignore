@@ -1,0 +1,14 @@
+node_modules/
+*.log
+.DS_Store
+controller/.wwebjs_cache/
+tmp/
+deps/
+~/
+spike/
+spike2/
+spike3/
+spike4/
+spike5/
+spike5_src/
+spike6/

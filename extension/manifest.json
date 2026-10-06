@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "X to WhatsApp Channel Poster",
+  "version": "1.0.0",
+  "description": "Post content from X.com to a WhatsApp Channel via a local controller.",
+  "permissions": ["storage", "webRequest"],
+  "host_permissions": [
+    "https://x.com/*",
+    "https://pbs.twimg.com/*",
+    "https://video.twimg.com/*",
+    "http://127.0.0.1:47825/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["https://x.com/*", "https://twitter.com/*"],
+      "js": ["content/tweet-extractor.js", "content/button.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "background": {
+    "service_worker": "background/service-worker.js"
+  },
+  "action": {
+    "default_popup": "popup/popup.html"
+  }
+}

@@ -1,0 +1,8 @@
+diff --git a/src/util/Injected/Utils.js b/src/util/Injected/Utils.js
+index dfa30a579de..7cca7a4a3fc 100644
+--- a/src/util/Injected/Utils.js
++++ b/src/util/Injected/Utils.js
+524c524
+<                               mediaMetadata: msg.avParams(),
+---
+>                               mediaMetadata: window.require('WAWebMediaMetadata').mediaMetadata(msg),
