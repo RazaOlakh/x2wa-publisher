@@ -1,7 +1,10 @@
 // Content script: inject "Post to WhatsApp" buttons, delegate click to background.
 const INJECTION_FLAG = '__xwapButtonInjected';
 
-function xlog(level,event,data){ const rec={ts:new Date().toISOString(),level,component:'content',event,...(data||{})}; try{ console.log(JSON.stringify(rec)); }catch{ console.log(`${level} ${event}`); } }
+function xlog(level, event, data) {
+  const rec = { ts: new Date().toISOString(), level, component: 'content', event, ...(data || {}) };
+  try { console.log(JSON.stringify(rec)); } catch { console.log(`${level} ${event}`); }
+}
 
 function injectButton(article) {
   if (article[INJECTION_FLAG]) return;
@@ -17,31 +20,35 @@ function injectButton(article) {
     ev.preventDefault();
     ev.stopPropagation();
     if (btn.disabled) return;
+    const requestId = 'req-' + Date.now();
+    try { xlog('info', 'button-click', { requestId, articleUrl: location.href }); } catch {}
 
-    // Resolve the *current* article at click time (X SPA pipelines can reuse
-    // DOM nodes, so the article captured at injection may be stale).
     const currentArticle = btn.closest('article');
-    if (!currentArticle) { btn.textContent = 'Err'; return; }
+    if (!currentArticle) { btn.textContent = 'Err'; xlog('error', 'extraction-failed', { requestId, error: 'no article' }); return; }
 
-    const _reqId = 'xwap-' + Date.now() + '-' + Math.random().toString(36).slice(2,9);
-    const startTs = performance.now();
-    xlog('info','button-click',{requestId:_reqId});
+    try { xlog('info', 'extraction-started', { requestId }); } catch {}
     const post = window.__xwapExtractPost(currentArticle);
-    xlog('info','extraction-started',{requestId:_reqId});
-    xlog('info','extraction-result',{requestId:_reqId,tweetId:post&&post.tweetId,mediaTypes:post&&post.hasImage?['image']:[].concat(post&&post.hasVideo?['video']:[]),error:post.error||null});
-    if (post.error) { btn.textContent = 'Unsupported'; return; }
+    try { xlog('info', 'extraction-succeeded', { requestId, tweetId: post && post.tweetId, textLength: post && post.text ? post.text.length : 0, mediaTypes: post ? [post.hasImage ? 'image' : null, post.hasVideo ? 'video' : null].filter(Boolean) : [], error: post ? post.error : 'missing' }); } catch {}
+
+    if (post.error) { btn.textContent = 'Unsupported'; xlog('error', 'extraction-failed', { requestId, error: post.error }); return; }
 
     btn.disabled = true;
     btn.textContent = 'Sending…';
     try {
-      const result = await chrome.runtime.sendMessage({ type: 'SEND_POST', post, requestId: _reqId });
-      xlog('info','response-received',{requestId:_reqId,ok:result&&result.ok,error:result&&result.error,jobId:result&&result.jobId,durationMs:Math.round(performance.now()-startTs)});
+      const started = Date.now();
+      try { xlog('info', 'send-started', { requestId, tweetId: post.tweetId, mediaTypes: post.hasImage ? ['image'] : [] }); } catch {}
+      const result = await chrome.runtime.sendMessage({ type: 'SEND_POST', post, requestId });
+      try { xlog('info', 'response-received', { requestId, jobId: result && result.jobId, durationMs: Date.now() - started }); } catch {}
       btn.textContent = result && result.ok ? 'Sent' : `Err: ${(result && result.error) || 'failed'}`;
+      if (result && result.ok) {
+        try { xlog('info', 'send-succeeded', { requestId, tweetId: post.tweetId, jobId: result.jobId }); } catch {}
+      } else {
+        try { xlog('error', 'send-failed', { requestId, tweetId: post.tweetId, error: result ? result.error : 'unknown' }); } catch {}
+      }
     } catch (e) {
       btn.textContent = 'Err';
-      xlog('error','send-failed',{requestId:_reqId,error:e&&e.message});
+      try { xlog('error', 'send-failed', { requestId, tweetId: post.tweetId, error: e && e.message }); } catch {}
     } finally {
-      // Restore the original state after a short timeout so the user can see the result.
       btn.disabled = false;
     }
     setTimeout(() => { btn.textContent = 'Post to WhatsApp'; }, 4000);

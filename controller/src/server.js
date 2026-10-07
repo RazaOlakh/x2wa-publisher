@@ -150,6 +150,7 @@ async function sendJob(body) {
   log('info','send-request-received',{requestId,tweetId,channelId,mediaTypes:media&&media.map(m=>m.type)});
   const prev = duplicateLog.get(key);
   if (prev && now - prev.ts < 120000 && prev.status !== 'failed') {
+    log('warn','duplicate-send',{requestId,tweetId,channelId,prior});
     return { ok: false, error: 'duplicate-send', prior: prev };
   }
   const jobId = newJob();
@@ -202,13 +203,12 @@ async function sendJob(body) {
     duplicateLog.set(key, { ts: now, status: 'failed', jobId });
     jobs.set(jobId, { status: 'failed', error: e.message || String(e) });
     cleanup(jobDir);
-    cleanup(jobDir);
     return { ok: false, error: e.message, jobId };
   }
 }
 
 function cleanup(dir) {
-  try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
+  try { fs.rmSync(dir, { recursive: true, force: true }); log('info','cleanup',{dir}); } catch(e) { log('warn','cleanup-error',{dir,error:e&&e.message}); }
 }
 
 const server = http.createServer(async (req, res) => {
