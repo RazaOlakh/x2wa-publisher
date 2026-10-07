@@ -150,7 +150,7 @@ async function sendJob(body) {
   log('info','send-request-received',{requestId,tweetId,channelId,mediaTypes:media&&media.map(m=>m.type)});
   const prev = duplicateLog.get(key);
   if (prev && now - prev.ts < 120000 && prev.status !== 'failed') {
-    log('warn','duplicate-send',{requestId,tweetId,channelId,prior});
+    log('warn','duplicate-send',{requestId,tweetId,channelId,prior: prev});
     return { ok: false, error: 'duplicate-send', prior: prev };
   }
   const jobId = newJob();
@@ -216,6 +216,14 @@ const server = http.createServer(async (req, res) => {
   try {
     if (req.method === 'GET' && url.pathname === '/health') {
       return json(res, 200, { ok: true, state });
+    }
+    if (req.method === 'GET' && url.pathname === '/channels') {
+      if (state !== 'ready') { return json(res, 409, { error: 'whatsapp-not-ready', state }); }
+      try {
+        const channels = await client.getChannels();
+        const out = channels.map((c) => ({ id: c.id && c.id._serialized ? c.id._serialized : String(c.id), name: c.name || (c.formattedTitle || ''), isChannel: Boolean(c.isChannel) }));
+        return json(res, 200, { channels: out });
+      } catch (e) { return json(res, 500, { error: e && e.message ? e.message : 'channel-list-failed' }); }
     }
     if (req.method === 'GET' && url.pathname === '/status') {
       return json(res, 200, { state, me: waInfo ? waInfo.wid : null, jobs: Array.from(jobs.entries()).slice(-20) });

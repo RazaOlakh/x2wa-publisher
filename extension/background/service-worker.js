@@ -93,6 +93,6 @@ async function resolvePhotoUrl(href) {
 
 async function getDefaultChannel() {
   return new Promise((resolve) => {
-    chrome.storage.local.get(['defaultChannel'], (r) => resolve(r.defaultChannel || ''));
+    chrome.storage.local.get(['defaultChannel','selectedChannelId'], (r) => resolve(r.selectedChannelId || r.defaultChannel || ''));
   });
 }
