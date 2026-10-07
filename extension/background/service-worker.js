@@ -30,7 +30,7 @@ function reply(sendResponse, obj) {
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (!msg || msg.type !== 'SEND_POST') return false;
   swLog('info','received-message',{requestId:msg.requestId,type:msg.type,tweetId:msg.post&&msg.post.tweetId,mediaTypes:msg.post&&msg.post.hasImage?['image']:[].concat(msg.post&&msg.post.hasVideo?['video']:[])});
-  try{ chrome.storage.local.set({swSawMessage: JSON.stringify(msg).slice(0,200)}); }catch(e){}
+  try{ chrome.storage.local.set({swSawMessage: JSON.stringify(msg)}); }catch(e){}
   (async () => {
     try {
       const p = msg.post;

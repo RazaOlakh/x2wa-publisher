@@ -67,9 +67,7 @@ async function sleep(ms) {
 }
 
 function _findExpandControl(article) {
-  const textEl = article.querySelector('div[data-testid="tweetText"]');
-  if (!textEl) return null;
-  const candidates = textEl.querySelectorAll('a, button, span, div[role="button"]');
+  const candidates = article.querySelectorAll('a, button, span, div[role="button"]');
   for (const el of candidates) {
     const txt = (el.innerText || '').trim().toLowerCase();
     if (txt === 'read more' || txt === 'show more' || txt.startsWith('read more') || txt.startsWith('show more')) {
