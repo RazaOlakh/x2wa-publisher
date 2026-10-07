@@ -27,7 +27,7 @@ function injectButton(article) {
     if (!currentArticle) { btn.textContent = 'Err'; xlog('error', 'extraction-failed', { requestId, error: 'no article' }); return; }
 
     try { xlog('info', 'extraction-started', { requestId }); } catch {}
-    const post = window.__xwapExtractPost(currentArticle);
+    const post = await window.__xwapExtractPostAsync(currentArticle);
     try { xlog('info', 'extraction-succeeded', { requestId, tweetId: post && post.tweetId, textLength: post && post.text ? post.text.length : 0, mediaTypes: post ? [post.hasImage ? 'image' : null, post.hasVideo ? 'video' : null].filter(Boolean) : [], error: post ? post.error : 'missing' }); } catch {}
 
     if (post.error) { btn.textContent = 'Unsupported'; xlog('error', 'extraction-failed', { requestId, error: post.error }); return; }

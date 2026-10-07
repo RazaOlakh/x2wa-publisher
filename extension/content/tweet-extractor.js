@@ -56,3 +56,65 @@ function extractPost(article) {
 }
 
 window.__xwapExtractPost = extractPost;
+
+function _xlog(level, event, data) {
+  const rec = { ts: new Date().toISOString(), level, component: 'content', event, ...(data || {}) };
+  try { console.log(JSON.stringify(rec)); } catch { console.log(`${level} ${event}`); }
+}
+
+async function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function _findExpandControl(article) {
+  const textEl = article.querySelector('div[data-testid="tweetText"]');
+  if (!textEl) return null;
+  const candidates = textEl.querySelectorAll('a, button, span, div[role="button"]');
+  for (const el of candidates) {
+    const txt = (el.innerText || '').trim().toLowerCase();
+    if (txt === 'read more' || txt === 'show more' || txt.startsWith('read more') || txt.startsWith('show more')) {
+      return el;
+    }
+  }
+  return null;
+}
+
+async function extractPostAsync(article) {
+  // Sync extraction first; this preserves normal short posts.
+  let post = extractPost(article);
+  if (post.error) return post;
+
+  const expand = _findExpandControl(article);
+  if (!expand) {
+    _xlog('info', 'tweet-truncated-no-expand-control', { tweetId: post.tweetId });
+    return post;
+  }
+
+  _xlog('info', 'tweet-expand-started', { tweetId: post.tweetId });
+  try {
+    expand.scrollIntoView({ block: 'center', behavior: 'instant' });
+  } catch {}
+  try { expand.click(); } catch {}
+
+  const originalLength = post.text.length;
+  let expanded = false;
+  for (let i = 0; i < 10; i++) {
+    await sleep(200);
+    const next = extractPost(article);
+    if (next && !next.error && next.text && next.text.length > originalLength) {
+      post = next;
+      expanded = true;
+      break;
+    }
+  }
+
+  if (!expanded) {
+    _xlog('warn', 'tweet-expand-failed', { tweetId: post.tweetId, info: 'text-length-unchanged' });
+    return { error: 'tweet-text-truncated', url: post.tweetUrl, tweetId: post.tweetId };
+  }
+
+  _xlog('info', 'tweet-expanded', { tweetId: post.tweetId, before: originalLength, after: post.text.length });
+  return post;
+}
+
+window.__xwapExtractPostAsync = extractPostAsync;
