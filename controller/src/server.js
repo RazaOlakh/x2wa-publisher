@@ -100,6 +100,31 @@ function ffmpegMux(input, output) {
   });
 }
 
+// X media URLs (e.g. pbs.twimg.com/...?format=webp&name=large)
+// carry no file extension, so downloads land as "<hex>.bin" and
+// MessageMedia.fromFilePath derives application/octet-stream from
+// the extension. WhatsApp Web then uploads the attachment as a
+// document, which channel recipients render as "You received a
+// channel update but your version of WhatsApp doesn't support it".
+// Sniff the real image format from the file's magic bytes and give
+// the file the matching extension so it uploads as an image.
+function sniffImageExt(file) {
+  const fd = fs.openSync(file, 'r');
+  try {
+    const buf = Buffer.alloc(16);
+    const n = fs.readSync(fd, buf, 0, 16, 0);
+    const b = buf.slice(0, n);
+    if (n >= 8 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return '.png';
+    if (n >= 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return '.jpg';
+    if (n >= 6 && b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46) return '.gif';
+    if (n >= 16 && b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46 &&
+        b[8] === 0x57 && b[9] === 0x45 && b[10] === 0x42 && b[11] === 0x50) return '.webp';
+    return null;
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
 async function processMedia(item, jobDir) {
   log('info','media-process-start',{requestId:currentJob&&currentJob.requestId,jobId:currentJob&&currentJob.jobId,type:item.type});
   if (item.type === 'video') {
@@ -138,6 +163,16 @@ async function processMedia(item, jobDir) {
   }
   const stat = fs.statSync(file);
   if (stat.size > MAX_MEDIA_BYTES) throw new Error('media-too-large');
+  if (item.type === 'image') {
+    const ext = sniffImageExt(file);
+    if (ext) {
+      const renamed = path.join(jobDir, path.basename(file, '.bin') + ext);
+      fs.renameSync(file, renamed);
+      log('info','media-image-format-detected',{requestId:currentJob&&currentJob.requestId,jobId:currentJob&&currentJob.jobId,ext});
+      return renamed;
+    }
+    log('warn','media-image-format-unknown',{requestId:currentJob&&currentJob.requestId,jobId:currentJob&&currentJob.jobId});
+  }
   return file;
 }
 
