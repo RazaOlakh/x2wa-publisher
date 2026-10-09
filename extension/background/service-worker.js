@@ -28,6 +28,30 @@ function reply(sendResponse, obj) {
 }
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  // Resolve t.co shortlinks to their canonical destination URLs.
+  // The content script cannot read the expanded URL from the DOM (X only
+  // exposes the shortlink href), so the resolution happens here where the
+  // https://t.co/* host permission is available.
+  if (msg && msg.type === 'RESOLVE_LINKS' && Array.isArray(msg.hrefs)) {
+    (async () => {
+      try {
+        swLog('info', 'link-resolve-start', { count: msg.hrefs.length });
+        const resolved = {};
+        for (const href of msg.hrefs) {
+          resolved[href] = await resolveTcoUrl(href);
+        }
+        swLog('info', 'link-resolve-done', {
+          count: msg.hrefs.length,
+          okCount: Object.values(resolved).filter(Boolean).length,
+        });
+        reply(sendResponse, { ok: true, resolved });
+      } catch (e) {
+        swLog('error', 'link-resolve-error', { count: msg.hrefs.length, error: e.message });
+        reply(sendResponse, { ok: false, error: e.message });
+      }
+    })();
+    return true;
+  }
   if (!msg || msg.type !== 'SEND_POST') return false;
   swLog('info','received-message',{requestId:msg.requestId,type:msg.type,tweetId:msg.post&&msg.post.tweetId,mediaTypes:msg.post&&msg.post.hasImage?['image']:[].concat(msg.post&&msg.post.hasVideo?['video']:[])});
   try{ chrome.storage.local.set({swSawMessage: JSON.stringify(msg)}); }catch(e){}
@@ -89,6 +113,46 @@ async function resolvePhotoUrl(href) {
   const html = await res.text();
   const m = /<meta property="og:image" content="([^"]+)"/.exec(html);
   return m ? m[1].replace(/&amp;/g, '&') : null;
+}
+
+async function resolveTcoUrl(href) {
+  // X wraps every external post link in a t.co shortlink. The canonical
+  // destination is only available by following it: t.co answers with
+  // either a redirect chain or a JS interstitial (location.replace).
+  if (!href || !href.includes('//t.co/')) return href || null;
+  try {
+    const res = await fetch(href, { redirect: 'follow', credentials: 'omit' });
+    if (res.url && !res.url.includes('//t.co/')) return res.url;
+    const html = await res.text();
+    // The interstitial redirects via JS. Its string literal encodes
+    // the URL with escaped slashes — location.replace("https:\/\/example.com\/…")
+    // — so the captured value must be unescaped.
+    const m = /location\.replace\(\s*["']([^"']+)["']\s*\)/.exec(html);
+    if (m && m[1]) return unescapeJsString(m[1]);
+    // <noscript> fallback: <META http-equiv="refresh" content="0;URL=…">
+    const noscript = /URL=([^">]+)/.exec(html);
+    if (noscript && noscript[1] && /^https?:\/\//.test(noscript[1])) return noscript[1];
+    const t = /<title[^>]*>([^<]*)<\/title>/.exec(html);
+    if (t && t[1] && /^https?:\/\//.test(t[1].trim())) return t[1].trim();
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function unescapeJsString(s) {
+  return s
+    .replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
+    .replace(/\\(['"\\\/bfnrt])/g, (_, ch) => {
+      switch (ch) {
+        case 'b': return '\b';
+        case 'f': return '\f';
+        case 'n': return '\n';
+        case 'r': return '\r';
+        case 't': return '\t';
+        default: return ch;
+      }
+    });
 }
 
 async function getDefaultChannel() {
