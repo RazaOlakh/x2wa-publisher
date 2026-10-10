@@ -39,9 +39,13 @@ function injectButton(article) {
       try { xlog('info', 'send-started', { requestId, tweetId: post.tweetId, mediaTypes: post.hasImage ? ['image'] : [] }); } catch {}
       const result = await chrome.runtime.sendMessage({ type: 'SEND_POST', post, requestId });
       try { xlog('info', 'response-received', { requestId, jobId: result && result.jobId, durationMs: Date.now() - started }); } catch {}
-      btn.textContent = result && result.ok ? 'Sent' : `Err: ${(result && result.error) || 'failed'}`;
+      const total = (result && result.sent ? result.sent.length : 0) + (result && result.failures ? result.failures.length : 0);
+      btn.textContent = result && result.ok ? 'Sent'
+        : (result && result.partial ? `Partial ${result.sent ? result.sent.length : 0}/${total}` : `Err: ${(result && result.error) || 'failed'}`);
       if (result && result.ok) {
         try { xlog('info', 'send-succeeded', { requestId, tweetId: post.tweetId, jobId: result.jobId }); } catch {}
+      } else if (result && result.partial) {
+        try { xlog('warn', 'send-partial', { requestId, tweetId: post.tweetId, jobId: result.jobId, sent: result.sent && result.sent.length, failures: result.failures }); } catch {}
       } else {
         try { xlog('error', 'send-failed', { requestId, tweetId: post.tweetId, error: result ? result.error : 'unknown' }); } catch {}
       }

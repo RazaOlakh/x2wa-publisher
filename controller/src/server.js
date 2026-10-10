@@ -43,6 +43,15 @@ client.initialize().catch((e) => { log('error','init-error',{error:e && e.messag
 function json(res, code, obj) { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(obj, null, 1)); }
 function newJob() { return crypto.randomBytes(8).toString('hex'); }
 
+// WhatsApp Web sometimes throws minified/empty errors; always produce a
+// non-empty human-readable message for partial-failure reporting.
+function errMsg(e) {
+  if (!e) return 'unknown-error';
+  if (typeof e === 'string') return e;
+  if (e.message) return e.message;
+  try { return String(e); } catch { return 'unknown-error'; }
+}
+
 function validMedia(m) {
   return m && ['image', 'video'].includes(m.type) && typeof m.source === 'string' && m.source.length > 0 && m.source.length < 4096;
 }
@@ -199,40 +208,54 @@ async function sendJob(body) {
   try {
     if (state !== 'ready') { jobs.set(jobId, { status: 'failed', error: 'whatsapp-not-ready' }); cleanup(jobDir); log('error','whatsapp-not-ready',{requestId,jobId,tweetId,channelId}); return { ok: false, error: 'whatsapp-not-ready', jobId }; }
     const mediaFiles = [];
+    const sendFailures = [];
     if (Array.isArray(media) && media.length > 0) {
-      for (const m of media) {
-        if (!validMedia(m)) { jobs.set(jobId, { status: 'failed', error: 'bad-media' }); cleanup(jobDir); log('error','bad-media',{requestId,jobId,tweetId}); return { ok: false, error: 'bad-media', jobId }; }
-        try { log('info','media-process-url',{requestId,jobId,type:m.type,source:m.source}); const f = await processMedia(m, jobDir); mediaFiles.push({ type: m.type, file: f }); }
-        catch (e) { try{ console.log('sendJob media error:', e && e.message, e && e.stack); }catch{} jobs.set(jobId, { status: 'failed', error: e.message }); cleanup(jobDir); return { ok: false, error: e.message, jobId }; }
+      for (let i = 0; i < media.length; i++) {
+        const m = media[i];
+        if (!validMedia(m)) { sendFailures.push({ index: i, type: m && m.type, error: 'bad-media' }); log('error','bad-media',{requestId,jobId,tweetId,index:i}); continue; }
+        try { log('info','media-process-url',{requestId,jobId,type:m.type,source:m.source}); const f = await processMedia(m, jobDir); mediaFiles.push({ type: m.type, file: f, index: i }); }
+        catch (e) { try{ console.log('sendJob media error:', e && e.message, e && e.stack); }catch{} sendFailures.push({ index: i, type: m.type, error: errMsg(e) }); log('error','media-process-failed',{requestId,jobId,tweetId,index:i,error:errMsg(e)}); }
       }
     }
 
     log('info','whatsapp-send-start',{requestId,jobId,channelId,tweetId});
     const sent = [];
     if (mediaFiles.length === 0) {
+      if (!text) {
+        // Nothing could be processed: report every intended-but-missing item.
+        const none = [].concat(Array.isArray(body.imageFailures) ? body.imageFailures : [], sendFailures);
+        jobs.set(jobId, { status: 'failed', error: 'empty-post', failures: none }); cleanup(jobDir); log('error','whatsapp-send-empty',{requestId,jobId,tweetId,failed:none.length}); return { ok: false, error: 'empty-post', jobId, ...(none.length ? { failures: none } : {}) };
+      }
       log('info','whatsapp-send-text',{requestId,jobId});
-      const m = await client.sendMessage(channelId, text);
-      sent.push({ type: 'text', id: m && m.id });
+      try {
+        const m = await client.sendMessage(channelId, text);
+        sent.push({ type: 'text', id: m && m.id });
+      } catch (e) { sendFailures.push({ index: -1, type: 'text', error: errMsg(e) }); log('error','whatsapp-send-text-failed',{requestId,jobId,tweetId,error:errMsg(e)}); }
     } else {
-      const first = mediaFiles[0];
-      const msg = first.type === 'image'
-        ? MessageMedia.fromFilePath(first.file)
-        : MessageMedia.fromFilePath(first.file);
-      log('info','whatsapp-send-media',{requestId,jobId,type:first.type});
-      const m = await client.sendMessage(channelId, msg, { caption: text || undefined });
-      sent.push({ type: first.type, id: m && m.id });
-      for (let i = 1; i < mediaFiles.length; i++) {
-        const mm = MessageMedia.fromFilePath(mediaFiles[i].file);
-        log('info','whatsapp-send-media-extra',{requestId,jobId,type:mediaFiles[i].type});
-        const r = await client.sendMessage(channelId, mm);
-        sent.push({ type: mediaFiles[i].type, id: r && r.id });
+      for (let i = 0; i < mediaFiles.length; i++) {
+        const mf = mediaFiles[i];
+        try {
+          const msg = MessageMedia.fromFilePath(mf.file);
+          const m = i === 0
+            ? await client.sendMessage(channelId, msg, { caption: text || undefined })
+            : await client.sendMessage(channelId, msg);
+          sent.push({ type: mf.type, id: m && m.id });
+        } catch (e) { sendFailures.push({ index: mf.index, type: mf.type, error: errMsg(e) }); log('error','whatsapp-send-media-failed',{requestId,jobId,tweetId,index:mf.index,error:errMsg(e)}); }
       }
     }
-    duplicateLog.set(key, { ts: now, status: 'completed', jobId });
-    jobs.set(jobId, { status: 'completed', sent });
+    // Merge extraction failures (from the service worker) with send
+    // failures. Never report full success unless every intended
+    // message was sent.
+    const failures = [].concat(Array.isArray(body.imageFailures) ? body.imageFailures : [], sendFailures);
+    const partial = failures.length > 0 && sent.length > 0;
+    const ok = failures.length === 0 && sent.length > 0;
+    duplicateLog.set(key, { ts: now, status: ok ? 'completed' : (partial ? 'partial' : 'failed'), jobId });
+    jobs.set(jobId, { status: ok ? 'completed' : (partial ? 'partial' : 'failed'), sent, failures });
     cleanup(jobDir);
-    log('info','send-job-complete',{requestId,jobId,status:'completed',sent:sent.length});
-    return { ok: true, jobId, sent };
+    log('info','send-job-complete',{requestId,jobId,status: ok ? 'completed' : (partial ? 'partial' : 'failed'),sent:sent.length,failed:failures.length});
+    if (ok) return { ok: true, jobId, sent };
+    if (partial) return { ok: false, jobId, sent, partial: true, failures, error: 'partial-send' };
+    return { ok: false, jobId, error: failures.length ? failures[failures.length - 1].error : 'send-failed', ...(failures.length ? { failures } : {}) };
   } catch (e) {
     try{ log('error','send-job-error',{requestId,jobId,message:e&&e.message,stack:e&&e.stack}); }catch{}
     duplicateLog.set(key, { ts: now, status: 'failed', jobId });

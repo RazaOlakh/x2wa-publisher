@@ -32,6 +32,81 @@ function findPhotoLinks(article) {
   return Array.from(new Set(out));
 }
 
+// Distinct media image URLs in the clicked post, in original order.
+// og:image on a /photo/ page only ever returns the FIRST image, so for
+// multi-image posts we read the article's <img> elements directly. The
+// media id (path before the query) is the dedupe key; X serves the same
+// image at multiple sizes/formats.
+function findMediaUrls(article) {
+  const seen = new Set();
+  const out = [];
+  for (const img of article.querySelectorAll('img[src*="pbs.twimg.com/media"]')) {
+    if (img.closest('article') !== article) continue;
+    let src = img.getAttribute('src') || img.src;
+    try {
+      const u = new URL(src, location.origin);
+      const id = u.pathname.split('/').pop();
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      // Prefer a large variant; X ignores unknown params but honours name.
+      u.searchParams.set('format', 'webp');
+      u.searchParams.set('name', 'large');
+      out.push(u.href);
+    } catch {}
+  }
+  return out;
+}
+
+// Reliable media recovery fallback. X's SPA can defer lazy images in
+// headless / low-activity contexts so the live DOM ends up with no
+// rendered <img> even though the post has photos (the /photo/ links
+// remain). In that case, fetch the tweet's server-rendered HTML and
+// read the media <img> elements straight from the clicked post's own
+// article, excluding nested quoted-tweet articles.
+async function recoverMediaUrls(article, post) {
+  const expected = post.photoHrefs ? post.photoHrefs.length : 0;
+  const have = post.mediaUrls ? post.mediaUrls.length : 0;
+  // The live DOM already accounts for every photo the post has (or
+  // the post rendered image elements without /photo/ wrappers):
+  // there is nothing left to recover.
+  if (have >= expected && (expected > 0 || have > 0)) return post;
+  if (!post.hasImage) return post;
+  try {
+    const resp = await fetch(post.tweetUrl, { credentials: 'omit' });
+    if (!resp.ok) {
+      _xlog('warn', 'tweet-media-fetch-failed', { tweetId: post.tweetId, status: resp.status });
+      return post;
+    }
+    const html = await resp.text();
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const target = '/status/' + post.tweetId;
+    for (const art of doc.querySelectorAll('article')) {
+      // Skip nested articles (a quoted tweet rendered inside another article).
+      if (art.parentElement && art.parentElement.closest('article')) continue;
+      // The server-rendered article has no <time> element (that is added
+      // during hydration), so match by the post's own permalink link
+      // (/…/status/<id>). /photo/ links share the id but end in
+      // /photo/<n> and therefore never match.
+      let isTarget = false;
+      for (const a of art.querySelectorAll('a[href]')) {
+        const href = a.getAttribute('href') || '';
+        const path = href.split('?')[0].split('#')[0];
+        if (path.endsWith(target)) { isTarget = true; break; }
+      }
+      if (!isTarget) continue;
+      const urls = findMediaUrls(art);
+      if (urls.length > 0) {
+        _xlog('info', 'tweet-media-recovered', { tweetId: post.tweetId, count: urls.length });
+        return { ...post, mediaUrls: urls, hasImage: true };
+      }
+    }
+    _xlog('warn', 'tweet-media-not-found', { tweetId: post.tweetId });
+  } catch (e) {
+    _xlog('warn', 'tweet-media-recover-error', { tweetId: post.tweetId, error: e && e.message });
+  }
+  return post;
+}
+
 function hasVideo(article) {
   const v = article.querySelector('video');
   if (!v) return false;
@@ -180,9 +255,10 @@ function extractPost(article) {
     tweetId: id,
     tweetUrl: url,
     text,
-    hasImage: findPhotoLinks(article).length > 0,
+    hasImage: findPhotoLinks(article).length > 0 || findMediaUrls(article).length > 0,
     hasVideo: hasVideo(article),
     photoHrefs: findPhotoLinks(article),
+    mediaUrls: findMediaUrls(article),
   };
 }
 
@@ -242,6 +318,10 @@ async function extractPostAsync(article) {
   } else {
     _xlog('info', 'tweet-truncated-no-expand-control', { tweetId: post.tweetId });
   }
+
+  // Recover media URLs from the server-rendered HTML when the live DOM
+  // has no rendered images (headless / lazy-load deferral).
+  post = await recoverMediaUrls(article, post);
 
   // Recover canonical URLs hidden behind X link previews / wrapped link displays.
   return recoverPostLinks(article, post);
