@@ -1,46 +1,117 @@
 // X → WhatsApp Channel Poster — production local controller
 const path = require('path');
 const fs = require('fs');
-const os = require('os');
 const http = require('http');
 const { spawn, execFile } = require('child_process');
 const crypto = require('crypto');
 const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
+const QRCode = require('qrcode-generator');
+const { sessionDir, tmpRoot, acquireSessionLock } = require('./platform');
+const { listPostableChannels, canPostToChannel } = require('./channels');
 
 const HOST = '127.0.0.1';
 const PORT = parseInt(process.env.CONTROLLER_PORT || '47825', 10);
-const SESSION_DIR = process.env.SESSION_DIR || path.join(os.homedir(), '.local', 'share', 'x-whatsapp-poster', 'whatsapp-session');
-const TMP_ROOT = path.join(os.homedir(), '.local', 'share', 'x-whatsapp-poster', 'tmp');
+const SESSION_DIR = sessionDir();
+const TMP_ROOT = tmpRoot();
 const MAX_MEDIA_BYTES = 64 * 1024 * 1024;
 const FFMPEG_TIMEOUT_MS = 5 * 60 * 1000;
 const DOWNLOAD_TIMEOUT_MS = 60 * 1000;
 
-fs.mkdirSync(SESSION_DIR, { recursive: true });
 fs.mkdirSync(TMP_ROOT, { recursive: true });
+// Refuse to start a second client against the same session directory.
+try {
+  acquireSessionLock(SESSION_DIR);
+} catch (e) {
+  console.error(`[controller] ${e.message}`);
+  process.exit(3);
+}
 
 let state = 'starting';
 let lastQr = null;
+let qrIssuedAt = 0;
 let waInfo = null;
+let lastError = null;
+let lastChannelError = null;
+let channelCache = null;
+const CHANNEL_CACHE_MS = 30000;
 const jobs = new Map();
 let currentJob = null;
 const duplicateLog = new Map();
 
 function log(level,event,data){ const rec={ts:new Date().toISOString(),level,component:'controller',event,...(data||{})}; try{ console.log(JSON.stringify(rec)); }catch{ console.log(`${level} ${event}`); } }
 
-const client = new Client({
-  authStrategy: new LocalAuth({ dataPath: SESSION_DIR }),
-  puppeteer: { headless: true, executablePath: '/usr/bin/google-chrome-stable', args: ['--no-sandbox', '--disable-setuid-sandbox'] },
-});
+// The dedicated WhatsApp account. LocalAuth keeps the session in
+// SESSION_DIR so the next start reconnects without another QR scan.
+function makeClient() {
+  return new Client({
+    authStrategy: new LocalAuth({ dataPath: SESSION_DIR }),
+    puppeteer: { headless: true, executablePath: process.env.CHROME_PATH || '/usr/bin/google-chrome-stable', args: ['--no-sandbox', '--disable-setuid-sandbox'] },
+  });
+}
 
-client.on('qr', (qr) => { state = 'qr'; lastQr = qr; log('info','qr-state',{status:'waiting-for-user'}); qrcode.generate(qr, { small: true }); });
-client.on('authenticated', () => { state = 'authenticated'; log('info','authenticated'); });
-client.on('auth_failure', (m) => { state = 'auth_failure'; log('error','auth-failure',{error:String(m)}); });
-client.on('ready', () => { state = 'ready'; waInfo = client.info; log('info','ready',{me: waInfo && waInfo.wid && waInfo.wid._serialized}); });
-client.on('disconnected', (r) => { state = 'disconnected'; log('warn','disconnected',{reason:String(r)}); });
-client.initialize().catch((e) => { log('error','init-error',{error:e && e.message}); process.exit(1); });
+let client = null;
+
+function startClient(reason) {
+  if (client) return;
+  state = state === 'ready' ? state : 'starting';
+  log('info','client-start',{ reason, sessionDir: SESSION_DIR });
+  client = makeClient();
+  client.on('qr', (qr) => {
+    state = 'qr'; lastQr = qr; qrIssuedAt = Date.now();
+    log('info','qr-state',{status:'waiting-for-user'});
+    // Printed for a user working in a terminal; never written to a log file.
+    try { qrcode.generate(qr, { small: true }); } catch {}
+  });
+  client.on('authenticated', () => { state = 'authenticated'; log('info','authenticated'); });
+  client.on('auth_failure', (m) => { state = 'auth_failure'; log('error','auth-failure',{error:String(m)}); });
+  client.on('ready', () => {
+    state = 'ready'; waInfo = client.info; lastQr = null; channelCache = null;
+    log('info','ready',{me: waInfo && waInfo.wid && waInfo.wid._serialized});
+  });
+  client.on('disconnected', (r) => { state = 'disconnected'; log('warn','disconnected',{reason:String(r)}); });
+  client.initialize().catch((e) => {
+    state = 'error';
+    log('error','init-error',{error:e && e.message});
+  });
+}
+
+// Logging out is destructive (the saved session is invalidated), so it is
+// explicit and never happens on its own.
+async function logout(reason) {
+  if (!client) { state = 'auth_required'; log('info','logout-noop',{reason}); return { ok: true, alreadyStopped: true }; }
+  const c = client;
+  client = null; lastQr = null; waInfo = null; state = 'stopped';
+  try { await c.logout(); } catch (e) { log('warn','logout-error',{error:String((e && e.message) || e)}); }
+  try { await c.destroy(); } catch (e) { log('warn','destroy-error',{error:String((e && e.message) || e)}); }
+  log('info','logged-out',{reason});
+  state = 'auth_required';
+  return { ok: true };
+}
+
+startClient('startup');
 
 function json(res, code, obj) { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(obj, null, 1)); }
+
+// Renders the pairing QR as an SVG data URL. The extension displays the
+// image, so the scannable payload itself is never sent to the browser
+// extension, written to a log, or stored anywhere.
+function qrImageSvg(qrText) {
+  const qr = QRCode(0, 'M');
+  qr.addData(qrText);
+  qr.make();
+  const n = qr.getModuleCount();
+  const quiet = 2;
+  const cells = n + quiet * 2;
+  let path = '';
+  for (let r = 0; r < n; r++) {
+    for (let c = 0; c < n; c++) {
+      if (qr.isDark(r, c)) path += `M${c + quiet} ${r + quiet}h1v1h-1z`;
+    }
+  }
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${cells} ${cells}" shape-rendering="crispEdges"><rect width="${cells}" height="${cells}" fill="#fff"/><path d="${path}" fill="#000"/></svg>`;
+  return `data:image/svg+xml;base64,${Buffer.from(svg, 'utf8').toString('base64')}`;
+}
 function newJob() { return crypto.randomBytes(8).toString('hex'); }
 
 // WhatsApp Web sometimes throws minified/empty errors; always produce a
@@ -227,7 +298,15 @@ async function sendJob(body) {
   jobs.set(jobId, { status: 'started' });
 
   try {
-    if (state !== 'ready') { jobs.set(jobId, { status: 'failed', error: 'whatsapp-not-ready' }); cleanup(jobDir); log('error','whatsapp-not-ready',{requestId,jobId,tweetId,channelId}); return { ok: false, error: 'whatsapp-not-ready', jobId }; }
+    if (state !== 'ready' || !client) { jobs.set(jobId, { status: 'failed', error: 'whatsapp-not-ready' }); cleanup(jobDir); log('error','whatsapp-not-ready',{requestId,jobId,tweetId,channelId}); return { ok: false, error: 'whatsapp-not-ready', jobId }; }
+    // Re-check posting rights at send time: a channel can lose admin
+    // between selection and publish. If it cannot be confirmed, refuse.
+    const permit = await canPostToChannel(client, channelId);
+    if (!permit.ok) {
+      jobs.set(jobId, { status: 'failed', error: 'channel-not-permitted' }); cleanup(jobDir);
+      log('warn','channel-not-permitted',{requestId,jobId,tweetId,channelId,role:permit.role,state:permit.state});
+      return { ok: false, error: 'channel-not-permitted', jobId, reason: permit.error || (permit.state === 'terminated' ? 'channel-terminated' : 'insufficient-permission') };
+    }
     const mediaFiles = [];
     const sendFailures = [];
     if (Array.isArray(media) && media.length > 0) {
@@ -296,16 +375,61 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && url.pathname === '/health') {
       return json(res, 200, { ok: true, state });
     }
-    if (req.method === 'GET' && url.pathname === '/channels') {
-      if (state !== 'ready') { return json(res, 409, { error: 'whatsapp-not-ready', state }); }
-      try {
-        const channels = await client.getChannels();
-        const out = channels.map((c) => ({ id: c.id && c.id._serialized ? c.id._serialized : String(c.id), name: c.name || (c.formattedTitle || ''), isChannel: Boolean(c.isChannel) }));
-        return json(res, 200, { channels: out });
-      } catch (e) { return json(res, 500, { error: e && e.message ? e.message : 'channel-list-failed' }); }
-    }
     if (req.method === 'GET' && url.pathname === '/status') {
-      return json(res, 200, { state, me: waInfo ? waInfo.wid : null, jobs: Array.from(jobs.entries()).slice(-20) });
+      // state reflects the real WhatsApp connection, not just that this
+      // HTTP server is answering.
+      return json(res, 200, {
+        state,
+        me: waInfo ? waInfo.wid : null,
+        sessionDir: SESSION_DIR,
+        authRequired: state === 'auth_required' || state === 'qr',
+        jobs: Array.from(jobs.entries()).slice(-20),
+      });
+    }
+    if (req.method === 'GET' && url.pathname === '/auth/qr') {
+      // The QR payload is deliberately short-lived and only ever served to
+      // a local requester; it is never logged or persisted.
+      if (state !== 'qr' || !lastQr) { return json(res, 404, { error: 'no-qr-available', state }); }
+      // `image` is a self-contained data URL: a self-contained URL keeps the
+      // QR payload off the network and out of any log.
+      return json(res, 200, { image: qrImageSvg(lastQr), issuedAt: qrIssuedAt });
+    }
+    if (req.method === 'POST' && url.pathname === '/auth/logout') {
+      const body = await readBody(req).then((b) => { try { return JSON.parse(b || '{}'); } catch { return {}; } });
+      if (body.confirm !== true) { return json(res, 400, { error: 'confirmation-required' }); }
+      try { return json(res, 200, await logout('user-request')); }
+      catch (e) { return json(res, 500, { error: 'logout-failed' }); }
+    }
+    if (req.method === 'GET' && url.pathname === '/channels') {
+      if (state !== 'ready' || !client) { return json(res, 409, { error: 'whatsapp-not-ready', state }); }
+      // The popup polls while open; re-querying every channel's membership
+      // each time would hammer WhatsApp Web for no new information.
+      if (channelCache && Date.now() - channelCache.at < CHANNEL_CACHE_MS) {
+        return json(res, 200, channelCache.body);
+      }
+      try {
+        // Only channels this account can actually post to.
+        const r = await listPostableChannels(client);
+        channelCache = {
+          at: Date.now(),
+          body: {
+            channels: r.channels,
+            checked: r.checked,
+            ineligible: r.ineligible,
+            warning: r.degraded ? 'Some channels could not be verified for posting permission and are hidden.' : undefined,
+          },
+        };
+        lastChannelError = r.degraded ? 'permission-check-failed' : null;
+        return json(res, 200, {
+          channels: r.channels,
+          checked: r.checked,
+          ineligible: r.ineligible,
+          warning: r.degraded ? 'Some channels could not be verified for posting permission and are hidden.' : undefined,
+        });
+      } catch (e) {
+        log('warn','channel-list-failed',{error:String((e && e.message) || e)});
+        return json(res, 500, { error: 'channel-list-failed' });
+      }
     }
     if (req.method === 'POST' && url.pathname === '/send') {
       if (state !== 'ready') { log('error','send-rejected-whatsapp-not-ready',{state}); return json(res, 409, { error: 'whatsapp-not-ready', state }); }

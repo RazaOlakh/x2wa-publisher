@@ -10,20 +10,99 @@ A standalone Chrome extension that posts content from X.com directly to a WhatsA
 
 ## Quick start
 
+### 1. Install the controller dependencies
+
 ```bash
 cd controller
-PUPPETEER_SKIP_DOWNLOAD=1 npm install   # runs scripts/apply-patches.js
-node scripts/apply-patches.js           # or simply npm run patch
-CONTROLLER_PORT=47825 \
-SESSION_DIR=~/.local/share/x-whatsapp-poster/whatsapp-session \
-node src/server.js
+PUPPETEER_SKIP_DOWNLOAD=1 npm install   # also runs scripts/apply-patches.js
 ```
 
-1. Open the dedicated WhatsApp number via WhatsApp Web on your phone, scan the QR.
-2. Default channel ID can be found in the controller by `GET /status`.
-3. In Chrome: `chrome://extensions` → enable Developer mode → Load unpacked — select the `extension/` folder.
-4. In the extension popup set `Default Channel ID` and save.
-5. On X, each post shows a "Post to WhatsApp" button.
+### 2. Make the controller start automatically at login
+
+**Linux** (per-user systemd unit, no `sudo` needed):
+
+```bash
+./scripts/install-startup.sh install      # writes ~/.config/systemd/user/x2wa-controller.service
+./scripts/install-startup.sh status       # is it running?
+./scripts/install-startup.sh restart
+journalctl --user -u x2wa-controller -f  # follow the log
+./scripts/install-startup.sh uninstall    # stop and remove (keeps your WhatsApp session)
+```
+
+**Windows** (per-user Startup-folder launcher, no administrator rights):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\windows\install-startup.ps1 install
+powershell -ExecutionPolicy Bypass -File scripts\windows\install-startup.ps1 status
+powershell -ExecutionPolicy Bypass -File scripts\windows\install-startup.ps1 restart
+powershell -ExecutionPolicy Bypass -File scripts\windows\install-startup.ps1 uninstall
+```
+
+Prerequisites on both: Node.js 18+ on `PATH`, `ffmpeg`/`ffprobe` on `PATH`
+(Windows: e.g. `winget install Gyan.FFmpeg`), and Google Chrome.
+
+To run it by hand instead: `cd controller && node src/server.js`.
+
+### 3. Load the extension
+
+Chrome → `chrome://extensions` → Developer mode → **Load unpacked** → select
+the `extension/` folder.
+
+### 4. Link WhatsApp (once)
+
+Open the extension popup. If the controller is running, the popup shows the
+status; press **Authenticate WhatsApp** and scan the QR with the dedicated
+WhatsApp account (phone → Linked Devices → Link a Device). The controller
+also prints the QR in its terminal/journal.
+
+After this scan the session is reused: later starts, restarts and reboots
+reconnect without asking again. The popup only shows a QR when a scan is
+actually required.
+
+### 5. Pick a destination channel
+
+In the popup, choose a channel. Only channels this account can **post to**
+(admin/owner) are listed — channels it merely follows are hidden.
+
+### 6. Post
+
+On X, each post shows a **Post to WhatsApp** button.
+
+## Where the WhatsApp session is stored
+
+One stable, per-user directory holds `LocalAuth` credentials, so a restart or
+reboot never needs a new scan:
+
+| OS | Session directory (default) |
+|---|---|
+| Linux | `~/.local/share/x-whatsapp-poster/whatsapp-session` (or `$XDG_DATA_HOME/x-whatsapp-poster/whatsapp-session`) |
+| Windows | `%LOCALAPPDATA%\x-whatsapp-poster\whatsapp-session` |
+| macOS | `~/Library/Application Support/x-whatsapp-poster/whatsapp-session` |
+
+`GET /status` reports the directory actually in use. Override with the
+`SESSION_DIR` environment variable (the systemd unit and the Windows launcher
+set it explicitly). Session files are only ever touched by the controller on
+this computer — never by the extension, and never your personal WhatsApp
+session. A lock file in the session directory stops a second controller from
+using it at once.
+
+## Channel eligibility
+
+The popup must not offer a channel this account cannot post to. Being
+*visible* in WhatsApp Web is not proof of that, so each channel is checked
+against the server's own membership data:
+
+```
+WAWebNewsletterMetadataQueryJob.queryNewsletterMetadataByJid(channelId)
+  .newsletterMembershipMetadataMixin.membershipType   -> 'owner' | 'admin' | 'subscriber' | ...
+```
+
+A channel is offered only when that role is `owner`/`admin` (the same rule
+`whatsapp-web.js` applies in `isMembershipAdminOrOwner`) and the channel is
+not terminated. Anything that cannot be verified is hidden rather than
+guessed. The same check runs again before each post, so a channel that lost
+admin rights in the meantime refuses the publish
+(`channel-not-permitted`) instead of failing silently.
 
 ## Architecture
 
@@ -55,8 +134,17 @@ WhatsApp Channel
 
 ## API
 
-- `GET /health`
-- `GET /status`
+- `GET /health` → `{ ok, state }`
+- `GET /status` → `{ state, me, sessionDir, authRequired, jobs }` — `state`
+  is the real WhatsApp state (`starting`, `qr`, `authenticated`, `ready`,
+  `disconnected`, `auth_failure`, `error`, `stopped`)
+- `GET /auth/qr` → `{ image }` where `image` is a self-contained SVG data URL
+  of the pairing QR. Returns 404 when no scan is needed. The QR payload is
+  never logged, persisted, or sent to the extension as text.
+- `POST /auth/logout` → `{ confirm: true }` signs the account out (requires
+  the explicit flag) and stops the client
+- `GET /channels` → channels this account may post to (`channels`), plus
+  `ineligible` for diagnostics; results cached 30s
 - `POST /send` → `{ tweetId, tweetUrl, text, media: [{type, source}], mediaFailures?, channelId }`
 
   `media` is sent in the post's own order (images and videos interleaved);
@@ -79,7 +167,9 @@ WhatsApp Channel
 ## Limitations
 
 - Media-to-channel requires the compatibility patch above for the current WhatsApp Web internals.
-- `getChannels()` is still broken upstream; we rely on known channel IDs / stored channel settings.
+- Channel eligibility depends on a WhatsApp Web internal
+  (`WAWebNewsletterMetadataQueryJob`); if WhatsApp renames it, the controller
+  hides every channel rather than listing channels it could not verify.
 - Only an HLS *master* playlist is sent: a rendition such as
   `/pl/avc1/3840x2160/<token>.m3u8` is one video-only stream, and muxing it
   would publish a silent video. A video without a master is reported as a
