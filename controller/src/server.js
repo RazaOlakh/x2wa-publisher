@@ -10,6 +10,7 @@ const QRCode = require('qrcode-generator');
 const { sessionDir, tmpRoot, acquireSessionLock } = require('./platform');
 const { listPostableChannels, canPostToChannel } = require('./channels');
 const { createHeartbeat } = require('./heartbeat');
+const repo = require('./repo');
 
 const HOST = '127.0.0.1';
 const PORT = parseInt(process.env.CONTROLLER_PORT || '47825', 10);
@@ -603,6 +604,33 @@ const server = http.createServer(async (req, res) => {
         reconnecting: state === 'reconnecting',
         jobs: Array.from(jobs.entries()).slice(-20),
       });
+    }
+    if (req.method === 'GET' && url.pathname === '/version') {
+      // Local facts only, so opening the popup never waits on the network.
+      return json(res, 200, await repo.status());
+    }
+    if (req.method === 'POST' && url.pathname === '/version/check') {
+      const r = await repo.check();
+      log('info', 'version-check', { ok: r.ok, behind: r.behind, checkFailed: r.checkFailed });
+      return json(res, r.ok ? 200 : 500, r);
+    }
+    if (req.method === 'POST' && url.pathname === '/update') {
+      const r = await repo.update();
+      log('r.ok' === 'ok' ? 'info' : 'warn', 'update', {
+        ok: r.ok, error: r.error, from: r.from, to: r.to, files: r.files,
+      });
+      if (r.ok && r.restartController) {
+        // Answer first, then restart: the controller restarting is the whole
+        // point, so it happens once this response is on its way. Best
+        // effort - someone running it by hand has no unit to restart.
+        setTimeout(() => {
+          try {
+            const { spawn } = require('child_process');
+            spawn('systemctl', ['--user', 'restart', 'x2wa-controller'], { detached: true, stdio: 'ignore' }).unref();
+          } catch (e) { log('warn', 'restart-failed', { error: String((e && e.message) || e) }); }
+        }, 1500);
+      }
+      return json(res, r.ok ? 200 : 409, r);
     }
     if (req.method === 'GET' && url.pathname === '/auth/qr') {
       // The QR payload is deliberately short-lived and only ever served to

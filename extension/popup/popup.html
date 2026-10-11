@@ -44,6 +44,8 @@
     button:disabled { opacity: .45; cursor: not-allowed; }
     button.primary { background: var(--green); border-color: var(--green); color: #fff; font-weight: 600; }
     button.primary:hover:not(:disabled) { background: var(--green-dark); }
+    /* Confirmation is not a warning: an update is what was asked for. */
+    button.primary.confirm { background: var(--green-dark); }
     button.danger { color: var(--red); }
     button.danger.confirm { background: var(--red); border-color: var(--red); color: #fff; font-weight: 600; }
 
@@ -116,6 +118,22 @@
       <button id="refreshBtn" disabled>Reload channels</button>
       <button id="disconnectBtn" class="danger" disabled>Disconnect</button>
     </div>
+  </section>
+
+  <!-- Version / update -->
+  <section class="card" id="versionCard">
+    <div class="status">
+      <span class="dot" id="verDot"></span>
+      <div style="flex:1; min-width:0">
+        <div class="status-title" id="verTitle">Checking version…</div>
+        <div class="status-detail" id="verDetail"></div>
+      </div>
+    </div>
+    <div class="row">
+      <button id="checkUpdBtn">Check for updates</button>
+      <button id="updateBtn" class="primary hidden">Update now</button>
+    </div>
+    <div class="note idle" id="verNote"></div>
   </section>
 
   <footer>

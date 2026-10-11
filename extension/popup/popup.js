@@ -12,6 +12,9 @@ const ui = {
   select: el('channelSelect'), channelNote: el('channelNote'),
   refresh: el('refreshBtn'), disconnect: el('disconnectBtn'),
   foot: el('footState'),
+  verCard: el('versionCard'), verDot: el('verDot'), verTitle: el('verTitle'),
+  verDetail: el('verDetail'), verNote: el('verNote'),
+  checkUpd: el('checkUpdBtn'), update: el('updateBtn'),
 };
 
 const store = {
@@ -167,6 +170,8 @@ ui.connect.addEventListener('click', async () => {
 // --------------------------------------------------------------- refresh
 async function refresh() {
   const s = await status();
+  // Local and cheap: safe to ask on every tick, unlike a network fetch.
+  renderVersion(await versionStatus());
 
   if (s.state === 'unavailable') {
     hideQr();
@@ -317,6 +322,180 @@ async function refresh() {
       return;
   }
 }
+
+// ---------------------------------------------------------------- version
+// Whether this checkout still matches the remote, and a way to bring it
+// forward. Reading the status is local and cheap, so it can ride along with
+// every refresh; only "Check for updates" goes to the network.
+let updateArmed = false;
+
+function ago(ts) {
+  if (!ts) return '';
+  const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
+  if (s < 60) return 'just now';
+  if (s < 3600) return `${Math.round(s / 60)} min ago`;
+  if (s < 86400) return `${Math.round(s / 3600)} h ago`;
+  return `${Math.round(s / 86400)} d ago`;
+}
+
+function setVer(dotClass, title, detail) {
+  ui.verDot.className = `dot ${dotClass}`;
+  ui.verTitle.textContent = title;
+  ui.verDetail.textContent = detail || '';
+  ui.verDetail.classList.toggle('hidden', !detail);
+}
+
+function renderVersion(v) {
+  if (!v) {
+    setVer('', 'Version unknown', '');
+    ui.checkUpd.disabled = true;
+    ui.update.classList.add('hidden');
+    return;
+  }
+  if (v.ok === false && v.error === 'not-a-repo') {
+    setVer('err', 'Not a git checkout', 'The controller could not find the project files.');
+    ui.checkUpd.disabled = true;
+    ui.update.classList.add('hidden');
+    return;
+  }
+
+  const where = `${v.branch || '?'} · ${(v.sha || '?').slice(0, 7)}`;
+  const checked = v.checkedAt ? ` · checked ${ago(v.checkedAt)}` : '';
+
+  ui.update.classList.toggle('hidden', !(Number(v.behind) > 0));
+  ui.update.disabled = false;
+  ui.checkUpd.disabled = false;
+
+  if (v.dirty) {
+    // Uncommitted work: say so plainly, and do not offer an update that
+    // would be refused anyway.
+    setVer('wait', 'Local changes', `${where} · not committed`);
+    setNote(ui.verNote,
+      'You have uncommitted changes, so updating is not offered — the update would be refused rather than touching your work.',
+      'warn');
+    return;
+  }
+  if (v.behind === null || v.behind === undefined) {
+    setVer('', 'Update status unknown', where + checked);
+    if (v.checkFailed === 'unreachable') {
+      setNote(ui.verNote, 'The remote could not be reached; showing the last known result.', 'warn');
+    } else if (!v.upstream) {
+      setNote(ui.verNote, 'This checkout has no upstream branch to compare with.', 'warn');
+    } else {
+      setNote(ui.verNote, 'Press Check for updates to ask the remote.', 'idle');
+    }
+    return;
+  }
+  if (Number(v.behind) > 0) {
+    setVer('wait', `${v.behind} update${v.behind === 1 ? '' : 's'} available`, where + checked);
+    setNote(ui.verNote, 'Updates fast-forward this checkout to the latest commit on the remote.', 'idle');
+    return;
+  }
+  if (Number(v.ahead) > 0) {
+    setVer('', `${v.ahead} local commit${Number(v.ahead) === 1 ? '' : 's'} ahead`, where + checked);
+    setNote(ui.verNote, 'Your checkout has commits the remote has not seen.', 'idle');
+    return;
+  }
+  setVer('on', 'Up to date', where + checked);
+  setNote(ui.verNote, '', 'idle');
+}
+
+async function versionStatus() {
+  try {
+    const r = await req('/version');
+    return r.ok ? r.body : null;
+  } catch {
+    return null;
+  }
+}
+
+function disarmUpdate() {
+  updateArmed = false;
+  ui.update.textContent = 'Update now';
+  ui.update.classList.remove('confirm');
+}
+
+ui.checkUpd.addEventListener('click', async () => {
+  ui.checkUpd.disabled = true;
+  setVer('busy', 'Checking…', '');
+  setNote(ui.verNote, 'Asking the remote what it has.', 'idle');
+  try {
+    const r = await req('/version/check', { method: 'POST' });
+    renderVersion(r.ok ? r.body : null);
+  } catch {
+    renderVersion(null);
+    setNote(ui.verNote, 'Lost contact with the controller.', 'error');
+  }
+  ui.checkUpd.disabled = false;
+});
+
+ui.update.addEventListener('click', async () => {
+  if (!updateArmed) {
+    updateArmed = true;
+    ui.update.textContent = 'Confirm update';
+    ui.update.classList.add('confirm');
+    setNote(ui.verNote,
+      'This fast-forwards your checkout to the latest commit on the remote. Uncommitted changes are never touched.',
+      'warn');
+    setTimeout(disarmUpdate, 6000);
+    return;
+  }
+  disarmUpdate();
+  ui.update.disabled = true;
+  ui.checkUpd.disabled = true;
+  setVer('busy', 'Updating…', '');
+  setNote(ui.verNote, 'Fast-forwarding to the latest commit.', 'idle');
+
+  let r;
+  try { r = await req('/update', { method: 'POST' }); }
+  catch {
+    ui.update.disabled = false; ui.checkUpd.disabled = false;
+    setVer('err', 'Update failed', '');
+    setNote(ui.verNote, 'Lost contact with the controller.', 'error');
+    return;
+  }
+
+  const body = r.body || {};
+  if (!r.ok) {
+    ui.update.disabled = false; ui.checkUpd.disabled = false;
+    if (body.error === 'local-changes') {
+      setVer('err', 'Update refused', 'You have uncommitted changes.');
+      setNote(ui.verNote, 'Commit or stash your work first — the update will not touch it.', 'warn');
+    } else {
+      setVer('err', 'Update failed', '');
+      setNote(ui.verNote, body.detail || body.error || 'The update could not be applied.', 'error');
+    }
+    return;
+  }
+
+  if (!body.updated) {
+    ui.update.disabled = false; ui.checkUpd.disabled = false;
+    setVer('on', 'Up to date', '');
+    setNote(ui.verNote, 'Already on the latest commit.', 'ok');
+    return;
+  }
+
+  // Reloading closes the popup, so leave the result where it can be read
+  // next time it opens.
+  const message = `Updated ${body.from} → ${body.to}${body.restartController ? '. The controller is restarting.' : ''}`;
+  await store.set({ updateNotice: { text: message, at: Date.now(), reloadExtension: Boolean(body.reloadExtension) } });
+  setVer('on', 'Updated', `${body.to.slice(0, 7)}`);
+  setNote(ui.verNote, message, 'ok');
+
+  if (body.reloadExtension) {
+    // The extension on disk changed, but the running copy is the old one
+    // until it is reloaded.
+    setTimeout(() => chrome.runtime.reload(), 900);
+  }
+});
+
+// Shown once, on the next open, so a reload cannot swallow the result.
+(async () => {
+  const { updateNotice } = await store.get(['updateNotice']);
+  if (!updateNotice) return;
+  await store.remove(['updateNotice']);
+  setNote(ui.verNote, updateNotice.text + (updateNotice.reloadExtension ? ' The extension was reloaded.' : ''), 'ok');
+})();
 
 document.addEventListener('DOMContentLoaded', refresh);
 // Re-check while the popup is open so "Connecting…" resolves on its own.
