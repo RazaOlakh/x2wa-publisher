@@ -279,36 +279,57 @@ function tweetIdFromArticle(article) {
   return m ? m[1] : null;
 }
 
+// Reading storage is asynchronous, and a post that has already been sent must
+// never be painted as the WhatsApp icon first. So the list is fetched once,
+// as early as the content script runs, and kept in memory: by the time
+// anything is injected the answer is already there and the tick can be
+// applied synchronously, on the very first frame the post appears.
+let sentMap = null;
+
+const sentMapReady = new Promise((resolve) => {
+  try {
+    chrome.storage.local.get([SENT_KEY], (r) => {
+      sentMap = (r && r[SENT_KEY]) || {};
+      resolve(sentMap);
+    });
+  } catch {
+    sentMap = {};
+    resolve(sentMap);
+  }
+});
+
 function rememberSent(tweetId, where) {
   if (!tweetId) return;
-  try {
-    chrome.storage.local.get([SENT_KEY], (r) => {
-      const map = (r && r[SENT_KEY]) || {};
-      map[tweetId] = { at: Date.now(), channel: where || '' };
-      const keys = Object.keys(map);
-      const oldest = keys.sort((a, b) => (map[a].at || 0) - (map[b].at || 0))
-        .slice(0, Math.max(0, keys.length - SENT_MAX));
-      for (const k of oldest) delete map[k];
-      try { chrome.storage.local.set({ [SENT_KEY]: map }); } catch { /* quota */ }
-    });
-  } catch { /* no storage available */ }
+  sentMapReady.then((map) => {
+    map[tweetId] = { at: Date.now(), channel: where || '' };
+    const keys = Object.keys(map);
+    const oldest = keys.sort((a, b) => (map[a].at || 0) - (map[b].at || 0))
+      .slice(0, Math.max(0, keys.length - SENT_MAX));
+    for (const k of oldest) delete map[k];
+    try { chrome.storage.local.set({ [SENT_KEY]: map }); } catch { /* quota */ }
+  });
 }
 
-// Restores the tick on a post that has already been sent. The read is async,
-// so the button is drawn first and corrected a moment later.
+function markSent(btn) {
+  renderButton(btn, 'success', 'Sent');
+  btn.title = 'Post to WhatsApp \u2014 already sent';
+  btn.setAttribute('aria-label', 'Post to WhatsApp: already sent');
+}
+
+// Restores the tick on a post that has already been sent. Synchronous once
+// the list has arrived, which is the case for every post injected after the
+// first moment of the page; the first one waits, and stays invisible rather
+// than flashing the WhatsApp icon first.
 function restoreSentState(article, btn) {
   const tweetId = tweetIdFromArticle(article);
-  if (!tweetId) return;
-  try {
-    chrome.storage.local.get([SENT_KEY], (r) => {
-      if (!btn.isConnected) return; // the post scrolled away mid-read
-      if (r && r[SENT_KEY] && r[SENT_KEY][tweetId]) {
-        renderButton(btn, 'success', 'Sent');
-        btn.title = 'Post to WhatsApp \u2014 already sent';
-        btn.setAttribute('aria-label', 'Post to WhatsApp: already sent');
-      }
-    });
-  } catch { /* no storage available */ }
+  if (!tweetId) return Promise.resolve();
+  if (sentMap) {
+    if (sentMap[tweetId]) markSent(btn);
+    return Promise.resolve();
+  }
+  return sentMapReady.then(() => {
+    if (btn.isConnected && sentMap[tweetId]) markSent(btn); // may have scrolled away
+  });
 }
 
 function injectButton(article) {
@@ -321,7 +342,12 @@ function injectButton(article) {
   const btn = document.createElement('button');
   btn.type = 'button';
   renderButton(btn, 'idle', 'Post to WhatsApp');
-  restoreSentState(article, btn);
+  // Hidden for the moment it takes to find out whether this post has already
+  // been sent, so it can never be seen as untried first.
+  btn.style.setProperty('visibility', 'hidden', 'important');
+  restoreSentState(article, btn).then(() => {
+    btn.style.setProperty('visibility', 'visible', 'important');
+  }, () => { btn.style.setProperty('visibility', 'visible', 'important'); });
 
   btn.addEventListener('click', async (ev) => {
     ev.preventDefault();
