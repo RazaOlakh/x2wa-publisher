@@ -95,6 +95,14 @@ console.log('generated launcher contract');
   check('never stores credentials', !/-Credential|Get-Credential|password/i.test(gen));
 }
 
+console.log('silent VBScript launcher contract');
+{
+  check('creates silent VBScript launcher in Startup folder', /Set-Content -LiteralPath \$VbsLauncherPath/.test(src));
+  check('VBScript launcher runs hidden with window style 0', /WshShell\.Run\s+"""\$CmdLauncherPath""",\s*0,\s*False/.test(src));
+  check('VBScript launcher sets working directory to controller', /WshShell\.CurrentDirectory\s*=\s*"\$ControllerDir"/.test(src));
+  check('uninstalls both VBS and CMD launchers', /Remove-Item -LiteralPath \$VbsLauncherPath/.test(src) && /Remove-Item -LiteralPath \$CmdLauncherPath/.test(src));
+}
+
 console.log('cross-platform session path agrees with the controller');
 {
   const platform = require(path.join(__dirname, '..', '..', 'controller', 'src', 'platform.js'));
