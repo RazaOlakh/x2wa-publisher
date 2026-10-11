@@ -57,16 +57,32 @@ WhatsApp Channel
 
 - `GET /health`
 - `GET /status`
-- `POST /send` → `{ tweetId, tweetUrl, text, media: [{type, source}], channelId }`
+- `POST /send` → `{ tweetId, tweetUrl, text, media: [{type, source}], mediaFailures?, channelId }`
+
+  `media` is sent in the post's own order (images and videos interleaved);
+  `mediaFailures` lists media items the extension could not resolve, so the
+  response reports `partial` instead of a false success.
 
 ## Troubleshooting
 
 - `whatsapp-not-ready` → wait for controller state to become `ready`.
 - `ffprobe-validation-failed` → media format issue; switch post or file.
 - `media-too-large` → oversized media.
-- Video never starts sending → the controller needs a video manifest; disable autoplay blockers on the X tab or refresh.
+- Video never starts sending → the post's video has no HLS manifest. A
+  manifest is only used for the video it names: a video whose poster carries
+  no id is matched only when the post's own document holds exactly one
+  video. `video-master-unavailable` in the response means that video had no
+  master playlist, which X uses for live/streamed clips (e.g. Periscope
+  replays served from another host); it is reported, never substituted with
+  another video's stream.
 
 ## Limitations
 
 - Media-to-channel requires the compatibility patch above for the current WhatsApp Web internals.
 - `getChannels()` is still broken upstream; we rely on known channel IDs / stored channel settings.
+- Only an HLS *master* playlist is sent: a rendition such as
+  `/pl/avc1/3840x2160/<token>.m3u8` is one video-only stream, and muxing it
+  would publish a silent video. A video without a master is reported as a
+  failure rather than sent without sound.
+- Live/streamed clips (Periscope and similar) are not served from
+  `video.twimg.com`, so they are reported as `video-id-unknown`.

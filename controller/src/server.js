@@ -52,6 +52,14 @@ function errMsg(e) {
   try { return String(e); } catch { return 'unknown-error'; }
 }
 
+// Media the extension could not resolve before sending. Newer builds send
+// `mediaFailures` (images and videos); older ones only sent `imageFailures`.
+function extractionFailures(body) {
+  const from = Array.isArray(body.mediaFailures) ? body.mediaFailures
+    : (Array.isArray(body.imageFailures) ? body.imageFailures : []);
+  return from.map((f) => ({ index: f && f.index, type: (f && f.type) || 'media', error: (f && f.error) || 'media-not-extracted' }));
+}
+
 function validMedia(m) {
   return m && ['image', 'video'].includes(m.type) && typeof m.source === 'string' && m.source.length > 0 && m.source.length < 4096;
 }
@@ -87,7 +95,17 @@ function ffprobeOk(file) {
       try {
         const j = JSON.parse(stdout);
         const hasVideo = j.streams && j.streams.some((s) => s.codec_type === 'video');
-        if (!j.streams || !j.streams.some(s => s.codec_type === 'video')) { log('warn','media-validate-no-video',{requestId:currentJob&&currentJob.requestId,jobId:currentJob&&currentJob.jobId}); }
+        const hasAudio = Boolean(j.streams && j.streams.some((s) => s.codec_type === 'audio'));
+        // Log what the delivered file really contains: a muxed HLS master
+        // must yield both a picture and an audio track.
+        log('info','media-validate-streams',{
+          requestId:currentJob&&currentJob.requestId,
+          jobId:currentJob&&currentJob.jobId,
+          hasVideo:Boolean(hasVideo),
+          hasAudio,
+          codecs:(j.streams||[]).map((s) => s.codec_type + ':' + (s.codec_name || '?')),
+        });
+        if (!j.streams || !hasVideo) { log('warn','media-validate-no-video',{requestId:currentJob&&currentJob.requestId,jobId:currentJob&&currentJob.jobId}); }
         resolve(Boolean(hasVideo));
       } catch { resolve(false); }
     });
@@ -134,17 +152,20 @@ function sniffImageExt(file) {
   }
 }
 
-async function processMedia(item, jobDir) {
-  log('info','media-process-start',{requestId:currentJob&&currentJob.requestId,jobId:currentJob&&currentJob.jobId,type:item.type});
+async function processMedia(item, jobDir, index) {
+  // Each media item gets its own output paths: a post with several videos
+  // must not have every video muxed into (and overwritten at) one file.
+  const tag = (Number.isInteger(index) ? index : 0);
+  log('info','media-process-start',{requestId:currentJob&&currentJob.requestId,jobId:currentJob&&currentJob.jobId,type:item.type,index:tag});
   if (item.type === 'video') {
-    const out = path.join(jobDir, 'out.mp4');
+    const out = path.join(jobDir, `out-${tag}.mp4`);
     if (/^https?:\/\//i.test(item.source)) {
       // For HLS-style sources we feed the URL directly to ffmpeg rather than trying to
       // download it as a static object.
       if (/\.m3u8(\?|$)/i.test(item.source)) {
         await ffmpegMux(item.source, out);
       } else {
-        const file = path.join(jobDir, 'input.bin');
+        const file = path.join(jobDir, `input-${tag}.bin`);
         await download(item.source, file, DOWNLOAD_TIMEOUT_MS);
         const stat = fs.statSync(file);
         if (stat.size > MAX_MEDIA_BYTES) throw new Error('media-too-large');
@@ -157,12 +178,12 @@ async function processMedia(item, jobDir) {
     } else {
       throw new Error('media-source-invalid');
     }
-    if (!(await ffprobeOk(out))) { log('error','media-process-ffprobe-failed',{requestId:currentJob&&currentJob.requestId,jobId:currentJob&&currentJob.jobId}); throw new Error('ffprobe-validation-failed'); }
-    log('info','media-process-done',{requestId:currentJob&&currentJob.requestId,jobId:currentJob&&currentJob.jobId,type:item.type});
+    if (!(await ffprobeOk(out))) { log('error','media-process-ffprobe-failed',{requestId:currentJob&&currentJob.requestId,jobId:currentJob&&currentJob.jobId,index:tag}); throw new Error('ffprobe-validation-failed'); }
+    log('info','media-process-done',{requestId:currentJob&&currentJob.requestId,jobId:currentJob&&currentJob.jobId,type:item.type,index:tag});
     return out;
   }
 
-  const file = path.join(jobDir, crypto.randomBytes(6).toString('hex') + '.bin');
+  const file = path.join(jobDir, `${tag}-` + crypto.randomBytes(6).toString('hex') + '.bin');
   if (/^https?:\/\//i.test(item.source)) {
     await download(item.source, file, DOWNLOAD_TIMEOUT_MS);
   } else if (fs.existsSync(item.source)) {
@@ -213,7 +234,7 @@ async function sendJob(body) {
       for (let i = 0; i < media.length; i++) {
         const m = media[i];
         if (!validMedia(m)) { sendFailures.push({ index: i, type: m && m.type, error: 'bad-media' }); log('error','bad-media',{requestId,jobId,tweetId,index:i}); continue; }
-        try { log('info','media-process-url',{requestId,jobId,type:m.type,source:m.source}); const f = await processMedia(m, jobDir); mediaFiles.push({ type: m.type, file: f, index: i }); }
+        try { log('info','media-process-url',{requestId,jobId,type:m.type,index:i,source:m.source}); const f = await processMedia(m, jobDir, i); mediaFiles.push({ type: m.type, file: f, index: i }); }
         catch (e) { try{ console.log('sendJob media error:', e && e.message, e && e.stack); }catch{} sendFailures.push({ index: i, type: m.type, error: errMsg(e) }); log('error','media-process-failed',{requestId,jobId,tweetId,index:i,error:errMsg(e)}); }
       }
     }
@@ -223,7 +244,7 @@ async function sendJob(body) {
     if (mediaFiles.length === 0) {
       if (!text) {
         // Nothing could be processed: report every intended-but-missing item.
-        const none = [].concat(Array.isArray(body.imageFailures) ? body.imageFailures : [], sendFailures);
+        const none = [].concat(extractionFailures(body), sendFailures);
         jobs.set(jobId, { status: 'failed', error: 'empty-post', failures: none }); cleanup(jobDir); log('error','whatsapp-send-empty',{requestId,jobId,tweetId,failed:none.length}); return { ok: false, error: 'empty-post', jobId, ...(none.length ? { failures: none } : {}) };
       }
       log('info','whatsapp-send-text',{requestId,jobId});
@@ -246,7 +267,7 @@ async function sendJob(body) {
     // Merge extraction failures (from the service worker) with send
     // failures. Never report full success unless every intended
     // message was sent.
-    const failures = [].concat(Array.isArray(body.imageFailures) ? body.imageFailures : [], sendFailures);
+    const failures = [].concat(extractionFailures(body), sendFailures);
     const partial = failures.length > 0 && sent.length > 0;
     const ok = failures.length === 0 && sent.length > 0;
     duplicateLog.set(key, { ts: now, status: ok ? 'completed' : (partial ? 'partial' : 'failed'), jobId });

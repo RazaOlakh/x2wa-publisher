@@ -32,45 +32,119 @@ function findPhotoLinks(article) {
   return Array.from(new Set(out));
 }
 
-// Distinct media image URLs in the clicked post, in original order.
-// og:image on a /photo/ page only ever returns the FIRST image, so for
-// multi-image posts we read the article's <img> elements directly. The
-// media id (path before the query) is the dedupe key; X serves the same
-// image at multiple sizes/formats.
-function findMediaUrls(article) {
-  const seen = new Set();
-  const out = [];
-  for (const img of article.querySelectorAll('img[src*="pbs.twimg.com/media"]')) {
-    if (img.closest('article') !== article) continue;
-    let src = img.getAttribute('src') || img.src;
+// --- Mixed media extraction (images + videos, original order) ---
+//
+// X exposes a video through two URLs that share one id:
+//   poster: pbs.twimg.com/amplify_video_thumb/<id>/img/<name>.jpg
+//   stream: video.twimg.com/amplify_video/<id>/pl/<token>.m3u8
+// (older posts use ext_tw_video_thumb / ext_tw_video for the same shape)
+// That shared id is what lets the background worker match a captured HLS
+// manifest to one specific video instead of "the newest one on the page".
+const VIDEO_ID_RE = /(?:amplify|ext_tw)_video(?:_thumb)?\/([A-Za-z0-9_-]+)/;
+
+function videoIdFromUrl(u) {
+  const m = VIDEO_ID_RE.exec(u || '');
+  return m ? m[1] : null;
+}
+
+// Master playlists carry every stream and their path holds no codec or
+// resolution directory (/pl/k_<token>.m3u8, or /pu/pl/<token>.m3u8 for the
+// older ext_tw_video shape); renditions nest those directories instead
+// (/pl/avc1/720x720/tok.m3u8, audio-only /pl/mp4a/32000/tok.m3u8). Only the
+// master is the right source to hand to ffmpeg.
+const RENDITION_DIRS = /^(?:avc1|hev1|hvc1|vp9|av01|mp4a|vid|aud|\d+x\d+)$/;
+function isMasterPlaylist(rest) {
+  const parts = rest.replace(/\?.*$/, '').split('/');
+  parts.pop();
+  return !parts.some((seg) => RENDITION_DIRS.test(seg));
+}
+
+// All HLS manifests in a document, keyed by the video id in their path.
+// Used on the server-rendered HTML, where the manifests live outside the
+// <article> but still name their video explicitly.
+function findHlsSources(html) {
+  const out = {};
+  const re = /https:\/\/video\.twimg\.com\/(?:amplify|ext_tw)_video\/([A-Za-z0-9_-]+)\/([^"'\s\\<>]+)/g;
+  let m;
+  while ((m = re.exec(html))) {
+    const id = m[1];
+    if (!/\.m3u8(?:\?|$)/.test(m[2])) continue;
+    const rec = out[id] || (out[id] = { master: null, variants: [] });
+    if (isMasterPlaylist(m[2])) { if (!rec.master) rec.master = m[0]; }
+    else if (rec.variants.indexOf(m[0]) === -1 && rec.variants.length < 8) rec.variants.push(m[0]);
+  }
+  return out;
+}
+
+// Ordered media items of the clicked post, images and videos interleaved
+// exactly as X renders them. The poster <img> X draws beside a <video> is
+// folded into that video instead of being reported as an extra image, and
+// a video whose poster carries no id is still reported (with a null id) so
+// it surfaces as a failure rather than being dropped.
+function findMediaItems(article) {
+  const items = [];
+  const seenVideo = new Set();
+  const seenImage = new Set();
+  const sel = 'video[poster], img[src*="pbs.twimg.com/media"], img[src*="amplify_video_thumb"], img[src*="ext_tw_video_thumb"]';
+  for (const el of article.querySelectorAll(sel)) {
+    // Skip media belonging to a nested quoted/reposted article.
+    if (el.closest('article') !== article) continue;
+    if (el.tagName === 'VIDEO') {
+      const poster = el.getAttribute('poster') || '';
+      const id = videoIdFromUrl(poster);
+      const key = id || 'poster:' + poster;
+      if (seenVideo.has(key)) continue;
+      seenVideo.add(key);
+      items.push({ type: 'video', videoId: id || null });
+      continue;
+    }
+    const src = el.getAttribute('src') || '';
+    const vid = videoIdFromUrl(src);
+    if (vid) {
+      if (seenVideo.has(vid)) continue;
+      seenVideo.add(vid);
+      items.push({ type: 'video', videoId: vid });
+      continue;
+    }
+    // X serves one image at several sizes; the media id is the dedupe key.
     try {
       const u = new URL(src, location.origin);
       const id = u.pathname.split('/').pop();
-      if (!id || seen.has(id)) continue;
-      seen.add(id);
-      // Prefer a large variant; X ignores unknown params but honours name.
+      if (!id || seenImage.has(id)) continue;
+      seenImage.add(id);
       u.searchParams.set('format', 'webp');
       u.searchParams.set('name', 'large');
-      out.push(u.href);
+      items.push({ type: 'image', url: u.href });
     } catch {}
   }
-  return out;
+  return items;
+}
+
+// Distinct media image URLs in the clicked post, in original order.
+// og:image on a /photo/ page only ever returns the FIRST image, so for
+// multi-image posts we read the article's <img> elements directly.
+function findMediaUrls(article) {
+  return findMediaItems(article).filter((m) => m.type === 'image').map((m) => m.url);
 }
 
 // Reliable media recovery fallback. X's SPA can defer lazy images in
 // headless / low-activity contexts so the live DOM ends up with no
 // rendered <img> even though the post has photos (the /photo/ links
 // remain). In that case, fetch the tweet's server-rendered HTML and
-// read the media <img> elements straight from the clicked post's own
-// article, excluding nested quoted-tweet articles.
-async function recoverMediaUrls(article, post) {
+// read the media elements straight from the clicked post's own article,
+// excluding nested quoted-tweet articles. That document also carries the
+// HLS manifests, each naming its own video id, so videos the live DOM
+// could not identify are recovered here too.
+async function recoverMedia(article, post) {
   const expected = post.photoHrefs ? post.photoHrefs.length : 0;
-  const have = post.mediaUrls ? post.mediaUrls.length : 0;
-  // The live DOM already accounts for every photo the post has (or
-  // the post rendered image elements without /photo/ wrappers):
-  // there is nothing left to recover.
-  if (have >= expected && (expected > 0 || have > 0)) return post;
-  if (!post.hasImage) return post;
+  const items = post.mediaItems || [];
+  const haveImages = items.filter((m) => m.type === 'image').length;
+  const unidentifiedVideo = items.some((m) => m.type === 'video' && !m.videoId);
+  // The live DOM already accounts for every photo the post has (or the
+  // post rendered image elements without /photo/ wrappers) and every
+  // video it rendered carries an id: nothing left to recover.
+  if (!unidentifiedVideo && haveImages >= expected && (expected > 0 || haveImages > 0)) return post;
+  if (!post.hasImage && !post.hasVideo) return post;
   try {
     const resp = await fetch(post.tweetUrl, { credentials: 'omit' });
     if (!resp.ok) {
@@ -78,6 +152,7 @@ async function recoverMediaUrls(article, post) {
       return post;
     }
     const html = await resp.text();
+    const hls = findHlsSources(html);
     const doc = new DOMParser().parseFromString(html, 'text/html');
     const target = '/status/' + post.tweetId;
     for (const art of doc.querySelectorAll('article')) {
@@ -85,7 +160,7 @@ async function recoverMediaUrls(article, post) {
       if (art.parentElement && art.parentElement.closest('article')) continue;
       // The server-rendered article has no <time> element (that is added
       // during hydration), so match by the post's own permalink link
-      // (/…/status/<id>). /photo/ links share the id but end in
+      // (/.../status/<id>). /photo/ links share the id but end in
       // /photo/<n> and therefore never match.
       let isTarget = false;
       for (const a of art.querySelectorAll('a[href]')) {
@@ -94,13 +169,27 @@ async function recoverMediaUrls(article, post) {
         if (path.endsWith(target)) { isTarget = true; break; }
       }
       if (!isTarget) continue;
-      const urls = findMediaUrls(art);
-      if (urls.length > 0) {
-        _xlog('info', 'tweet-media-recovered', { tweetId: post.tweetId, count: urls.length });
-        return { ...post, mediaUrls: urls, hasImage: true };
+      const recovered = findMediaItems(art);
+      // A video the live DOM rendered without a poster id can still be
+      // named here; carry that id back onto the live item in place.
+      for (let i = 0; i < recovered.length; i++) {
+        const r = recovered[i];
+        if (r.type !== 'video' || r.videoId) continue;
+        const live = items.find((m) => m.type === 'video' && !m.videoId);
+        if (live) { live.videoId = r.videoId; break; }
       }
+      _xlog('info', 'tweet-media-recovered', { tweetId: post.tweetId, items: recovered.length, hls: Object.keys(hls).length });
+      const next = { ...post, hlsSources: hls };
+      if (recovered.length) {
+        next.mediaItems = recovered;
+        next.mediaUrls = recovered.filter((m) => m.type === 'image').map((m) => m.url);
+        next.hasImage = post.hasImage || next.mediaUrls.length > 0;
+        next.hasVideo = post.hasVideo || recovered.some((m) => m.type === 'video');
+      }
+      return next;
     }
     _xlog('warn', 'tweet-media-not-found', { tweetId: post.tweetId });
+    return Object.keys(hls).length ? { ...post, hlsSources: hls } : post;
   } catch (e) {
     _xlog('warn', 'tweet-media-recover-error', { tweetId: post.tweetId, error: e && e.message });
   }
@@ -251,15 +340,44 @@ function extractPost(article) {
   const id = findTweetId(url);
   if (!id) return { error: 'no-tweet-id', url };
   const text = findTweetText(article);
+  const mediaItems = findMediaItems(article);
+  const photoHrefs = findPhotoLinks(article);
   return {
     tweetId: id,
     tweetUrl: url,
     text,
-    hasImage: findPhotoLinks(article).length > 0 || findMediaUrls(article).length > 0,
-    hasVideo: hasVideo(article),
-    photoHrefs: findPhotoLinks(article),
-    mediaUrls: findMediaUrls(article),
+    hasImage: photoHrefs.length > 0 || mediaItems.some((m) => m.type === 'image'),
+    hasVideo: hasVideo(article) || mediaItems.some((m) => m.type === 'video'),
+    photoHrefs,
+    mediaUrls: mediaItems.filter((m) => m.type === 'image').map((m) => m.url),
+    // Images and videos in the order X renders them; the background worker
+    // turns each video id into its own captured HLS manifest.
+    mediaItems,
   };
+}
+
+// X renders <video preload="none">, so a post's stream is only requested
+// once the player is engaged. Nudging each of the clicked post's players
+// (muted, so no autoplay gate) makes the background webRequest capture see
+// the real manifests for exactly these videos instead of relying on the
+// user having happened to play them.
+async function primeVideos(article, timeoutMs) {
+  const videos = [...article.querySelectorAll('video')].filter((v) => v.closest('article') === article);
+  if (!videos.length) return false;
+  for (const v of videos) {
+    try { v.muted = true; } catch {}
+    try { v.setAttribute('preload', 'auto'); } catch {}
+    try { v.load(); } catch {}
+    try { v.play().catch(() => {}); } catch {}
+  }
+  _xlog('info', 'tweet-videos-primed', { count: videos.length });
+  const deadline = Date.now() + (timeoutMs || 2500);
+  while (Date.now() < deadline) {
+    await sleep(250);
+    const ready = videos.some((v) => v.readyState >= 1 || (v.currentSrc && v.currentSrc.indexOf('blob:') !== 0));
+    if (ready) break;
+  }
+  return true;
 }
 
 window.__xwapExtractPost = extractPost;
@@ -319,9 +437,19 @@ async function extractPostAsync(article) {
     _xlog('info', 'tweet-truncated-no-expand-control', { tweetId: post.tweetId });
   }
 
-  // Recover media URLs from the server-rendered HTML when the live DOM
-  // has no rendered images (headless / lazy-load deferral).
-  post = await recoverMediaUrls(article, post);
+  // Ask X for the clicked post's own video streams so the background
+  // worker captures manifests for these videos and not for whatever else
+  // the page happened to load.
+  if (post.hasVideo) {
+    try { await primeVideos(article, 2500); } catch (e) { _xlog('warn', 'tweet-video-prime-failed', { tweetId: post.tweetId, error: e && e.message }); }
+    const after = extractPost(article);
+    if (!after.error) post = after;
+  }
+
+  // Recover media from the server-rendered HTML when the live DOM has no
+  // rendered images (headless / lazy-load deferral) or could not name a
+  // video. This also carries the HLS manifests for those video ids.
+  post = await recoverMedia(article, post);
 
   // Recover canonical URLs hidden behind X link previews / wrapped link displays.
   return recoverPostLinks(article, post);
