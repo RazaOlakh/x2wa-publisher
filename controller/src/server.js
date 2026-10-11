@@ -7,7 +7,7 @@ const crypto = require('crypto');
 const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 const QRCode = require('qrcode-generator');
-const { sessionDir, tmpRoot, acquireSessionLock } = require('./platform');
+const { sessionDir, tmpRoot, acquireSessionLock, findChromeExecutable } = require('./platform');
 const { listPostableChannels, canPostToChannel } = require('./channels');
 const { createHeartbeat } = require('./heartbeat');
 const repo = require('./repo');
@@ -50,7 +50,7 @@ function log(level,event,data){ const rec={ts:new Date().toISOString(),level,com
 function makeClient() {
   return new Client({
     authStrategy: new LocalAuth({ dataPath: SESSION_DIR }),
-    puppeteer: { headless: true, executablePath: process.env.CHROME_PATH || '/usr/bin/google-chrome-stable', args: ['--no-sandbox', '--disable-setuid-sandbox'] },
+    puppeteer: { headless: true, executablePath: findChromeExecutable(), args: ['--no-sandbox', '--disable-setuid-sandbox'] },
   });
 }
 
