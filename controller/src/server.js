@@ -112,6 +112,19 @@ let restartTimer = null;
 let restartAttempts = 0;
 let restartPending = false;
 
+// Resolves once the client is connected again (or the wait runs out).
+function waitForReady(timeoutMs) {
+  const deadline = Date.now() + (timeoutMs || 30000);
+  return new Promise((resolve) => {
+    const tick = () => {
+      if (state === 'ready' && client) return resolve(true);
+      if (Date.now() >= deadline) return resolve(false);
+      setTimeout(tick, 500);
+    };
+    tick();
+  });
+}
+
 function restartBackoffMs(attempts) {
   return Math.min(2000 * Math.pow(2, Math.max(0, attempts - 1)), 60000);
 }
@@ -352,14 +365,16 @@ async function sendJob(body) {
     // Re-check posting rights at send time: a channel can lose admin
     // between selection and publish. If it cannot be confirmed, refuse.
     // Distinguish "we checked and you may not post" from "we could not
-    // check right now". Failing a post because of a transient WhatsApp
-    // hiccup would be both wrong and confusing, so an unverifiable check
-    // is retried once and only then reported as such.
+    // check right now". A transient page fault (a detached frame after the
+    // machine sleeps, say) must not fail the post: the connection is
+    // rebuilt and the check retried once the client is healthy again.
     let permit = await canPostToChannel(client, channelId);
     if (!permit.ok && permit.error) {
       log('warn','permission-check-retry',{requestId,jobId,channelId,error:permit.error});
-      await new Promise((r) => setTimeout(r, 2000));
-      permit = await canPostToChannel(client, channelId);
+      markConnectionStale('permission-probe-failed');
+      const healthy = await waitForReady(45000);
+      log('info','permission-check-recheck',{requestId,jobId,channelId,healthy});
+      if (healthy && client) permit = await canPostToChannel(client, channelId);
     }
     if (!permit.ok) {
       const unverifiable = Boolean(permit.error);

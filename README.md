@@ -309,6 +309,29 @@ information is exposed to screen readers as an `aria-label`.
 
 It returns to the WhatsApp icon a few seconds after finishing.
 
+### The notification
+
+Because the button carries no text, the outcome is also announced in a
+snackbar at the bottom centre of the page:
+
+| Kind | Looks like | Example |
+|---|---|---|
+| Success | teal edge, check | **Posted to Test** — *Your post is in the channel.* |
+| Info | blue edge, info | **Partly posted** — *2 of 4 items reached the channel…* |
+| Error | red edge, cross | **Could not post** — *This account cannot post in that channel…* |
+
+Each snackbar can be dismissed with its **×** and disappears on its own after
+a few seconds (errors linger longer, since they usually need reading). At most
+three are shown at once. Errors are written in plain language rather than
+error codes, for example:
+
+| Cause | What you are told |
+|---|---|
+| `channel-not-permitted` | pick a different channel in the popup |
+| `permission-check-failed` | could not confirm permission — please try again |
+| `duplicate-send` | this post already went to that channel moments ago |
+| `Failed to fetch` | the controller is not reachable |
+
 A post is never silently downgraded: if an image or video cannot be retrieved,
 the partial state is shown rather than quietly dropping the item.
 
@@ -399,7 +422,7 @@ the same WhatsApp session at once, which would corrupt it.
 | `whatsapp-not-ready` | WhatsApp is not connected yet — wait for `ready`. |
 | `channel-not-permitted` | The account lost admin/owner rights for that channel. Pick another. |
 | `duplicate-send` | The same post was already sent to that channel in the last 120 seconds. |
-| Amber warning on the button | Some media could not be retrieved; the rest was published. Hover for the counts. |
+| Blue "Partly posted" snackbar | Some media could not be retrieved; the rest was published. The counts are in the snackbar. |
 | `ffprobe-validation-failed` | The video could not be processed. Try another post. |
 | `media-too-large` | The media exceeds 64 MB. |
 | `video-master-unavailable` / `video-id-unknown` | X did not expose a usable stream — typical for live or streamed clips such as Periscope replays. It is reported, never substituted with another video. |

@@ -105,6 +105,146 @@ function renderButton(btn, state, label) {
   btn.dataset.state = state;
 }
 
+// --- snackbar ------------------------------------------------------------
+// The button is icon-only, so the outcome is also reported in a snackbar at
+// the bottom centre. It is built from inline styles only (like the button),
+// because injecting a stylesheet into the page can be blocked by its CSP;
+// the slide-in is a transition triggered by a style change, which needs no
+// keyframes.
+const SNACKBAR_TONES = {
+  success: { accent: '#00a884', icon: 'check' },
+  error:   { accent: '#f4212e', icon: 'cross' },
+  info:    { accent: '#1d9bf0', icon: 'info' },
+};
+const SNACKBAR_MS = { success: 4500, info: 5000, error: 8000 };
+
+function snackbarHost() {
+  let host = document.getElementById('__xwap-snackbar-host');
+  if (host && host.isConnected) return host;
+  host = document.createElement('div');
+  host.id = '__xwap-snackbar-host';
+  host.setAttribute('role', 'region');
+  host.setAttribute('aria-label', 'Post to WhatsApp notifications');
+  host.style.cssText = [
+    'position:fixed', 'left:50%', 'bottom:24px', 'transform:translateX(-50%)',
+    'z-index:2147483647', 'display:flex', 'flex-direction:column-reverse',
+    'align-items:center', 'gap:8px', 'pointer-events:none',
+    'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif',
+    'max-width:100vw',
+  ].join(';') + ';';
+  (document.body || document.documentElement).appendChild(host);
+  return host;
+}
+
+// A disc in the tone colour with the glyph punched out of it, so the glyph
+// shows the dark card behind it. evenodd punches the glyph out regardless of
+// which way each subpath happens to wind; without it the "i" disappears.
+function snackbarIcon(kind, color) {
+  const svg = svgEl('svg', { viewBox: '0 0 24 24', width: '16', height: '16', 'aria-hidden': 'true', focusable: 'false' });
+  const path = (d) => svg.appendChild(svgEl('path', { fill: color, 'fill-rule': 'evenodd', d }));
+  if (kind === 'check') {
+    path('M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20m-1.2 14.6-4.2-4.2 1.6-1.6 2.6 2.6 5.4-5.4 1.6 1.6z');
+  } else if (kind === 'cross') {
+    path('M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20m5 13.59-1.41 1.42L12 13.41 8.41 17 7 15.59 10.59 12 7 8.41 8.41 7 12 10.59 15.59 7 17 8.41 13.41 12z');
+  } else {
+    path('M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20m-1 15h2v-2h-2zm0-4h2V7h-2z');
+  }
+  return svg;
+}
+
+// type: 'success' | 'error' | 'info'
+function showSnackbar(type, title, detail) {
+  const tone = SNACKBAR_TONES[type] || SNACKBAR_TONES.info;
+  const host = snackbarHost();
+
+  // Never let them pile up.
+  while (host.children.length >= 3) host.removeChild(host.firstChild);
+
+  const card = document.createElement('div');
+  card.setAttribute('role', type === 'error' ? 'alert' : 'status');
+  card.setAttribute('aria-live', type === 'error' ? 'assertive' : 'polite');
+  card.style.cssText = [
+    'pointer-events:auto', 'display:flex', 'align-items:flex-start', 'gap:10px',
+    'max-width:min(90vw,400px)', 'background:#15202b', 'color:#e7e9ea',
+    'border-radius:12px', 'padding:12px 14px', 'font-size:13px', 'line-height:1.4',
+    'box-shadow:0 10px 30px rgba(0,0,0,.38)', 'border-left:3px solid ' + tone.accent,
+    'transform:translateY(14px)', 'opacity:0',
+    'transition:transform .22s ease,opacity .22s ease',
+  ].join(';') + ';';
+
+  const iconWrap = document.createElement('span');
+  iconWrap.style.cssText = 'display:flex;flex:0 0 auto;margin-top:1px;color:' + tone.accent + ';';
+  iconWrap.appendChild(snackbarIcon(tone.icon, tone.accent));
+
+  const text = document.createElement('div');
+  text.style.cssText = 'flex:1 1 auto;min-width:0;';
+  const head = document.createElement('div');
+  head.style.cssText = 'font-weight:600;';
+  head.textContent = title;
+  text.appendChild(head);
+  if (detail) {
+    const sub = document.createElement('div');
+    sub.style.cssText = 'color:#8b98a5;font-size:12px;margin-top:2px;word-break:break-word;';
+    sub.textContent = detail;
+    text.appendChild(sub);
+  }
+
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.setAttribute('aria-label', 'Dismiss notification');
+  close.textContent = '\u00d7';
+  close.style.cssText = 'background:none;border:0;color:#8b98a5;font-size:18px;line-height:1;cursor:pointer;padding:0 2px;flex:0 0 auto;';
+  close.addEventListener('click', () => dismissSnackbar(card));
+
+  card.appendChild(iconWrap);
+  card.appendChild(text);
+  card.appendChild(close);
+  host.appendChild(card);
+
+  // Next frame so the transition actually runs (initial -> final).
+  requestAnimationFrame(() => {
+    card.style.transform = 'translateY(0)';
+    card.style.opacity = '1';
+  });
+
+  setTimeout(() => dismissSnackbar(card), SNACKBAR_MS[type] || 5000);
+  return card;
+}
+
+function dismissSnackbar(card) {
+  if (!card || !card.isConnected) return;
+  card.style.transform = 'translateY(14px)';
+  card.style.opacity = '0';
+  setTimeout(() => { try { card.remove(); } catch {} }, 240);
+}
+
+// Plain-language explanations for the error codes the controller returns.
+const ERROR_HINTS = {
+  'whatsapp-not-ready': 'The controller is still connecting to WhatsApp. Try again in a moment.',
+  'channel-not-permitted': 'This account cannot post in that channel. Pick a different one in the extension popup.',
+  'permission-check-failed': 'Could not confirm posting permission just now. Please try again.',
+  'duplicate-send': 'This post was already sent to that channel moments ago.',
+  'empty-post': 'There was nothing to send.',
+  'no-default-channel': 'Choose a destination channel in the extension popup first.',
+  'video-media-unavailable': 'X did not provide a usable stream for this video.',
+  'Failed to fetch': 'Lost contact with the controller. Check that it is running.',
+};
+
+function errorDetail(code) {
+  return ERROR_HINTS[code] || code || 'unknown error';
+}
+
+// Name of the destination channel, for the success message.
+function channelName() {
+  return new Promise((resolve) => {
+    try {
+      chrome.storage.local.get(['selectedChannelName', 'defaultChannelName'], (r) => {
+        resolve((r && (r.selectedChannelName || r.defaultChannelName)) || '');
+      });
+    } catch { resolve(''); }
+  });
+}
+
 function injectButton(article) {
   if (article[INJECTION_FLAG]) return;
   article[INJECTION_FLAG] = true;
@@ -126,6 +266,7 @@ function injectButton(article) {
     const currentArticle = btn.closest('article');
     if (!currentArticle) {
       renderButton(btn, 'error', 'Err');
+      showSnackbar('error', 'Could not post', 'The post could not be read from the page.');
       xlog('error', 'extraction-failed', { requestId, error: 'no article' });
       return;
     }
@@ -136,6 +277,7 @@ function injectButton(article) {
 
     if (post.error) {
       renderButton(btn, 'error', 'Unsupported');
+      showSnackbar('error', 'Could not post this one', 'X did not expose the text, link or media of this post.');
       xlog('error', 'extraction-failed', { requestId, error: post.error });
       setTimeout(() => renderButton(btn, 'idle', 'Post to WhatsApp'), 4000);
       return;
@@ -149,18 +291,28 @@ function injectButton(article) {
       const result = await chrome.runtime.sendMessage({ type: 'SEND_POST', post, requestId });
       try { xlog('info', 'response-received', { requestId, jobId: result && result.jobId, durationMs: Date.now() - started }); } catch {}
       const total = (result && result.sent ? result.sent.length : 0) + (result && result.failures ? result.failures.length : 0);
+      const where = await channelName();
       if (result && result.ok) {
         renderButton(btn, 'success', 'Sent');
+        const count = result.sent ? result.sent.length : 0;
+        showSnackbar('success', where ? 'Posted to ' + where : 'Posted to WhatsApp',
+          count > 1 ? count + ' messages sent.' : 'Your post is in the channel.');
         try { xlog('info', 'send-succeeded', { requestId, tweetId: post.tweetId, jobId: result.jobId }); } catch {}
       } else if (result && result.partial) {
-        renderButton(btn, 'partial', `Partial ${result.sent ? result.sent.length : 0}/${total}`);
-        try { xlog('warn', 'send-partial', { requestId, tweetId: post.tweetId, jobId: result.jobId, sent: result.sent && result.sent.length, failures: result.failures }); } catch {}
+        const sentCount = result.sent ? result.sent.length : 0;
+        renderButton(btn, 'partial', `Partial ${sentCount}/${total}`);
+        showSnackbar('info', 'Partly posted',
+          sentCount + ' of ' + total + ' items reached the channel — some media could not be fetched.');
+        try { xlog('warn', 'send-partial', { requestId, tweetId: post.tweetId, jobId: result.jobId, sent: sentCount, failures: result.failures }); } catch {}
       } else {
-        renderButton(btn, 'error', `Err: ${(result && result.error) || 'failed'}`);
+        const code = (result && result.error) || 'failed';
+        renderButton(btn, 'error', `Err: ${code}`);
+        showSnackbar('error', 'Could not post', errorDetail(code));
         try { xlog('error', 'send-failed', { requestId, tweetId: post.tweetId, error: result ? result.error : 'unknown' }); } catch {}
       }
     } catch (e) {
       renderButton(btn, 'error', 'Err');
+      showSnackbar('error', 'Could not post', errorDetail('Failed to fetch'));
       try { xlog('error', 'send-failed', { requestId, tweetId: post.tweetId, error: e && e.message }); } catch {}
     } finally {
       btn.disabled = false;
