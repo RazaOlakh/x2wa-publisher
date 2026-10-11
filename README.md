@@ -43,6 +43,19 @@ Prerequisites on both: Node.js 18+ on `PATH`, `ffmpeg`/`ffprobe` on `PATH`
 
 To run it by hand instead: `cd controller && node src/server.js`.
 
+#### Platform verification status
+
+| | Status |
+|---|---|
+| Linux (systemd unit) | **Tested on this machine** — installed, enabled at login, restarted, session reused, uninstall path implemented |
+| Windows (Startup launcher) | **Not runtime-tested.** No Windows host was available. The launcher contract is covered by static checks in `scripts/windows/startup.test.js`; actual install/start/restart behaviour on Windows is unverified |
+
+The Windows launcher resolves Node.js and Chrome to absolute paths at install
+time (a logon session does not reliably inherit a PATH changed after install),
+refuses to start a second controller, appends its output to
+`%LOCALAPPDATA%\x-whatsapp-poster\controller.log`, and logs an explicit error
+if Node is missing or the controller does not answer after starting.
+
 ### 3. Load the extension
 
 Chrome → `chrome://extensions` → Developer mode → **Load unpacked** → select
@@ -118,10 +131,17 @@ WhatsApp Channel
 
 ## Dependency pin
 
-- `whatsapp-web.js@1.34.7` at `064a3d5a5a3dce1281a6a12740b5a7051339d154`
+- `whatsapp-web.js@1.34.7`, installed from the committed artifact
+  `controller/vendor/whatsapp-web.js-1.34.7.tgz` (see
+  `controller/vendor/README.md` for its sha256 and why the published npm
+  build cannot be used). A clean clone therefore needs nothing outside the
+  repository: `cd controller && npm install`.
 - One patch applied automatically by `controller/scripts/apply-patches.js`:
   `mediaMetadata: window.require('WAWebMediaMetadata').mediaMetadata(msg),`
   (PR #201824). No other source edits.
+- `node controller/test/dependency.test.js` verifies the installed build:
+  version 1.34.7, PR #201824 applied, and the WhatsApp Web message-ID
+  (`_serialized` → `$1`) compatibility fixes present.
 
 ## Security / isolation
 
@@ -167,6 +187,8 @@ WhatsApp Channel
 ## Limitations
 
 - Media-to-channel requires the compatibility patch above for the current WhatsApp Web internals.
+- Windows startup is implemented but has **not** been run on a real Windows
+  host; only static checks cover it so far.
 - Channel eligibility depends on a WhatsApp Web internal
   (`WAWebNewsletterMetadataQueryJob`); if WhatsApp renames it, the controller
   hides every channel rather than listing channels it could not verify.
