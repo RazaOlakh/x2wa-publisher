@@ -11,6 +11,6 @@
   "dependencies": {
     "qrcode-generator": "^2.0.4",
     "qrcode-terminal": "^0.12.0",
-    "whatsapp-web.js": "file:../spike5_src/whatsapp-web.js-1.34.7.tgz"
+    "whatsapp-web.js": "file:vendor/whatsapp-web.js-1.34.7.tgz"
   }
 }
