@@ -148,7 +148,12 @@ async function update() {
   const changed = await git(['diff', '--name-only', `${before.out}..${after.out}`], dir, TIMEOUT.normal);
   const files = changed.ok ? changed.out.split('\n').filter(Boolean) : [];
 
-  lastCheck = null; // the comparison is against the old commit now
+  // Recount rather than assuming: a pull that had nothing to do leaves the
+  // checkout ahead of its upstream, not level with it. Clearing the cache
+  // outright would have shown "unknown" immediately after a clean update.
+  const now = await counts(dir, l.upstream);
+  lastCheck = { at: Date.now(), upstream: l.upstream, behind: now ? now.behind : null, ahead: now ? now.ahead : null };
+
   return {
     ok: true,
     updated: after.out !== before.out,
