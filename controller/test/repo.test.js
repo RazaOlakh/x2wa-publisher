@@ -144,6 +144,20 @@ console.log('counts what is waiting upstream, without going to the network');
   const again = inRepo(dir, '(repo) => repo.update()');
   check('a second update is a no-op', again.ok === true && again.updated === false, again);
 
+  // And the status is not left claiming ignorance straight after an update.
+  const afterUpdate = inRepo(dir, '(async (repo) => { await repo.update(); return repo.status(); })');
+  eq('after updating, it knows where it stands', afterUpdate.behind, 0);
+  eq('and that nothing is waiting', afterUpdate.ahead, 0);
+
+  // An update with nothing waiting must not claim to be level with the
+  // remote when it is in fact ahead of it.
+  fs.writeFileSync(path.join(dir, 'local.txt'), 'only here\n');
+  git(dir, ['add', '.']);
+  git(dir, ['commit', '-q', '-m', 'local only']);
+  const aheadAfter = inRepo(dir, '(async (repo) => { await repo.update(); return repo.status(); })');
+  eq('a local commit is still reported as ahead', aheadAfter.ahead, 1);
+  eq('and nothing is waiting', aheadAfter.behind, 0);
+
   fs.rmSync(dir, { recursive: true, force: true });
   fs.rmSync(origin, { recursive: true, force: true });
 }
