@@ -423,6 +423,28 @@ the same WhatsApp session at once, which would corrupt it.
 | **No channels found that this account can post to** | The account is not an admin/owner of any channel. Create one, or have an existing owner add this account as admin, then reload. |
 | **Channels could not be read from WhatsApp right now** | Transient. The controller retries on its own; if it persists, restart the service. |
 
+### Keeping it up to date
+
+The popup has a **Version** card showing the branch, the short commit and
+whether anything newer is waiting on the remote. Reading that is local and
+free, so it never holds the popup up; **Check for updates** is the button
+that actually goes to the network.
+
+| The popup says | Meaning |
+|---|---|
+| **Up to date** | This checkout matches the remote. |
+| **N updates available** | Press **Update now**, then confirm. |
+| **N local commits ahead** | Commits here the remote has not seen. Push them yourself. |
+| **Update status unknown** | Nothing has been asked yet — press **Check for updates**. |
+| **Could not reach the remote** | The remote could not be asked. The numbers shown are the last known ones, not a fresh answer. |
+| **Local changes** | Uncommitted work, so updating is not offered rather than being refused later. |
+
+Updating **fast-forwards** your checkout to the latest commit on the remote.
+It never creates a merge commit, never stashes your work, and is refused
+outright if anything is uncommitted. What changed decides what happens next:
+only changes under `extension/` reload the extension, only changes under
+`controller/` restart the controller.
+
 ## Installation problems
 
 | Symptom | Fix |
@@ -531,6 +553,9 @@ debugging, and for scripting a check:
 | `POST /auth/logout` | `{ confirm: true }` — signs the account out (the flag is required) and offers a fresh QR |
 | `GET /channels` | `{ channels, checked, ineligible }` — only channels this account may post to; `ineligible` is kept for diagnostics; results are cached for 30s |
 | `POST /send` | `{ tweetId, tweetUrl, text, media: [{type, source}], mediaFailures?, channelId }` |
+| `GET /version` | `{ branch, sha, dirty, upstream, behind, ahead, checkedAt }` — local facts only, never touches the network; `behind`/`ahead` come from the last check |
+| `POST /version/check` | Fetches from the remote and returns the same shape, with `behind`/`ahead` fresh. `checkFailed: 'unreachable'` if the remote could not be reached |
+| `POST /update` | Fast-forwards to the upstream commit. Refused with `local-changes` on a dirty tree and `no-upstream` when the branch has none. Returns `{ updated, from, to, files, reloadExtension, restartController }` |
 
 `/send` publishes `media` in the post's own order (images and videos
 interleaved) and captions only the first item with `text`. `mediaFailures`
@@ -546,7 +571,8 @@ curl -s http://127.0.0.1:47825/channels
 
 ```bash
 node controller/test/dependency.test.js      # vendored library + patches intact
-node controller/test/controller.test.js      # session paths, single-instance lock, channel eligibility
+node controller/test/controller.test.js      # session paths, single-instance lock, channel eligibility, liveness watchdog
+node controller/test/repo.test.js            # update checks and fast-forward, against throwaway repos (no network)
 node extension/test/popup-states.test.js     # every popup state, incl. reconnecting and signed-out
 node scripts/windows/startup.test.js         # Windows launcher contract (static)
 ```
