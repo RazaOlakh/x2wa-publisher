@@ -290,14 +290,27 @@ Go to x.com, and every post gets a **Post to WhatsApp** button.
 | Text + several media | text as the caption of the **first** item only |
 | Images and videos mixed | every item, in the post's original order |
 
-The button reports exactly what happened:
+### What the button shows
 
-- **Sent** — everything was published
-- **Partial 3/4** — 3 items published, 1 could not be; the button shows the counts
-- **Err: …** — nothing was published; the reason is shown
+The button is a small icon that changes as the post is sent, so you can see the
+outcome without opening anything:
+
+| State | Icon | Colour | Meaning |
+|---|---|---|---|
+| Idle | WhatsApp glyph | green | ready — click to post |
+| Working | spinner | grey | posting (the spinner keeps turning) |
+| Success | check mark | teal | everything was published |
+| Partial | warning | amber | some items published, some could not be fetched |
+| Error | cross | red | nothing was published |
+
+There is no text on the button. Hover it for a tooltip with the detail
+(for example *Partial 3/4* or *Err: channel-not-permitted*), and the same
+information is exposed to screen readers as an `aria-label`.
+
+It returns to the WhatsApp icon a few seconds after finishing.
 
 A post is never silently downgraded: if an image or video cannot be retrieved,
-it is reported rather than quietly dropped.
+the partial state is shown rather than quietly dropping the item.
 
 ---
 
@@ -386,7 +399,7 @@ the same WhatsApp session at once, which would corrupt it.
 | `whatsapp-not-ready` | WhatsApp is not connected yet — wait for `ready`. |
 | `channel-not-permitted` | The account lost admin/owner rights for that channel. Pick another. |
 | `duplicate-send` | The same post was already sent to that channel in the last 120 seconds. |
-| `Partial X/Y` in the button | Some media could not be retrieved. The rest was published. |
+| Amber warning on the button | Some media could not be retrieved; the rest was published. Hover for the counts. |
 | `ffprobe-validation-failed` | The video could not be processed. Try another post. |
 | `media-too-large` | The media exceeds 64 MB. |
 | `video-master-unavailable` / `video-id-unknown` | X did not expose a usable stream — typical for live or streamed clips such as Periscope replays. It is reported, never substituted with another video. |

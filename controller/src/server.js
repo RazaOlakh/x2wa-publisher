@@ -351,11 +351,28 @@ async function sendJob(body) {
     if (state !== 'ready' || !client) { jobs.set(jobId, { status: 'failed', error: 'whatsapp-not-ready' }); cleanup(jobDir); log('error','whatsapp-not-ready',{requestId,jobId,tweetId,channelId}); return { ok: false, error: 'whatsapp-not-ready', jobId }; }
     // Re-check posting rights at send time: a channel can lose admin
     // between selection and publish. If it cannot be confirmed, refuse.
-    const permit = await canPostToChannel(client, channelId);
+    // Distinguish "we checked and you may not post" from "we could not
+    // check right now". Failing a post because of a transient WhatsApp
+    // hiccup would be both wrong and confusing, so an unverifiable check
+    // is retried once and only then reported as such.
+    let permit = await canPostToChannel(client, channelId);
+    if (!permit.ok && permit.error) {
+      log('warn','permission-check-retry',{requestId,jobId,channelId,error:permit.error});
+      await new Promise((r) => setTimeout(r, 2000));
+      permit = await canPostToChannel(client, channelId);
+    }
     if (!permit.ok) {
-      jobs.set(jobId, { status: 'failed', error: 'channel-not-permitted' }); cleanup(jobDir);
-      log('warn','channel-not-permitted',{requestId,jobId,tweetId,channelId,role:permit.role,state:permit.state});
-      return { ok: false, error: 'channel-not-permitted', jobId, reason: permit.error || (permit.state === 'terminated' ? 'channel-terminated' : 'insufficient-permission') };
+      const unverifiable = Boolean(permit.error);
+      const code = unverifiable ? 'permission-check-failed' : 'channel-not-permitted';
+      jobs.set(jobId, { status: 'failed', error: code }); cleanup(jobDir);
+      log('warn', unverifiable ? 'permission-check-failed' : 'channel-not-permitted',
+        { requestId, jobId, tweetId, channelId, role: permit.role, state: permit.state, error: permit.error });
+      return {
+        ok: false, error: code, jobId,
+        reason: unverifiable ? 'permission-check-failed'
+          : (permit.state === 'terminated' ? 'channel-terminated' : 'insufficient-permission'),
+        retryable: unverifiable,
+      };
     }
     const mediaFiles = [];
     const sendFailures = [];
