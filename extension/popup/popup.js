@@ -152,7 +152,8 @@ ui.check.addEventListener('click', () => refresh());
 ui.connect.addEventListener('click', async () => {
   ui.connect.disabled = true;
   setStatus('busy', 'Waiting for authentication…', '');
-  try { await req('/auth/qr'); } catch { /* controller may not expose one */ }
+  // Starts (or reuses) the client and asks for a fresh QR.
+  try { await req('/auth/start', { method: 'POST' }); } catch { /* may already be running */ }
   await showQr();
   // The controller reuses the saved session when it is still valid, so
   // poll briefly: a valid session goes straight to connected.
@@ -192,6 +193,17 @@ async function refresh() {
       ui.connect.classList.add('hidden');
       ui.select.disabled = true; ui.refresh.disabled = true; ui.disconnect.disabled = true;
       setNote(ui.channelNote, 'Channels load once the connection is ready.', 'idle');
+      return;
+
+    case 'auth_required':
+      // Signed out (or never paired): offer to start pairing again rather
+      // than leaving the user on a dead end.
+      setStatus('wait', 'Not linked to WhatsApp', 'This computer was signed out. Authenticate again to link the dedicated account.');
+      ui.connect.classList.remove('hidden');
+      ui.connect.textContent = 'Authenticate WhatsApp';
+      ui.select.disabled = true; ui.refresh.disabled = true; ui.disconnect.disabled = false;
+      setNote(ui.channelNote, 'Scanning a new code is required before posting can resume.', 'idle');
+      await showQr();
       return;
 
     case 'qr':

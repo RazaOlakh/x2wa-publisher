@@ -77,15 +77,23 @@ function startClient(reason) {
 }
 
 // Logging out is destructive (the saved session is invalidated), so it is
-// explicit and never happens on its own.
+// explicit and never happens on its own. A fresh client is started
+// straight afterwards so the user gets a new QR to pair with, instead of
+// being left with a stopped controller and no way forward.
 async function logout(reason) {
-  if (!client) { state = 'auth_required'; log('info','logout-noop',{reason}); return { ok: true, alreadyStopped: true }; }
+  if (!client) {
+    state = 'auth_required';
+    log('info','logout-noop',{reason});
+    startClient('after-logout');
+    return { ok: true, alreadyStopped: true };
+  }
   const c = client;
-  client = null; lastQr = null; waInfo = null; state = 'stopped';
+  client = null; lastQr = null; waInfo = null; channelCache = null; state = 'stopped';
   try { await c.logout(); } catch (e) { log('warn','logout-error',{error:String((e && e.message) || e)}); }
   try { await c.destroy(); } catch (e) { log('warn','destroy-error',{error:String((e && e.message) || e)}); }
   log('info','logged-out',{reason});
   state = 'auth_required';
+  startClient('after-logout');
   return { ok: true };
 }
 
@@ -393,6 +401,13 @@ const server = http.createServer(async (req, res) => {
       // `image` is a self-contained data URL: a self-contained URL keeps the
       // QR payload off the network and out of any log.
       return json(res, 200, { image: qrImageSvg(lastQr), issuedAt: qrIssuedAt });
+    }
+    if (req.method === 'POST' && url.pathname === '/auth/start') {
+      // Idempotent: reconnect, or start pairing if there is nothing to
+      // reconnect to. Lets the popup recover without a service restart.
+      if (state === 'ready') return json(res, 200, { ok: true, state, alreadyRunning: true });
+      if (!client) startClient('popup-request');
+      return json(res, 200, { ok: true, state });
     }
     if (req.method === 'POST' && url.pathname === '/auth/logout') {
       const body = await readBody(req).then((b) => { try { return JSON.parse(b || '{}'); } catch { return {}; } });

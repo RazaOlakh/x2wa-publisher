@@ -230,6 +230,22 @@ const wait = () => new Promise((r) => setTimeout(r, 30));
     check('reload offered', els.refreshBtn.disabled === false);
   }
 
+  // 7b. Signed out (auth_required): must offer re-pairing, not a dead end
+  console.log('state: auth_required (signed out)');
+  {
+    const { els, ready } = runPopup({
+      status: { state: 'auth_required', authRequired: true },
+      channels: 'UNREACHABLE',
+      qr: { image: 'data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=' },
+    });
+    await ready;
+    check('explains it was signed out', /signed out/i.test(txt(els, 'waDetail')), txt(els, 'waDetail'));
+    check('offers authenticate again', shown(els, 'connectBtn') && /Authenticate/i.test(txt(els, 'connectBtn')), txt(els, 'connectBtn'));
+    check('QR shown for re-pairing', shown(els, 'qrCard'));
+    check('channels disabled until paired', els.channelSelect.disabled === true);
+    check('not stuck on "Checking…"', txt(els, 'waTitle') !== 'Checking…', txt(els, 'waTitle'));
+  }
+
   // 8. Auth failure
   console.log('state: authentication failed');
   {
