@@ -82,23 +82,40 @@ function renderButton(btn, state, label) {
 
   btn.textContent = '';
   btn.appendChild(icon);
-  btn.style.background = tone.bg;
-  btn.style.color = tone.fg;
-  btn.style.border = '1px solid ' + tone.border;
-  btn.style.borderRadius = '50%';
-  btn.style.width = '26px';
-  btn.style.height = '26px';
-  btn.style.padding = '0';
-  btn.style.display = 'inline-flex';
-  btn.style.alignItems = 'center';
-  btn.style.justifyContent = 'center';
-  btn.style.font = 'inherit';
-  btn.style.cursor = 'pointer';
-  btn.style.marginLeft = '6px';
-  btn.style.verticalAlign = 'middle';
-  btn.style.flexShrink = '0';
-  btn.style.transition = 'background-color .18s ease, transform .12s ease';
-  btn.style.opacity = '1';
+
+  // The page's own stylesheet targets the buttons in an action bar, and an
+  // overfull bar squeezes a flex item's width while leaving its height
+  // alone. Either one turns the circle into a tall ellipse. Setting these
+  // with the important flag means a stylesheet rule -- even one that is
+  // itself important -- cannot resize the button, and fixing the minimum as
+  // well stops the flex layout compressing it.
+  const fixed = (prop, value) => btn.style.setProperty(prop, value, 'important');
+  const SIZE = '26px';
+  fixed('box-sizing', 'border-box');
+  fixed('width', SIZE);
+  fixed('height', SIZE);
+  fixed('min-width', SIZE);
+  fixed('max-width', SIZE);
+  fixed('min-height', SIZE);
+  fixed('max-height', SIZE);
+  fixed('padding', '0');
+  fixed('flex', '0 0 auto');
+  fixed('align-self', 'center');
+
+  fixed('background', tone.bg);
+  fixed('color', tone.fg);
+  fixed('border', '1px solid ' + tone.border);
+  fixed('border-radius', '50%');
+  fixed('display', 'inline-flex');
+  fixed('align-items', 'center');
+  fixed('justify-content', 'center');
+  fixed('font', 'inherit');
+  fixed('cursor', 'pointer');
+  fixed('margin-left', '6px');
+  fixed('flex-shrink', '0');
+  fixed('transition', 'background-color .18s ease, transform .12s ease');
+  fixed('opacity', '1');
+
   // Icon-only: name the control and its state for assistive tech and hover.
   btn.setAttribute('aria-label', 'Post to WhatsApp: ' + label);
   btn.title = 'Post to WhatsApp — ' + label;
