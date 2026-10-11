@@ -245,6 +245,55 @@ function channelName() {
   });
 }
 
+// --- remembering what has been sent --------------------------------------
+// A sent post keeps its tick. X re-creates post elements as you scroll, so
+// holding that state only in the DOM would quietly turn the tick back into
+// the WhatsApp icon; the ids are remembered instead, so the tick comes back
+// with the post.
+const SENT_KEY = 'sentPosts';
+const SENT_MAX = 200;
+
+// The permalink is the one thing every kind of post view agrees on.
+function tweetIdFromArticle(article) {
+  const fromAttr = article.getAttribute('data-tweet-id');
+  if (fromAttr) return fromAttr;
+  const link = article.querySelector('a[href*="/status/"]');
+  const m = link && link.getAttribute('href').match(/\/status\/(\d+)/);
+  return m ? m[1] : null;
+}
+
+function rememberSent(tweetId, where) {
+  if (!tweetId) return;
+  try {
+    chrome.storage.local.get([SENT_KEY], (r) => {
+      const map = (r && r[SENT_KEY]) || {};
+      map[tweetId] = { at: Date.now(), channel: where || '' };
+      const keys = Object.keys(map);
+      const oldest = keys.sort((a, b) => (map[a].at || 0) - (map[b].at || 0))
+        .slice(0, Math.max(0, keys.length - SENT_MAX));
+      for (const k of oldest) delete map[k];
+      try { chrome.storage.local.set({ [SENT_KEY]: map }); } catch { /* quota */ }
+    });
+  } catch { /* no storage available */ }
+}
+
+// Restores the tick on a post that has already been sent. The read is async,
+// so the button is drawn first and corrected a moment later.
+function restoreSentState(article, btn) {
+  const tweetId = tweetIdFromArticle(article);
+  if (!tweetId) return;
+  try {
+    chrome.storage.local.get([SENT_KEY], (r) => {
+      if (!btn.isConnected) return; // the post scrolled away mid-read
+      if (r && r[SENT_KEY] && r[SENT_KEY][tweetId]) {
+        renderButton(btn, 'success', 'Sent');
+        btn.title = 'Post to WhatsApp \u2014 already sent';
+        btn.setAttribute('aria-label', 'Post to WhatsApp: already sent');
+      }
+    });
+  } catch { /* no storage available */ }
+}
+
 function injectButton(article) {
   if (article[INJECTION_FLAG]) return;
   article[INJECTION_FLAG] = true;
@@ -255,6 +304,7 @@ function injectButton(article) {
   const btn = document.createElement('button');
   btn.type = 'button';
   renderButton(btn, 'idle', 'Post to WhatsApp');
+  restoreSentState(article, btn);
 
   btn.addEventListener('click', async (ev) => {
     ev.preventDefault();
@@ -285,6 +335,9 @@ function injectButton(article) {
 
     btn.disabled = true;
     renderButton(btn, 'working', 'Sending…');
+    // Once it is sent the tick stays put; only a failure reverts, so the
+    // post can be tried again.
+    let sent = false;
     try {
       const started = Date.now();
       try { xlog('info', 'send-started', { requestId, tweetId: post.tweetId, mediaTypes: post.hasImage ? ['image'] : [] }); } catch {}
@@ -293,7 +346,9 @@ function injectButton(article) {
       const total = (result && result.sent ? result.sent.length : 0) + (result && result.failures ? result.failures.length : 0);
       const where = await channelName();
       if (result && result.ok) {
+        sent = true;
         renderButton(btn, 'success', 'Sent');
+        rememberSent(post.tweetId, where);
         const count = result.sent ? result.sent.length : 0;
         showSnackbar('success', where ? 'Posted to ' + where : 'Posted to WhatsApp',
           count > 1 ? count + ' messages sent.' : 'Your post is in the channel.');
@@ -317,7 +372,16 @@ function injectButton(article) {
     } finally {
       btn.disabled = false;
     }
-    setTimeout(() => renderButton(btn, 'idle', 'Post to WhatsApp'), 4000);
+    // Never wipe a tick: neither one this send just produced, nor one
+    // restored while the send was running. A send still in flight is
+    // left alone too, or a second click would be reset out from under
+    // itself.
+    if (!sent) {
+      setTimeout(() => {
+        const s = btn.dataset.state;
+        if (s !== 'success' && s !== 'working') renderButton(btn, 'idle', 'Post to WhatsApp');
+      }, 4000);
+    }
   });
 
   bar.appendChild(btn);

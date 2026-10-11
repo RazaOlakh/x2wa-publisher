@@ -307,7 +307,15 @@ There is no text on the button. Hover it for a tooltip with the detail
 (for example *Partial 3/4* or *Err: channel-not-permitted*), and the same
 information is exposed to screen readers as an `aria-label`.
 
-It returns to the WhatsApp icon a few seconds after finishing.
+**A post that was sent keeps its tick.** It does not turn back into the
+WhatsApp icon, and scrolling away and back does not lose it — the sent post
+is remembered, so the tick comes back with the post when X rebuilds the page.
+Hover it to see *already sent*. Clicking it still works, if you ever want to
+send that post again.
+
+Anything that did not go through — a failure, or a post X would not let us
+read — goes back to the WhatsApp icon after a few seconds, so you can simply
+click again and try once more.
 
 ### The notification
 
