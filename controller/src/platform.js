@@ -61,4 +61,23 @@ function isAlive(pid) {
   try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
 }
 
-module.exports = { userDataRoot, sessionDir, tmpRoot, acquireSessionLock, isAlive };
+function findChromeExecutable() {
+  if (process.env.CHROME_PATH) return process.env.CHROME_PATH;
+  if (process.platform === 'win32') {
+    const candidates = [
+      path.join(process.env.ProgramFiles || 'C:\\Program Files', 'Google\\Chrome\\Application\\chrome.exe'),
+      path.join(process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)', 'Google\\Chrome\\Application\\chrome.exe'),
+      path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'Google\\Chrome\\Application\\chrome.exe'),
+    ];
+    for (const c of candidates) {
+      if (fs.existsSync(c)) return c;
+    }
+    return 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
+  }
+  if (process.platform === 'darwin') {
+    return '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+  }
+  return '/usr/bin/google-chrome-stable';
+}
+
+module.exports = { userDataRoot, sessionDir, tmpRoot, acquireSessionLock, isAlive, findChromeExecutable };
