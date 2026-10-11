@@ -9,6 +9,7 @@ const qrcode = require('qrcode-terminal');
 const QRCode = require('qrcode-generator');
 const { sessionDir, tmpRoot, acquireSessionLock } = require('./platform');
 const { listPostableChannels, canPostToChannel } = require('./channels');
+const { createHeartbeat } = require('./heartbeat');
 
 const HOST = '127.0.0.1';
 const PORT = parseInt(process.env.CONTROLLER_PORT || '47825', 10);
@@ -37,6 +38,8 @@ let channelCache = null;
 const CHANNEL_CACHE_MS = 30000;
 const jobs = new Map();
 let currentJob = null;
+// True while a send is in progress, so the watchdog leaves it alone.
+let jobRunning = false;
 const duplicateLog = new Map();
 
 function log(level,event,data){ const rec={ts:new Date().toISOString(),level,component:'controller',event,...(data||{})}; try{ console.log(JSON.stringify(rec)); }catch{ console.log(`${level} ${event}`); } }
@@ -68,7 +71,7 @@ function startClient(reason) {
   // A clean disconnect also rebuilds the client from the saved session.
   client.on('ready', () => {
     state = 'ready'; waInfo = client.info; lastQr = null; channelCache = null;
-    restartAttempts = 0; restartPending = false;
+    restartAttempts = 0; restartPending = false; beat.reset();
     log('info','ready',{me: waInfo && waInfo.wid && waInfo.wid._serialized});
   });
   client.on('disconnected', (r) => {
@@ -129,6 +132,39 @@ function restartBackoffMs(attempts) {
   return Math.min(2000 * Math.pow(2, Math.max(0, attempts - 1)), 60000);
 }
 
+// Closing the browser and starting its replacement are not atomic. destroy()
+// only asks Chromium to close; the process can still be shutting down and
+// still holding the session profile when the new browser tries to use it.
+// Losing that race fails the new launch with "The browser is already
+// running...", which then backs off a minute at a time and leaves the
+// controller unusable for several minutes. So wait for the old process to
+// actually be gone before anything tries to take its place.
+const BROWSER_EXIT_WAIT_MS = 10000;
+
+async function stopClient(c) {
+  if (!c) return;
+  let proc = null;
+  try {
+    const b = c.pupBrowser;
+    proc = b && typeof b.process === 'function' ? b.process() : null;
+  } catch { /* nothing to wait on */ }
+  // Arm the waiter first: destroy() may be what makes the process exit.
+  let exited = null;
+  if (proc && proc.exitCode === null && !proc.killed) {
+    exited = new Promise((resolve) => {
+      const timer = setTimeout(resolve, BROWSER_EXIT_WAIT_MS);
+      if (timer.unref) timer.unref();
+      proc.once('exit', () => { clearTimeout(timer); resolve(); });
+    });
+  }
+  try { await c.destroy(); }
+  catch (e) { log('warn', 'destroy-error', { error: String((e && e.message) || e) }); }
+  if (exited) {
+    await exited;
+    log('info', 'browser-stopped', { waited: true, exitCode: proc.exitCode });
+  }
+}
+
 function markConnectionStale(reason) {
   if (restartPending) return;
   restartPending = true;
@@ -143,13 +179,103 @@ function markConnectionStale(reason) {
     const stale = client;
     client = null;
     lastQr = null; waInfo = null; channelCache = null;
-    if (stale) {
-      try { await stale.destroy(); } catch (e) { /* already gone */ }
-    }
+    await stopClient(stale);
     restartPending = false;
     startClient('recover:' + reason);
   }, delay);
   if (restartTimer.unref) restartTimer.unref();
+}
+
+// --- liveness watchdog ---------------------------------------------------
+// A sleep/resume (or a stopped machine) freezes the WhatsApp page without any
+// 'disconnected' event, so the client goes on saying "ready" while nothing
+// works. The heartbeat asks the page for its own connection state, and notices
+// when it arrives far too late to be an ordinary beat. Either signal rebuilds
+// the client from the same saved session, which reconnects without a new QR.
+const HEARTBEAT_MS = 30000;
+const beat = createHeartbeat({ beatMs: HEARTBEAT_MS });
+let lastBeatAt = Date.now();
+let beatRunning = false;
+
+async function heartbeat() {
+  const now = Date.now();
+  const gap = now - lastBeatAt;
+  lastBeatAt = now;
+
+  if (beat.sleptFor(gap)) {
+    log('warn', 'system-resume', { gapMs: Math.round(gap) });
+    markConnectionStale('system-resume');
+    return;
+  }
+  // Never rebuild underneath a post that is still running: the send reports
+  // its own failures, and tearing the client down mid-send only adds to them.
+  if (state !== 'ready' || !client || beatRunning || jobRunning) return;
+
+  beatRunning = true;
+  try {
+    const waState = await client.getState();
+    const seen = beat.observe(waState);
+    if (state !== 'ready') return; // went stale while we were asking
+    if (seen.verdict === 'recovered') log('info', 'heartbeat-recovered', { afterMisses: seen.misses });
+    else if (seen.verdict === 'restart') markConnectionStale('heartbeat-' + String(waState));
+  } catch (e) {
+    // The page itself is gone, which is what a sleep/resume looks like.
+    log('warn', 'heartbeat-failed', { error: e && e.message });
+    markConnectionStale('heartbeat-failed');
+  } finally {
+    beatRunning = false;
+  }
+}
+
+setInterval(heartbeat, HEARTBEAT_MS).unref();
+
+// systemd stops the controller with SIGTERM. The WhatsApp browser is a
+// separate process that survives its parent: without shutting it down here,
+// a restart leaves that browser holding the session profile, and the next
+// start cannot launch its own ("The browser is already running...") and
+// spends minutes failing before the lock clears. Closing it on the way out
+// keeps restarts and sleeps fast.
+//
+// These are *prepended*, not appended: acquiring the session lock installs
+// its own SIGTERM handler that releases the lock and calls process.exit()
+// straight away, and a listener registered earlier runs first. Appended,
+// this handler would never get to run -- the process would already be gone,
+// leaving the browser behind as an orphan.
+let shuttingDown = false;
+
+// console.log to a pipe is buffered, and process.exit() below would drop the
+// last line of the most interesting log the controller ever writes. Writing
+// straight to the descriptor keeps it.
+function logSync(level, event, data) {
+  const rec = { ts: new Date().toISOString(), level, component: 'controller', event, ...(data || {}) };
+  try { fs.writeSync(1, JSON.stringify(rec) + '\n'); } catch { /* stdout closed */ }
+}
+
+for (const signal of ['SIGTERM', 'SIGINT']) {
+  process.prependListener(signal, async () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    logSync('info', 'shutdown', { signal });
+    // Never hang here: being killed by systemd's timeout would orphan the
+    // browser again, which is the very thing being avoided.
+    const bail = setTimeout(() => process.exit(0), 8000);
+    if (bail.unref) bail.unref();
+    state = 'stopped';
+    const c = client;
+    client = null;
+    // Bounded on purpose: systemd has already signalled the whole process
+    // group, so the browser is on its way out, and destroy() can sit there
+    // waiting for a browser that will never answer. Waiting forever would
+    // just stall the restart.
+    if (c) {
+      try {
+        await Promise.race([stopClient(c), new Promise((r) => setTimeout(r, 3000))]);
+        logSync('info', 'shutdown-complete', { signal });
+      } catch (e) { logSync('warn', 'destroy-error', { error: String((e && e.message) || e) }); }
+    }
+    clearTimeout(bail);
+    process.exit(0);
+  });
 }
 
 startClient('startup');
@@ -341,6 +467,15 @@ async function processMedia(item, jobDir, index) {
 }
 
 async function sendJob(body) {
+  jobRunning = true;
+  try {
+    return await runSend(body);
+  } finally {
+    jobRunning = false;
+  }
+}
+
+async function runSend(body) {
   const requestId = body.requestId || newJob();
   const { tweetId, tweetUrl, text, media, channelId } = body;
   const key = `${tweetId}|${channelId}`;

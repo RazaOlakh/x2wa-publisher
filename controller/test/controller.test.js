@@ -113,6 +113,49 @@ console.log('only channels with admin/owner rights are offered');
     [{ id: '666@newsletter', role: 'guest', state: 'active', canPost: false }]);
   eq('a merely visible channel is filtered out', r3.channels.length, 0);
 }
+// --------------------------------------------------------- liveness watchdog
+console.log('sleep/wake is noticed instead of posting into a dead page');
+{
+  const { createHeartbeat } = require('../src/heartbeat');
+
+  // The gap between beats: a beat that is very late means we were suspended.
+  const b = createHeartbeat({ beatMs: 30000 });
+  check('an on-time beat is not a resume', !b.sleptFor(30000));
+  check('a slightly late beat is not a resume', !b.sleptFor(50000));
+  check('a beat late by the length of a sleep is a resume', b.sleptFor(5 * 60 * 1000));
+  check('an overnight gap is a resume', b.sleptFor(9 * 60 * 60 * 1000));
+  check('the resume threshold scales with the beat', createHeartbeat({ beatMs: 5000 }).resumeGapMs === 12500);
+
+  // A healthy page: no action, ever.
+  eq('a connected page is fine', b.observe('CONNECTED'), { verdict: 'ok', misses: 0 });
+  for (let i = 0; i < 5; i++) check('staying connected stays fine', b.observe('CONNECTED').verdict === 'ok');
+  eq('no misses accumulated while connected', b.misses(), 0);
+
+  // A transient state must not tear down a working client.
+  const t = createHeartbeat({ beatMs: 30000, missesBeforeRestart: 3 });
+  eq('first odd state waits', t.observe('OPENING'), { verdict: 'wait', misses: 1 });
+  eq('second odd state waits', t.observe('OPENING'), { verdict: 'wait', misses: 2 });
+  eq('a recovered page cancels the run', t.observe('CONNECTED'), { verdict: 'recovered', misses: 2 });
+  eq('the run is cleared after recovery', t.misses(), 0);
+  eq('the run starts over after recovery', t.observe('TIMEOUT'), { verdict: 'wait', misses: 1 });
+
+  // Persistent trouble is acted on.
+  const p = createHeartbeat({ beatMs: 30000, missesBeforeRestart: 3 });
+  eq('miss 1 waits', p.observe('TIMEOUT').verdict, 'wait');
+  eq('miss 2 waits', p.observe('TIMEOUT').verdict, 'wait');
+  eq('miss 3 restarts', p.observe('TIMEOUT').verdict, 'restart');
+
+  // A page that answers with nothing is not healthy either.
+  check('a page reporting nothing is not healthy', createHeartbeat().observe(null).verdict === 'wait');
+  eq('a page reporting nothing counts as a miss', createHeartbeat().observe(undefined).misses, 1);
+
+  // Reconnecting clears the run, so the next blip starts from scratch.
+  const q = createHeartbeat({ beatMs: 30000, missesBeforeRestart: 2 });
+  q.observe('OPENING');
+  q.reset();
+  eq('reset clears the run', q.misses(), 0);
+  eq('a blip after reset only waits once', q.observe('OPENING').verdict, 'wait');
+}
 
 console.log(failures ? `\n${failures} FAILURE(S)` : '\nALL CONTROLLER TESTS PASSED');
 process.exit(failures ? 1 : 0);

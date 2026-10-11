@@ -353,6 +353,17 @@ no longer reachable, reports *Reconnecting…*, and rebuilds the connection from
 the saved session by itself — no button to press and no QR scan. The popup
 shows *Reconnecting to WhatsApp…* and the channels come back on their own.
 
+You do not have to wait for a post to fail to find out. A heartbeat every 30
+seconds checks that the WhatsApp page is still really there, and notices when
+it arrives far too late — which is what waking from sleep looks like, since
+timers do not run while a machine is suspended. Either signal rebuilds the
+connection, so the controller is normally back on its own within seconds of
+waking, before you click anything.
+
+Stopping the controller shuts the WhatsApp browser down properly rather than
+leaving it behind holding the session profile, so `systemctl --user restart`
+is quick and never leaves the next start unable to launch its browser.
+
 **Changing the port:** set `CONTROLLER_PORT` for both the controller and the
 extension (`CONTROLLER` in `extension/background/service-worker.js` and
 `extension/popup/popup.js`).
