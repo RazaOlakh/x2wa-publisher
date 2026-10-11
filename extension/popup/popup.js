@@ -195,6 +195,17 @@ async function refresh() {
       setNote(ui.channelNote, 'Channels load once the connection is ready.', 'idle');
       return;
 
+    case 'reconnecting':
+      // Usually just after the machine woke from sleep: the WhatsApp page
+      // was suspended and the controller is rebuilding it from the saved
+      // session. No user action needed - it retries on its own.
+      hideQr();
+      setStatus('busy', 'Reconnecting to WhatsApp…', 'This can happen after sleep or a dropped connection. Retrying automatically.');
+      ui.connect.classList.add('hidden');
+      ui.select.disabled = true; ui.refresh.disabled = false; ui.disconnect.disabled = false;
+      setNote(ui.channelNote, 'Retrying automatically — channels reappear as soon as the connection is back.', 'idle');
+      return;
+
     case 'auth_required':
       // Signed out (or never paired): offer to start pairing again rather
       // than leaving the user on a dead end.
@@ -255,13 +266,19 @@ async function refresh() {
       try {
         const r = await req('/channels');
         if (!r.ok) {
-          setNote(ui.channelNote, 'Could not load channels yet. Press “Reload channels”.', 'warn');
+          // The endpoint answers with the real reason; show that rather
+          // than a generic "try again" that blames the wrong thing.
+          const why = (r.body && r.body.error) || 'unknown';
+          setNote(ui.channelNote, r.status === 409
+            ? 'The WhatsApp connection is not ready yet — retrying automatically.'
+            : 'Channels could not be read from WhatsApp right now — retrying automatically.', 'warn');
+          void why;
           return;
         }
         channels = r.body.channels || [];
         warning = r.body.warning || null;
       } catch {
-        setNote(ui.channelNote, 'Could not load channels. Press “Reload channels”.', 'warn');
+        setNote(ui.channelNote, 'Lost contact with the controller — retrying automatically.', 'warn');
         return;
       }
 

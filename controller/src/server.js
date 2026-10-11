@@ -65,14 +65,19 @@ function startClient(reason) {
   });
   client.on('authenticated', () => { state = 'authenticated'; log('info','authenticated'); });
   client.on('auth_failure', (m) => { state = 'auth_failure'; log('error','auth-failure',{error:String(m)}); });
+  // A clean disconnect also rebuilds the client from the saved session.
   client.on('ready', () => {
     state = 'ready'; waInfo = client.info; lastQr = null; channelCache = null;
+    restartAttempts = 0; restartPending = false;
     log('info','ready',{me: waInfo && waInfo.wid && waInfo.wid._serialized});
   });
-  client.on('disconnected', (r) => { state = 'disconnected'; log('warn','disconnected',{reason:String(r)}); });
+  client.on('disconnected', (r) => {
+    log('warn','disconnected',{reason:String(r)});
+    markConnectionStale('disconnected');
+  });
   client.initialize().catch((e) => {
-    state = 'error';
     log('error','init-error',{error:e && e.message});
+    markConnectionStale('init-error');
   });
 }
 
@@ -95,6 +100,43 @@ async function logout(reason) {
   state = 'auth_required';
   startClient('after-logout');
   return { ok: true };
+}
+
+// Sleep/wake (and any other event that kills the browser without a clean
+// disconnect) leaves the client thinking it is ready while the WhatsApp
+// page is dead: whatsapp-web.js emits no 'disconnected' in that case, so
+// the first sign of trouble is an operation failing. On any such failure the
+// client is treated as unusable and rebuilt from the same saved session,
+// which reconnects without a new QR scan.
+let restartTimer = null;
+let restartAttempts = 0;
+let restartPending = false;
+
+function restartBackoffMs(attempts) {
+  return Math.min(2000 * Math.pow(2, Math.max(0, attempts - 1)), 60000);
+}
+
+function markConnectionStale(reason) {
+  if (restartPending) return;
+  restartPending = true;
+  restartAttempts += 1;
+  const delay = restartBackoffMs(restartAttempts);
+  // Report the truth while we rebuild, instead of claiming "ready".
+  state = 'reconnecting';
+  log('warn', 'connection-stale', { reason, attempt: restartAttempts, retryInMs: delay });
+  if (restartTimer) clearTimeout(restartTimer);
+  restartTimer = setTimeout(async () => {
+    restartTimer = null;
+    const stale = client;
+    client = null;
+    lastQr = null; waInfo = null; channelCache = null;
+    if (stale) {
+      try { await stale.destroy(); } catch (e) { /* already gone */ }
+    }
+    restartPending = false;
+    startClient('recover:' + reason);
+  }, delay);
+  if (restartTimer.unref) restartTimer.unref();
 }
 
 startClient('startup');
@@ -391,6 +433,7 @@ const server = http.createServer(async (req, res) => {
         me: waInfo ? waInfo.wid : null,
         sessionDir: SESSION_DIR,
         authRequired: state === 'auth_required' || state === 'qr',
+        reconnecting: state === 'reconnecting',
         jobs: Array.from(jobs.entries()).slice(-20),
       });
     }
@@ -443,6 +486,9 @@ const server = http.createServer(async (req, res) => {
         });
       } catch (e) {
         log('warn','channel-list-failed',{error:String((e && e.message) || e)});
+        // The listing talks to the live WhatsApp Web page, so a failure here
+        // means that page is unusable (common right after a resume).
+        markConnectionStale('channel-list-failed');
         return json(res, 500, { error: 'channel-list-failed' });
       }
     }

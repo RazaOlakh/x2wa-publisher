@@ -226,7 +226,7 @@ const wait = () => new Promise((r) => setTimeout(r, 30));
       channels: 'ERROR',
     });
     await ready;
-    check('recoverable error message', /Could not load channels/i.test(txt(els, 'channelNote')), txt(els, 'channelNote'));
+    check('recoverable error message', /could not be read from WhatsApp/i.test(txt(els, 'channelNote')), txt(els, 'channelNote'));
     check('reload offered', els.refreshBtn.disabled === false);
   }
 
@@ -244,6 +244,33 @@ const wait = () => new Promise((r) => setTimeout(r, 30));
     check('QR shown for re-pairing', shown(els, 'qrCard'));
     check('channels disabled until paired', els.channelSelect.disabled === true);
     check('not stuck on "Checking…"', txt(els, 'waTitle') !== 'Checking…', txt(els, 'waTitle'));
+  }
+
+  // 7c. Reconnecting (typical right after waking from sleep): must NOT tell the
+// user to press a button, since recovery is automatic.
+  console.log('state: reconnecting (after sleep)');
+  {
+    const { els, ready } = runPopup({ status: { state: 'reconnecting' }, channels: 'UNREACHABLE' });
+    await ready;
+    check('says reconnecting', /Reconnecting to WhatsApp/i.test(txt(els, 'waTitle')), txt(els, 'waTitle'));
+    check('mentions sleep/dropped connection', /sleep|dropped/i.test(txt(els, 'waDetail')), txt(els, 'waDetail'));
+    check('busy indicator', els.waDot.className.includes('busy'));
+    check('does not demand "Press Reload channels"', !/Press .Reload channels/i.test(txt(els, 'waTitle') + txt(els, 'waDetail') + txt(els, 'channelNote')));
+    check('channel note says it retries itself', /automatic/i.test(txt(els, 'channelNote')), txt(els, 'channelNote'));
+    check('channels disabled while reconnecting', els.channelSelect.disabled === true);
+  }
+
+  // 7d. Connected but the channel listing fails: message must not blame the
+  // user for something the controller recovers from on its own.
+  console.log('state: ready but channel listing fails');
+  {
+    const { els, ready } = runPopup({
+      status: { state: 'ready', me: { _serialized: '1@c.us' } },
+      channels: 'ERROR',
+    });
+    await ready;
+    check('no "Press Reload channels" prompt', !/Press .Reload channels/i.test(txt(els, 'channelNote')), txt(els, 'channelNote'));
+    check('says it retries automatically', /retrying automatically/i.test(txt(els, 'channelNote')), txt(els, 'channelNote'));
   }
 
   // 8. Auth failure
