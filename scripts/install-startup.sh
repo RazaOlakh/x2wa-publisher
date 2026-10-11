@@ -52,11 +52,16 @@ check_prereqs() {
 }
 
 write_unit() {
-  local node session tmp chrome
+  local node session tmp chrome repo
   node="$(find_node)"
   session="${SESSION_DIR:-$(data_root)/whatsapp-session}"
   tmp="${TMP_ROOT:-$(data_root)/tmp}"
   chrome="$(find_chrome)"
+  # Point systemd's Documentation= at this checkout's own remote, so
+  # `systemctl status` does not show a placeholder URL.
+  repo="$(git -C "$PROJECT_DIR" config --get remote.origin.url 2>/dev/null || true)"
+  if [[ -z "$repo" ]]; then repo="$PROJECT_DIR"; fi
+  repo="${repo%.git}"
   mkdir -p "$UNIT_DIR"
   sed -e "s|__NODE__|$node|g" \
       -e "s|__CONTROLLER_SRC__|$CONTROLLER_SRC|g" \
@@ -64,6 +69,7 @@ write_unit() {
       -e "s|__SESSION_DIR__|$session|g" \
       -e "s|__TMP_ROOT__|$tmp|g" \
       -e "s|__CHROME__|$chrome|g" \
+      -e "s|__REPO_URL__|$repo|g" \
       "$TEMPLATE" > "$UNIT_PATH"
   echo "wrote $UNIT_PATH"
 }
