@@ -1,47 +1,185 @@
 // X → WhatsApp Channel Poster — production local controller
 const path = require('path');
 const fs = require('fs');
-const os = require('os');
 const http = require('http');
 const { spawn, execFile } = require('child_process');
 const crypto = require('crypto');
 const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
+const QRCode = require('qrcode-generator');
+const { sessionDir, tmpRoot, acquireSessionLock } = require('./platform');
+const { listPostableChannels, canPostToChannel } = require('./channels');
 
 const HOST = '127.0.0.1';
 const PORT = parseInt(process.env.CONTROLLER_PORT || '47825', 10);
-const SESSION_DIR = process.env.SESSION_DIR || path.join(os.homedir(), '.local', 'share', 'x-whatsapp-poster', 'whatsapp-session');
-const TMP_ROOT = path.join(os.homedir(), '.local', 'share', 'x-whatsapp-poster', 'tmp');
+const SESSION_DIR = sessionDir();
+const TMP_ROOT = tmpRoot();
 const MAX_MEDIA_BYTES = 64 * 1024 * 1024;
 const FFMPEG_TIMEOUT_MS = 5 * 60 * 1000;
 const DOWNLOAD_TIMEOUT_MS = 60 * 1000;
 
-fs.mkdirSync(SESSION_DIR, { recursive: true });
 fs.mkdirSync(TMP_ROOT, { recursive: true });
+// Refuse to start a second client against the same session directory.
+try {
+  acquireSessionLock(SESSION_DIR);
+} catch (e) {
+  console.error(`[controller] ${e.message}`);
+  process.exit(3);
+}
 
 let state = 'starting';
 let lastQr = null;
+let qrIssuedAt = 0;
 let waInfo = null;
+let lastError = null;
+let lastChannelError = null;
+let channelCache = null;
+const CHANNEL_CACHE_MS = 30000;
 const jobs = new Map();
 let currentJob = null;
 const duplicateLog = new Map();
 
 function log(level,event,data){ const rec={ts:new Date().toISOString(),level,component:'controller',event,...(data||{})}; try{ console.log(JSON.stringify(rec)); }catch{ console.log(`${level} ${event}`); } }
 
-const client = new Client({
-  authStrategy: new LocalAuth({ dataPath: SESSION_DIR }),
-  puppeteer: { headless: true, executablePath: '/usr/bin/google-chrome-stable', args: ['--no-sandbox', '--disable-setuid-sandbox'] },
-});
+// The dedicated WhatsApp account. LocalAuth keeps the session in
+// SESSION_DIR so the next start reconnects without another QR scan.
+function makeClient() {
+  return new Client({
+    authStrategy: new LocalAuth({ dataPath: SESSION_DIR }),
+    puppeteer: { headless: true, executablePath: process.env.CHROME_PATH || '/usr/bin/google-chrome-stable', args: ['--no-sandbox', '--disable-setuid-sandbox'] },
+  });
+}
 
-client.on('qr', (qr) => { state = 'qr'; lastQr = qr; log('info','qr-state',{status:'waiting-for-user'}); qrcode.generate(qr, { small: true }); });
-client.on('authenticated', () => { state = 'authenticated'; log('info','authenticated'); });
-client.on('auth_failure', (m) => { state = 'auth_failure'; log('error','auth-failure',{error:String(m)}); });
-client.on('ready', () => { state = 'ready'; waInfo = client.info; log('info','ready',{me: waInfo && waInfo.wid && waInfo.wid._serialized}); });
-client.on('disconnected', (r) => { state = 'disconnected'; log('warn','disconnected',{reason:String(r)}); });
-client.initialize().catch((e) => { log('error','init-error',{error:e && e.message}); process.exit(1); });
+let client = null;
+
+function startClient(reason) {
+  if (client) return;
+  state = state === 'ready' ? state : 'starting';
+  log('info','client-start',{ reason, sessionDir: SESSION_DIR });
+  client = makeClient();
+  client.on('qr', (qr) => {
+    state = 'qr'; lastQr = qr; qrIssuedAt = Date.now();
+    log('info','qr-state',{status:'waiting-for-user'});
+    // Printed for a user working in a terminal; never written to a log file.
+    try { qrcode.generate(qr, { small: true }); } catch {}
+  });
+  client.on('authenticated', () => { state = 'authenticated'; log('info','authenticated'); });
+  client.on('auth_failure', (m) => { state = 'auth_failure'; log('error','auth-failure',{error:String(m)}); });
+  // A clean disconnect also rebuilds the client from the saved session.
+  client.on('ready', () => {
+    state = 'ready'; waInfo = client.info; lastQr = null; channelCache = null;
+    restartAttempts = 0; restartPending = false;
+    log('info','ready',{me: waInfo && waInfo.wid && waInfo.wid._serialized});
+  });
+  client.on('disconnected', (r) => {
+    log('warn','disconnected',{reason:String(r)});
+    markConnectionStale('disconnected');
+  });
+  client.initialize().catch((e) => {
+    log('error','init-error',{error:e && e.message});
+    markConnectionStale('init-error');
+  });
+}
+
+// Logging out is destructive (the saved session is invalidated), so it is
+// explicit and never happens on its own. A fresh client is started
+// straight afterwards so the user gets a new QR to pair with, instead of
+// being left with a stopped controller and no way forward.
+async function logout(reason) {
+  if (!client) {
+    state = 'auth_required';
+    log('info','logout-noop',{reason});
+    startClient('after-logout');
+    return { ok: true, alreadyStopped: true };
+  }
+  const c = client;
+  client = null; lastQr = null; waInfo = null; channelCache = null; state = 'stopped';
+  try { await c.logout(); } catch (e) { log('warn','logout-error',{error:String((e && e.message) || e)}); }
+  try { await c.destroy(); } catch (e) { log('warn','destroy-error',{error:String((e && e.message) || e)}); }
+  log('info','logged-out',{reason});
+  state = 'auth_required';
+  startClient('after-logout');
+  return { ok: true };
+}
+
+// Sleep/wake (and any other event that kills the browser without a clean
+// disconnect) leaves the client thinking it is ready while the WhatsApp
+// page is dead: whatsapp-web.js emits no 'disconnected' in that case, so
+// the first sign of trouble is an operation failing. On any such failure the
+// client is treated as unusable and rebuilt from the same saved session,
+// which reconnects without a new QR scan.
+let restartTimer = null;
+let restartAttempts = 0;
+let restartPending = false;
+
+function restartBackoffMs(attempts) {
+  return Math.min(2000 * Math.pow(2, Math.max(0, attempts - 1)), 60000);
+}
+
+function markConnectionStale(reason) {
+  if (restartPending) return;
+  restartPending = true;
+  restartAttempts += 1;
+  const delay = restartBackoffMs(restartAttempts);
+  // Report the truth while we rebuild, instead of claiming "ready".
+  state = 'reconnecting';
+  log('warn', 'connection-stale', { reason, attempt: restartAttempts, retryInMs: delay });
+  if (restartTimer) clearTimeout(restartTimer);
+  restartTimer = setTimeout(async () => {
+    restartTimer = null;
+    const stale = client;
+    client = null;
+    lastQr = null; waInfo = null; channelCache = null;
+    if (stale) {
+      try { await stale.destroy(); } catch (e) { /* already gone */ }
+    }
+    restartPending = false;
+    startClient('recover:' + reason);
+  }, delay);
+  if (restartTimer.unref) restartTimer.unref();
+}
+
+startClient('startup');
 
 function json(res, code, obj) { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(obj, null, 1)); }
+
+// Renders the pairing QR as an SVG data URL. The extension displays the
+// image, so the scannable payload itself is never sent to the browser
+// extension, written to a log, or stored anywhere.
+function qrImageSvg(qrText) {
+  const qr = QRCode(0, 'M');
+  qr.addData(qrText);
+  qr.make();
+  const n = qr.getModuleCount();
+  const quiet = 2;
+  const cells = n + quiet * 2;
+  let path = '';
+  for (let r = 0; r < n; r++) {
+    for (let c = 0; c < n; c++) {
+      if (qr.isDark(r, c)) path += `M${c + quiet} ${r + quiet}h1v1h-1z`;
+    }
+  }
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${cells} ${cells}" shape-rendering="crispEdges"><rect width="${cells}" height="${cells}" fill="#fff"/><path d="${path}" fill="#000"/></svg>`;
+  return `data:image/svg+xml;base64,${Buffer.from(svg, 'utf8').toString('base64')}`;
+}
 function newJob() { return crypto.randomBytes(8).toString('hex'); }
+
+// WhatsApp Web sometimes throws minified/empty errors; always produce a
+// non-empty human-readable message for partial-failure reporting.
+function errMsg(e) {
+  if (!e) return 'unknown-error';
+  if (typeof e === 'string') return e;
+  if (e.message) return e.message;
+  try { return String(e); } catch { return 'unknown-error'; }
+}
+
+// Media the extension could not resolve before sending. Newer builds send
+// `mediaFailures` (images and videos); older ones only sent `imageFailures`.
+function extractionFailures(body) {
+  const from = Array.isArray(body.mediaFailures) ? body.mediaFailures
+    : (Array.isArray(body.imageFailures) ? body.imageFailures : []);
+  return from.map((f) => ({ index: f && f.index, type: (f && f.type) || 'media', error: (f && f.error) || 'media-not-extracted' }));
+}
 
 function validMedia(m) {
   return m && ['image', 'video'].includes(m.type) && typeof m.source === 'string' && m.source.length > 0 && m.source.length < 4096;
@@ -78,7 +216,17 @@ function ffprobeOk(file) {
       try {
         const j = JSON.parse(stdout);
         const hasVideo = j.streams && j.streams.some((s) => s.codec_type === 'video');
-        if (!j.streams || !j.streams.some(s => s.codec_type === 'video')) { log('warn','media-validate-no-video',{requestId:currentJob&&currentJob.requestId,jobId:currentJob&&currentJob.jobId}); }
+        const hasAudio = Boolean(j.streams && j.streams.some((s) => s.codec_type === 'audio'));
+        // Log what the delivered file really contains: a muxed HLS master
+        // must yield both a picture and an audio track.
+        log('info','media-validate-streams',{
+          requestId:currentJob&&currentJob.requestId,
+          jobId:currentJob&&currentJob.jobId,
+          hasVideo:Boolean(hasVideo),
+          hasAudio,
+          codecs:(j.streams||[]).map((s) => s.codec_type + ':' + (s.codec_name || '?')),
+        });
+        if (!j.streams || !hasVideo) { log('warn','media-validate-no-video',{requestId:currentJob&&currentJob.requestId,jobId:currentJob&&currentJob.jobId}); }
         resolve(Boolean(hasVideo));
       } catch { resolve(false); }
     });
@@ -100,17 +248,45 @@ function ffmpegMux(input, output) {
   });
 }
 
-async function processMedia(item, jobDir) {
-  log('info','media-process-start',{requestId:currentJob&&currentJob.requestId,jobId:currentJob&&currentJob.jobId,type:item.type});
+// X media URLs (e.g. pbs.twimg.com/...?format=webp&name=large)
+// carry no file extension, so downloads land as "<hex>.bin" and
+// MessageMedia.fromFilePath derives application/octet-stream from
+// the extension. WhatsApp Web then uploads the attachment as a
+// document, which channel recipients render as "You received a
+// channel update but your version of WhatsApp doesn't support it".
+// Sniff the real image format from the file's magic bytes and give
+// the file the matching extension so it uploads as an image.
+function sniffImageExt(file) {
+  const fd = fs.openSync(file, 'r');
+  try {
+    const buf = Buffer.alloc(16);
+    const n = fs.readSync(fd, buf, 0, 16, 0);
+    const b = buf.slice(0, n);
+    if (n >= 8 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return '.png';
+    if (n >= 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return '.jpg';
+    if (n >= 6 && b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46) return '.gif';
+    if (n >= 16 && b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46 &&
+        b[8] === 0x57 && b[9] === 0x45 && b[10] === 0x42 && b[11] === 0x50) return '.webp';
+    return null;
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+async function processMedia(item, jobDir, index) {
+  // Each media item gets its own output paths: a post with several videos
+  // must not have every video muxed into (and overwritten at) one file.
+  const tag = (Number.isInteger(index) ? index : 0);
+  log('info','media-process-start',{requestId:currentJob&&currentJob.requestId,jobId:currentJob&&currentJob.jobId,type:item.type,index:tag});
   if (item.type === 'video') {
-    const out = path.join(jobDir, 'out.mp4');
+    const out = path.join(jobDir, `out-${tag}.mp4`);
     if (/^https?:\/\//i.test(item.source)) {
       // For HLS-style sources we feed the URL directly to ffmpeg rather than trying to
       // download it as a static object.
       if (/\.m3u8(\?|$)/i.test(item.source)) {
         await ffmpegMux(item.source, out);
       } else {
-        const file = path.join(jobDir, 'input.bin');
+        const file = path.join(jobDir, `input-${tag}.bin`);
         await download(item.source, file, DOWNLOAD_TIMEOUT_MS);
         const stat = fs.statSync(file);
         if (stat.size > MAX_MEDIA_BYTES) throw new Error('media-too-large');
@@ -123,12 +299,12 @@ async function processMedia(item, jobDir) {
     } else {
       throw new Error('media-source-invalid');
     }
-    if (!(await ffprobeOk(out))) { log('error','media-process-ffprobe-failed',{requestId:currentJob&&currentJob.requestId,jobId:currentJob&&currentJob.jobId}); throw new Error('ffprobe-validation-failed'); }
-    log('info','media-process-done',{requestId:currentJob&&currentJob.requestId,jobId:currentJob&&currentJob.jobId,type:item.type});
+    if (!(await ffprobeOk(out))) { log('error','media-process-ffprobe-failed',{requestId:currentJob&&currentJob.requestId,jobId:currentJob&&currentJob.jobId,index:tag}); throw new Error('ffprobe-validation-failed'); }
+    log('info','media-process-done',{requestId:currentJob&&currentJob.requestId,jobId:currentJob&&currentJob.jobId,type:item.type,index:tag});
     return out;
   }
 
-  const file = path.join(jobDir, crypto.randomBytes(6).toString('hex') + '.bin');
+  const file = path.join(jobDir, `${tag}-` + crypto.randomBytes(6).toString('hex') + '.bin');
   if (/^https?:\/\//i.test(item.source)) {
     await download(item.source, file, DOWNLOAD_TIMEOUT_MS);
   } else if (fs.existsSync(item.source)) {
@@ -138,6 +314,16 @@ async function processMedia(item, jobDir) {
   }
   const stat = fs.statSync(file);
   if (stat.size > MAX_MEDIA_BYTES) throw new Error('media-too-large');
+  if (item.type === 'image') {
+    const ext = sniffImageExt(file);
+    if (ext) {
+      const renamed = path.join(jobDir, path.basename(file, '.bin') + ext);
+      fs.renameSync(file, renamed);
+      log('info','media-image-format-detected',{requestId:currentJob&&currentJob.requestId,jobId:currentJob&&currentJob.jobId,ext});
+      return renamed;
+    }
+    log('warn','media-image-format-unknown',{requestId:currentJob&&currentJob.requestId,jobId:currentJob&&currentJob.jobId});
+  }
   return file;
 }
 
@@ -162,42 +348,64 @@ async function sendJob(body) {
   jobs.set(jobId, { status: 'started' });
 
   try {
-    if (state !== 'ready') { jobs.set(jobId, { status: 'failed', error: 'whatsapp-not-ready' }); cleanup(jobDir); log('error','whatsapp-not-ready',{requestId,jobId,tweetId,channelId}); return { ok: false, error: 'whatsapp-not-ready', jobId }; }
+    if (state !== 'ready' || !client) { jobs.set(jobId, { status: 'failed', error: 'whatsapp-not-ready' }); cleanup(jobDir); log('error','whatsapp-not-ready',{requestId,jobId,tweetId,channelId}); return { ok: false, error: 'whatsapp-not-ready', jobId }; }
+    // Re-check posting rights at send time: a channel can lose admin
+    // between selection and publish. If it cannot be confirmed, refuse.
+    const permit = await canPostToChannel(client, channelId);
+    if (!permit.ok) {
+      jobs.set(jobId, { status: 'failed', error: 'channel-not-permitted' }); cleanup(jobDir);
+      log('warn','channel-not-permitted',{requestId,jobId,tweetId,channelId,role:permit.role,state:permit.state});
+      return { ok: false, error: 'channel-not-permitted', jobId, reason: permit.error || (permit.state === 'terminated' ? 'channel-terminated' : 'insufficient-permission') };
+    }
     const mediaFiles = [];
+    const sendFailures = [];
     if (Array.isArray(media) && media.length > 0) {
-      for (const m of media) {
-        if (!validMedia(m)) { jobs.set(jobId, { status: 'failed', error: 'bad-media' }); cleanup(jobDir); log('error','bad-media',{requestId,jobId,tweetId}); return { ok: false, error: 'bad-media', jobId }; }
-        try { log('info','media-process-url',{requestId,jobId,type:m.type,source:m.source}); const f = await processMedia(m, jobDir); mediaFiles.push({ type: m.type, file: f }); }
-        catch (e) { try{ console.log('sendJob media error:', e && e.message, e && e.stack); }catch{} jobs.set(jobId, { status: 'failed', error: e.message }); cleanup(jobDir); return { ok: false, error: e.message, jobId }; }
+      for (let i = 0; i < media.length; i++) {
+        const m = media[i];
+        if (!validMedia(m)) { sendFailures.push({ index: i, type: m && m.type, error: 'bad-media' }); log('error','bad-media',{requestId,jobId,tweetId,index:i}); continue; }
+        try { log('info','media-process-url',{requestId,jobId,type:m.type,index:i,source:m.source}); const f = await processMedia(m, jobDir, i); mediaFiles.push({ type: m.type, file: f, index: i }); }
+        catch (e) { try{ console.log('sendJob media error:', e && e.message, e && e.stack); }catch{} sendFailures.push({ index: i, type: m.type, error: errMsg(e) }); log('error','media-process-failed',{requestId,jobId,tweetId,index:i,error:errMsg(e)}); }
       }
     }
 
     log('info','whatsapp-send-start',{requestId,jobId,channelId,tweetId});
     const sent = [];
     if (mediaFiles.length === 0) {
+      if (!text) {
+        // Nothing could be processed: report every intended-but-missing item.
+        const none = [].concat(extractionFailures(body), sendFailures);
+        jobs.set(jobId, { status: 'failed', error: 'empty-post', failures: none }); cleanup(jobDir); log('error','whatsapp-send-empty',{requestId,jobId,tweetId,failed:none.length}); return { ok: false, error: 'empty-post', jobId, ...(none.length ? { failures: none } : {}) };
+      }
       log('info','whatsapp-send-text',{requestId,jobId});
-      const m = await client.sendMessage(channelId, text);
-      sent.push({ type: 'text', id: m && m.id });
+      try {
+        const m = await client.sendMessage(channelId, text);
+        sent.push({ type: 'text', id: m && m.id });
+      } catch (e) { sendFailures.push({ index: -1, type: 'text', error: errMsg(e) }); log('error','whatsapp-send-text-failed',{requestId,jobId,tweetId,error:errMsg(e)}); }
     } else {
-      const first = mediaFiles[0];
-      const msg = first.type === 'image'
-        ? MessageMedia.fromFilePath(first.file)
-        : MessageMedia.fromFilePath(first.file);
-      log('info','whatsapp-send-media',{requestId,jobId,type:first.type});
-      const m = await client.sendMessage(channelId, msg, { caption: text || undefined });
-      sent.push({ type: first.type, id: m && m.id });
-      for (let i = 1; i < mediaFiles.length; i++) {
-        const mm = MessageMedia.fromFilePath(mediaFiles[i].file);
-        log('info','whatsapp-send-media-extra',{requestId,jobId,type:mediaFiles[i].type});
-        const r = await client.sendMessage(channelId, mm);
-        sent.push({ type: mediaFiles[i].type, id: r && r.id });
+      for (let i = 0; i < mediaFiles.length; i++) {
+        const mf = mediaFiles[i];
+        try {
+          const msg = MessageMedia.fromFilePath(mf.file);
+          const m = i === 0
+            ? await client.sendMessage(channelId, msg, { caption: text || undefined })
+            : await client.sendMessage(channelId, msg);
+          sent.push({ type: mf.type, id: m && m.id });
+        } catch (e) { sendFailures.push({ index: mf.index, type: mf.type, error: errMsg(e) }); log('error','whatsapp-send-media-failed',{requestId,jobId,tweetId,index:mf.index,error:errMsg(e)}); }
       }
     }
-    duplicateLog.set(key, { ts: now, status: 'completed', jobId });
-    jobs.set(jobId, { status: 'completed', sent });
+    // Merge extraction failures (from the service worker) with send
+    // failures. Never report full success unless every intended
+    // message was sent.
+    const failures = [].concat(extractionFailures(body), sendFailures);
+    const partial = failures.length > 0 && sent.length > 0;
+    const ok = failures.length === 0 && sent.length > 0;
+    duplicateLog.set(key, { ts: now, status: ok ? 'completed' : (partial ? 'partial' : 'failed'), jobId });
+    jobs.set(jobId, { status: ok ? 'completed' : (partial ? 'partial' : 'failed'), sent, failures });
     cleanup(jobDir);
-    log('info','send-job-complete',{requestId,jobId,status:'completed',sent:sent.length});
-    return { ok: true, jobId, sent };
+    log('info','send-job-complete',{requestId,jobId,status: ok ? 'completed' : (partial ? 'partial' : 'failed'),sent:sent.length,failed:failures.length});
+    if (ok) return { ok: true, jobId, sent };
+    if (partial) return { ok: false, jobId, sent, partial: true, failures, error: 'partial-send' };
+    return { ok: false, jobId, error: failures.length ? failures[failures.length - 1].error : 'send-failed', ...(failures.length ? { failures } : {}) };
   } catch (e) {
     try{ log('error','send-job-error',{requestId,jobId,message:e&&e.message,stack:e&&e.stack}); }catch{}
     duplicateLog.set(key, { ts: now, status: 'failed', jobId });
@@ -217,16 +425,72 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && url.pathname === '/health') {
       return json(res, 200, { ok: true, state });
     }
-    if (req.method === 'GET' && url.pathname === '/channels') {
-      if (state !== 'ready') { return json(res, 409, { error: 'whatsapp-not-ready', state }); }
-      try {
-        const channels = await client.getChannels();
-        const out = channels.map((c) => ({ id: c.id && c.id._serialized ? c.id._serialized : String(c.id), name: c.name || (c.formattedTitle || ''), isChannel: Boolean(c.isChannel) }));
-        return json(res, 200, { channels: out });
-      } catch (e) { return json(res, 500, { error: e && e.message ? e.message : 'channel-list-failed' }); }
-    }
     if (req.method === 'GET' && url.pathname === '/status') {
-      return json(res, 200, { state, me: waInfo ? waInfo.wid : null, jobs: Array.from(jobs.entries()).slice(-20) });
+      // state reflects the real WhatsApp connection, not just that this
+      // HTTP server is answering.
+      return json(res, 200, {
+        state,
+        me: waInfo ? waInfo.wid : null,
+        sessionDir: SESSION_DIR,
+        authRequired: state === 'auth_required' || state === 'qr',
+        reconnecting: state === 'reconnecting',
+        jobs: Array.from(jobs.entries()).slice(-20),
+      });
+    }
+    if (req.method === 'GET' && url.pathname === '/auth/qr') {
+      // The QR payload is deliberately short-lived and only ever served to
+      // a local requester; it is never logged or persisted.
+      if (state !== 'qr' || !lastQr) { return json(res, 404, { error: 'no-qr-available', state }); }
+      // `image` is a self-contained data URL: a self-contained URL keeps the
+      // QR payload off the network and out of any log.
+      return json(res, 200, { image: qrImageSvg(lastQr), issuedAt: qrIssuedAt });
+    }
+    if (req.method === 'POST' && url.pathname === '/auth/start') {
+      // Idempotent: reconnect, or start pairing if there is nothing to
+      // reconnect to. Lets the popup recover without a service restart.
+      if (state === 'ready') return json(res, 200, { ok: true, state, alreadyRunning: true });
+      if (!client) startClient('popup-request');
+      return json(res, 200, { ok: true, state });
+    }
+    if (req.method === 'POST' && url.pathname === '/auth/logout') {
+      const body = await readBody(req).then((b) => { try { return JSON.parse(b || '{}'); } catch { return {}; } });
+      if (body.confirm !== true) { return json(res, 400, { error: 'confirmation-required' }); }
+      try { return json(res, 200, await logout('user-request')); }
+      catch (e) { return json(res, 500, { error: 'logout-failed' }); }
+    }
+    if (req.method === 'GET' && url.pathname === '/channels') {
+      if (state !== 'ready' || !client) { return json(res, 409, { error: 'whatsapp-not-ready', state }); }
+      // The popup polls while open; re-querying every channel's membership
+      // each time would hammer WhatsApp Web for no new information.
+      if (channelCache && Date.now() - channelCache.at < CHANNEL_CACHE_MS) {
+        return json(res, 200, channelCache.body);
+      }
+      try {
+        // Only channels this account can actually post to.
+        const r = await listPostableChannels(client);
+        channelCache = {
+          at: Date.now(),
+          body: {
+            channels: r.channels,
+            checked: r.checked,
+            ineligible: r.ineligible,
+            warning: r.degraded ? 'Some channels could not be verified for posting permission and are hidden.' : undefined,
+          },
+        };
+        lastChannelError = r.degraded ? 'permission-check-failed' : null;
+        return json(res, 200, {
+          channels: r.channels,
+          checked: r.checked,
+          ineligible: r.ineligible,
+          warning: r.degraded ? 'Some channels could not be verified for posting permission and are hidden.' : undefined,
+        });
+      } catch (e) {
+        log('warn','channel-list-failed',{error:String((e && e.message) || e)});
+        // The listing talks to the live WhatsApp Web page, so a failure here
+        // means that page is unusable (common right after a resume).
+        markConnectionStale('channel-list-failed');
+        return json(res, 500, { error: 'channel-list-failed' });
+      }
     }
     if (req.method === 'POST' && url.pathname === '/send') {
       if (state !== 'ready') { log('error','send-rejected-whatsapp-not-ready',{state}); return json(res, 409, { error: 'whatsapp-not-ready', state }); }

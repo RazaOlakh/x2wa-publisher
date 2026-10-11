@@ -2,48 +2,125 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>X → WhatsApp</title>
+  <title>X → WhatsApp Channel Poster</title>
   <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; width: 280px; margin: 0; padding: 12px; }
-    h1 { font-size: 14px; margin: 0 0 10px; font-weight: 600; }
-    h2 { font-size: 12px; margin: 12px 0 6px; font-weight: 600; color: #444; }
-    p { font-size: 12px; color: #555; margin: 6px 0; }
-    .status-row { display: flex; align-items: center; gap: 6px; font-size: 12px; margin: 4px 0; }
-    .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
-    .dot-on { background: #25D366; }
-    .dot-off { background: #999; }
-    .dot-warn { background: #ff9900; }
-    .dot-err { background: #dc3545; }
-    select { width: 100%; padding: 6px; font-size: 12px; border-radius: 4px; border: 1px solid #ccc; margin-bottom: 6px; }
-    button { font-size: 12px; padding: 4px 8px; border-radius: 4px; border: 1px solid #ccc; background: #f5f5f5; cursor: pointer; }
-    button:disabled { opacity: 0.5; cursor: not-allowed; }
-    button.primary { background: #25D366; color: #fff; border-color: #25D366; }
-    button.primary:hover { background: #1ea952; }
-    button:hover:not(:disabled) { background: #ebebeb; }
-    button.primary:hover:not(:disabled) { background: #1ea952; }
-    #message { font-size: 12px; min-height: 18px; margin-top: 6px; }
-    .muted { color: #777; }
-    .error { color: #b00020; }
-    .success { color: #0a7c40; }
+    :root {
+      --green: #25d366; --green-dark: #1eb455; --red: #d93025;
+      --amber: #b26a00; --ink: #1f2328; --muted: #656d76; --line: #d8dee4;
+      --bg: #ffffff; --panel: #f6f8fa;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      width: 340px; margin: 0; padding: 16px; color: var(--ink); background: var(--bg);
+      font-size: 13px; line-height: 1.45;
+    }
+    header { margin-bottom: 14px; }
+    h1 { font-size: 15px; margin: 0 0 3px; font-weight: 600; letter-spacing: -0.1px; }
+    .sub { font-size: 12px; color: var(--muted); margin: 0; }
+
+    .card { border: 1px solid var(--line); border-radius: 10px; padding: 12px; margin-bottom: 10px; background: var(--bg); }
+    .card.quiet { background: var(--panel); }
+
+    .status { display: flex; gap: 9px; align-items: flex-start; }
+    .dot { width: 9px; height: 9px; border-radius: 50%; margin-top: 5px; flex: 0 0 auto; background: #9aa4ae; }
+    .dot.on { background: var(--green); }
+    .dot.wait { background: #e3a008; }
+    .dot.err { background: var(--red); }
+    .dot.busy { background: #1a73e8; animation: pulse 1.1s ease-in-out infinite; }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .3; } }
+
+    .status-title { font-weight: 600; }
+    .status-detail { color: var(--muted); font-size: 12px; margin-top: 1px; }
+    .status-detail.hidden, .hidden { display: none !important; }
+
+    .row { display: flex; gap: 8px; margin-top: 10px; }
+    button {
+      font: inherit; font-size: 12.5px; padding: 7px 12px; border-radius: 7px;
+      border: 1px solid var(--line); background: var(--panel); color: var(--ink);
+      cursor: pointer; flex: 1;
+    }
+    button:hover:not(:disabled) { background: #eceff2; }
+    button:disabled { opacity: .45; cursor: not-allowed; }
+    button.primary { background: var(--green); border-color: var(--green); color: #fff; font-weight: 600; }
+    button.primary:hover:not(:disabled) { background: var(--green-dark); }
+    button.danger { color: var(--red); }
+    button.danger.confirm { background: var(--red); border-color: var(--red); color: #fff; font-weight: 600; }
+
+    select {
+      width: 100%; font: inherit; font-size: 13px; padding: 7px 8px; margin-top: 4px;
+      border-radius: 7px; border: 1px solid var(--line); background: var(--bg); color: var(--ink);
+    }
+    select:disabled { background: var(--panel); color: var(--muted); }
+    label.field { display: block; font-size: 12px; font-weight: 600; color: var(--muted); margin-bottom: 2px; }
+
+    .note { font-size: 12px; margin-top: 9px; }
+    .note.error { color: var(--red); }
+    .note.warn { color: var(--amber); }
+    .note.ok { color: var(--green-dark); }
+    .note.idle { color: var(--muted); }
+
+    .qr { text-align: center; padding: 6px 0 2px; }
+    .qr img { width: 190px; height: 190px; image-rendering: pixelated; border: 6px solid #fff; border-radius: 6px; }
+    .steps { text-align: left; font-size: 12px; color: var(--muted); margin-top: 9px; }
+    .steps ol { margin: 4px 0 0; padding-left: 18px; }
+    code { background: var(--panel); padding: 1px 4px; border-radius: 4px; font-size: 11.5px; word-break: break-all; }
+
+    footer { margin-top: 4px; font-size: 11px; color: var(--muted); display: flex; justify-content: space-between; gap: 8px; }
+    footer button { flex: 0 0 auto; padding: 4px 9px; font-size: 11.5px; }
   </style>
 </head>
 <body>
-  <h1>X → WhatsApp</h1>
+  <header>
+    <h1>X → WhatsApp Channel Poster</h1>
+    <p class="sub">Send any X post to your WhatsApp Channel from the post button.</p>
+  </header>
 
-  <h2>WhatsApp</h2>
-  <div id="waStatus" class="status-row"><span class="dot dot-off"></span> <span id="waStatusText">Checking…</span></div>
-  <div id="waActionWrap">
-    <button id="connectBtn" class="primary" disabled>Connect WhatsApp</button>
-    <button id="checkBtn">Check Connection</button>
-  </div>
+  <!-- WhatsApp connection -->
+  <section class="card">
+    <div class="status">
+      <span class="dot" id="waDot"></span>
+      <div style="flex:1; min-width:0">
+        <div class="status-title" id="waTitle">Checking…</div>
+        <div class="status-detail" id="waDetail"></div>
+      </div>
+    </div>
+    <div class="row" id="waActions">
+      <button id="connectBtn" class="primary hidden">Authenticate WhatsApp</button>
+      <button id="checkBtn">Refresh status</button>
+    </div>
+  </section>
 
-  <h2>Destination Channel</h2>
-  <select id="channelSelect" disabled>
-    <option value="">Loading…</option>
-  </select>
-  <button id="refreshBtn" disabled>Refresh Channels</button>
+  <!-- QR scan (only when a scan is actually required) -->
+  <section class="card quiet hidden" id="qrCard">
+    <div class="qr"><img id="qrImg" alt="WhatsApp QR code"></div>
+    <div class="steps">
+      <strong>Scan with the dedicated WhatsApp account</strong>
+      <ol>
+        <li>Open WhatsApp on that phone</li>
+        <li>Linked Devices → Link a Device</li>
+        <li>Scan this code</li>
+      </ol>
+    </div>
+    <div class="note idle" id="qrNote"></div>
+  </section>
 
-  <div id="message" class="muted"></div>
+  <!-- Channel destination -->
+  <section class="card">
+    <label class="field" for="channelSelect">Destination channel</label>
+    <select id="channelSelect" disabled>
+      <option value="">Not loaded</option>
+    </select>
+    <div class="note idle" id="channelNote"></div>
+    <div class="row">
+      <button id="refreshBtn" disabled>Reload channels</button>
+      <button id="disconnectBtn" class="danger" disabled>Disconnect</button>
+    </div>
+  </section>
+
+  <footer>
+    <span id="footState">Controller: …</span>
+  </footer>
 
   <script src="popup.js"></script>
 </body>

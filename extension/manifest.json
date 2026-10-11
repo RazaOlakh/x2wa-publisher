@@ -6,8 +6,10 @@
   "permissions": ["storage", "webRequest"],
   "host_permissions": [
     "https://x.com/*",
+    "https://twitter.com/*",
     "https://pbs.twimg.com/*",
     "https://video.twimg.com/*",
+    "https://t.co/*",
     "http://127.0.0.1/*"
   ],
   "content_scripts": [

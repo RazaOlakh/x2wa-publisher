@@ -32,11 +32,306 @@ function findPhotoLinks(article) {
   return Array.from(new Set(out));
 }
 
+// --- Mixed media extraction (images + videos, original order) ---
+//
+// X exposes a video through two URLs that share one id:
+//   poster: pbs.twimg.com/amplify_video_thumb/<id>/img/<name>.jpg
+//   stream: video.twimg.com/amplify_video/<id>/pl/<token>.m3u8
+// (older posts use ext_tw_video_thumb / ext_tw_video for the same shape)
+// That shared id is what lets the background worker match a captured HLS
+// manifest to one specific video instead of "the newest one on the page".
+const VIDEO_ID_RE = /(?:amplify|ext_tw)_video(?:_thumb)?\/([A-Za-z0-9_-]+)/;
+
+function videoIdFromUrl(u) {
+  const m = VIDEO_ID_RE.exec(u || '');
+  return m ? m[1] : null;
+}
+
+// Master playlists carry every stream and their path holds no codec or
+// resolution directory (/pl/k_<token>.m3u8, or /pu/pl/<token>.m3u8 for the
+// older ext_tw_video shape); renditions nest those directories instead
+// (/pl/avc1/720x720/tok.m3u8, audio-only /pl/mp4a/32000/tok.m3u8). Only the
+// master is the right source to hand to ffmpeg.
+const RENDITION_DIRS = /^(?:avc1|hev1|hvc1|vp9|av01|mp4a|vid|aud|\d+x\d+)$/;
+function isMasterPlaylist(rest) {
+  const parts = rest.replace(/\?.*$/, '').split('/');
+  parts.pop();
+  return !parts.some((seg) => RENDITION_DIRS.test(seg));
+}
+
+// All HLS manifests in a document, keyed by the video id in their path.
+// Used on the server-rendered HTML, where the manifests live outside the
+// <article> but still name their video explicitly.
+function findHlsSources(html) {
+  const out = {};
+  const re = /https:\/\/video\.twimg\.com\/(?:amplify|ext_tw)_video\/([A-Za-z0-9_-]+)\/([^"'\s\\<>]+)/g;
+  let m;
+  while ((m = re.exec(html))) {
+    const id = m[1];
+    if (!/\.m3u8(?:\?|$)/.test(m[2])) continue;
+    const rec = out[id] || (out[id] = { master: null, variants: [] });
+    if (isMasterPlaylist(m[2])) { if (!rec.master) rec.master = m[0]; }
+    else if (rec.variants.indexOf(m[0]) === -1 && rec.variants.length < 8) rec.variants.push(m[0]);
+  }
+  return out;
+}
+
+// Ordered media items of the clicked post, images and videos interleaved
+// exactly as X renders them. The poster <img> X draws beside a <video> is
+// folded into that video instead of being reported as an extra image, and
+// a video whose poster carries no id is still reported (with a null id) so
+// it surfaces as a failure rather than being dropped.
+function findMediaItems(article) {
+  const items = [];
+  const seenVideo = new Set();
+  const seenImage = new Set();
+  const sel = 'video[poster], img[src*="pbs.twimg.com/media"], img[src*="amplify_video_thumb"], img[src*="ext_tw_video_thumb"]';
+  for (const el of article.querySelectorAll(sel)) {
+    // Skip media belonging to a nested quoted/reposted article.
+    if (el.closest('article') !== article) continue;
+    if (el.tagName === 'VIDEO') {
+      const poster = el.getAttribute('poster') || '';
+      const id = videoIdFromUrl(poster);
+      const key = id || 'poster:' + poster;
+      if (seenVideo.has(key)) continue;
+      seenVideo.add(key);
+      items.push({ type: 'video', videoId: id || null });
+      continue;
+    }
+    const src = el.getAttribute('src') || '';
+    const vid = videoIdFromUrl(src);
+    if (vid) {
+      if (seenVideo.has(vid)) continue;
+      seenVideo.add(vid);
+      items.push({ type: 'video', videoId: vid });
+      continue;
+    }
+    // X serves one image at several sizes; the media id is the dedupe key.
+    try {
+      const u = new URL(src, location.origin);
+      const id = u.pathname.split('/').pop();
+      if (!id || seenImage.has(id)) continue;
+      seenImage.add(id);
+      u.searchParams.set('format', 'webp');
+      u.searchParams.set('name', 'large');
+      items.push({ type: 'image', url: u.href });
+    } catch {}
+  }
+  return items;
+}
+
+// Distinct media image URLs in the clicked post, in original order.
+// og:image on a /photo/ page only ever returns the FIRST image, so for
+// multi-image posts we read the article's <img> elements directly.
+function findMediaUrls(article) {
+  return findMediaItems(article).filter((m) => m.type === 'image').map((m) => m.url);
+}
+
+// Reliable media recovery fallback. X's SPA can defer lazy images in
+// headless / low-activity contexts so the live DOM ends up with no
+// rendered <img> even though the post has photos (the /photo/ links
+// remain). In that case, fetch the tweet's server-rendered HTML and
+// read the media elements straight from the clicked post's own article,
+// excluding nested quoted-tweet articles. That document also carries the
+// HLS manifests, each naming its own video id, so videos the live DOM
+// could not identify are recovered here too.
+async function recoverMedia(article, post) {
+  const expected = post.photoHrefs ? post.photoHrefs.length : 0;
+  const items = post.mediaItems || [];
+  const haveImages = items.filter((m) => m.type === 'image').length;
+  const unidentifiedVideo = items.some((m) => m.type === 'video' && !m.videoId);
+  // The live DOM already accounts for every photo the post has (or the
+  // post rendered image elements without /photo/ wrappers) and every
+  // video it rendered carries an id: nothing left to recover.
+  if (!unidentifiedVideo && haveImages >= expected && (expected > 0 || haveImages > 0)) return post;
+  if (!post.hasImage && !post.hasVideo) return post;
+  try {
+    const resp = await fetch(post.tweetUrl, { credentials: 'omit' });
+    if (!resp.ok) {
+      _xlog('warn', 'tweet-media-fetch-failed', { tweetId: post.tweetId, status: resp.status });
+      return post;
+    }
+    const html = await resp.text();
+    const hls = findHlsSources(html);
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const target = '/status/' + post.tweetId;
+    for (const art of doc.querySelectorAll('article')) {
+      // Skip nested articles (a quoted tweet rendered inside another article).
+      if (art.parentElement && art.parentElement.closest('article')) continue;
+      // The server-rendered article has no <time> element (that is added
+      // during hydration), so match by the post's own permalink link
+      // (/.../status/<id>). /photo/ links share the id but end in
+      // /photo/<n> and therefore never match.
+      let isTarget = false;
+      for (const a of art.querySelectorAll('a[href]')) {
+        const href = a.getAttribute('href') || '';
+        const path = href.split('?')[0].split('#')[0];
+        if (path.endsWith(target)) { isTarget = true; break; }
+      }
+      if (!isTarget) continue;
+      const recovered = findMediaItems(art);
+      // A video the live DOM rendered without a poster id can still be
+      // named here; carry that id back onto the live item in place.
+      for (let i = 0; i < recovered.length; i++) {
+        const r = recovered[i];
+        if (r.type !== 'video' || r.videoId) continue;
+        const live = items.find((m) => m.type === 'video' && !m.videoId);
+        if (live) { live.videoId = r.videoId; break; }
+      }
+      _xlog('info', 'tweet-media-recovered', { tweetId: post.tweetId, items: recovered.length, hls: Object.keys(hls).length });
+      const next = { ...post, hlsSources: hls };
+      if (recovered.length) {
+        next.mediaItems = recovered;
+        next.mediaUrls = recovered.filter((m) => m.type === 'image').map((m) => m.url);
+        next.hasImage = post.hasImage || next.mediaUrls.length > 0;
+        next.hasVideo = post.hasVideo || recovered.some((m) => m.type === 'video');
+      }
+      return next;
+    }
+    _xlog('warn', 'tweet-media-not-found', { tweetId: post.tweetId });
+    return Object.keys(hls).length ? { ...post, hlsSources: hls } : post;
+  } catch (e) {
+    _xlog('warn', 'tweet-media-recover-error', { tweetId: post.tweetId, error: e && e.message });
+  }
+  return post;
+}
+
 function hasVideo(article) {
   const v = article.querySelector('video');
   if (!v) return false;
   // If the video element is attributed to a nested <article>, skip it.
   return v.closest('article') === article;
+}
+
+// --- Link recovery ---
+// X renders post links as <a href="https://t.co/..."> anchors whose visible
+// text is the (often wrapped and "…"-truncated) display URL. For posts where
+// the URL renders as a link-preview card, the anchor lives inside
+// [data-testid="card.wrapper"] and the URL is absent from tweetText entirely.
+// The canonical URL is recovered by resolving the t.co href.
+
+function isContentLinkAnchor(a, opts) {
+  const href = a.href || '';
+  if (!href.startsWith('http')) return false;
+  // Media and telemetry links are not post content.
+  if (href.includes('/photo/') || href.includes('/analytics')) return false;
+  try {
+    const u = new URL(href);
+    if (u.hostname === 'x.com' || u.hostname === 'twitter.com') {
+      const path = u.pathname;
+      if (path.startsWith('/hashtag/')) return false;
+      // Links to other X posts are content when the author placed
+      // them inside the tweet text. Inside a preview card they belong
+      // to a quoted tweet and must stay excluded.
+      if (/\/status\/\d+/.test(path) && !(opts && opts.allowStatusLinks)) return false;
+      // Profile links (no deeper path) are mentions, not content links.
+      if (path.split('/').filter(Boolean).length <= 1) return false;
+    }
+  } catch { return false; }
+  return true;
+}
+
+function findTweetLinks(article) {
+  const out = [];
+  const push = (a, inText, opts) => {
+    // Only links whose nearest <article> is this article (excludes quoted
+    // tweets rendered as nested articles) and not inside a quote container.
+    if (!a || a.closest('article') !== article) return;
+    if (a.closest('[data-testid="quoteTweet"]')) return;
+    const href = a.href;
+    // No href dedup: the same shortlink may appear both inline and in the
+    // preview card (and even twice inline); each occurrence must be
+    // processed so every wrapped display gets replaced.
+    if (!href || !isContentLinkAnchor(a, opts)) return;
+    out.push({ href, display: a.innerText || '', inText });
+  };
+  const tweetText = article.querySelector('[data-testid="tweetText"]');
+  if (tweetText) {
+    // Links inside the tweet text were placed by the author,
+    // including links to other X posts.
+    for (const a of tweetText.querySelectorAll('a')) push(a, true, { allowStatusLinks: true });
+  }
+  // Link-preview cards: large cards keep the URL only inside the card.
+  const card = article.querySelector('[data-testid="card.wrapper"]');
+  if (card) {
+    for (const a of card.querySelectorAll('a')) push(a, false);
+  }
+  return out;
+}
+
+function escapeRegExp(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function flatDisplayUrl(display) {
+  return (display || '').replace(/\n+/g, '').trim();
+}
+
+// Display URL as a URL: wrapped display text collapsed, with X's
+// trailing truncation marker stripped.
+function cleanDisplayUrl(display) {
+  return flatDisplayUrl(display).replace(/…+\s*$/, '').trim();
+}
+
+// Replace a wrapped/truncated URL display inside the extracted text with
+// the canonical URL, preserving its logical position. The display text
+// may be split across lines at arbitrary points, so newlines are
+// tolerated between every character when matching.
+function replaceDisplayInText(text, display, replacement) {
+  const flat = flatDisplayUrl(display);
+  if (!flat || !replacement) return text;
+  const pattern = flat.split('').map(escapeRegExp).join('\\n?');
+  try {
+    // Global: the same URL can appear more than once in a post
+    // (e.g. repeated links); every occurrence must be recovered.
+    return text.replace(new RegExp(pattern, 'g'), replacement);
+  } catch { return text; }
+}
+
+function textIncludesUrl(text, url) {
+  return Boolean(text && url && (text.includes(url) || text.includes(cleanDisplayUrl(url))));
+}
+
+async function resolveLinkUrls(hrefs) {
+  if (!hrefs.length) return {};
+  try {
+    const resp = await chrome.runtime.sendMessage({ type: 'RESOLVE_LINKS', hrefs });
+    if (resp && resp.ok && resp.resolved) return resp.resolved;
+  } catch (e) {
+    _xlog('warn', 'link-resolve-unavailable', { error: e && e.message });
+  }
+  return {};
+}
+
+async function recoverPostLinks(article, post) {
+  const links = findTweetLinks(article);
+  if (!links.length) return post;
+  const resolvedMap = await resolveLinkUrls(links.map((link) => link.href));
+  let text = post.text;
+  const appended = [];
+  for (const link of links) {
+    const resolved = resolvedMap[link.href];
+    // Fallbacks: inline links keep their (possibly truncated) display
+    // URL; card-only links keep the t.co href itself — a card's
+    // display text is its title and must never be sent as a URL.
+    const finalUrl = resolved
+      || (link.inText ? cleanDisplayUrl(link.display) : null)
+      || link.href;
+    if (!finalUrl) continue;
+    if (link.inText) {
+      text = replaceDisplayInText(text, link.display, finalUrl);
+    }
+    if (!textIncludesUrl(text, finalUrl)) appended.push(finalUrl);
+  }
+  if (appended.length) {
+    text = text.trim();
+    text = (text ? text + '\n' : '') + appended.join('\n');
+  }
+  if (text !== post.text) {
+    _xlog('info', 'tweet-links-recovered', { tweetId: post.tweetId, links: links.length, appended: appended.length });
+    return { ...post, text };
+  }
+  return post;
 }
 
 function extractPost(article) {
@@ -45,14 +340,44 @@ function extractPost(article) {
   const id = findTweetId(url);
   if (!id) return { error: 'no-tweet-id', url };
   const text = findTweetText(article);
+  const mediaItems = findMediaItems(article);
+  const photoHrefs = findPhotoLinks(article);
   return {
     tweetId: id,
     tweetUrl: url,
     text,
-    hasImage: findPhotoLinks(article).length > 0,
-    hasVideo: hasVideo(article),
-    photoHrefs: findPhotoLinks(article),
+    hasImage: photoHrefs.length > 0 || mediaItems.some((m) => m.type === 'image'),
+    hasVideo: hasVideo(article) || mediaItems.some((m) => m.type === 'video'),
+    photoHrefs,
+    mediaUrls: mediaItems.filter((m) => m.type === 'image').map((m) => m.url),
+    // Images and videos in the order X renders them; the background worker
+    // turns each video id into its own captured HLS manifest.
+    mediaItems,
   };
+}
+
+// X renders <video preload="none">, so a post's stream is only requested
+// once the player is engaged. Nudging each of the clicked post's players
+// (muted, so no autoplay gate) makes the background webRequest capture see
+// the real manifests for exactly these videos instead of relying on the
+// user having happened to play them.
+async function primeVideos(article, timeoutMs) {
+  const videos = [...article.querySelectorAll('video')].filter((v) => v.closest('article') === article);
+  if (!videos.length) return false;
+  for (const v of videos) {
+    try { v.muted = true; } catch {}
+    try { v.setAttribute('preload', 'auto'); } catch {}
+    try { v.load(); } catch {}
+    try { v.play().catch(() => {}); } catch {}
+  }
+  _xlog('info', 'tweet-videos-primed', { count: videos.length });
+  const deadline = Date.now() + (timeoutMs || 2500);
+  while (Date.now() < deadline) {
+    await sleep(250);
+    const ready = videos.some((v) => v.readyState >= 1 || (v.currentSrc && v.currentSrc.indexOf('blob:') !== 0));
+    if (ready) break;
+  }
+  return true;
 }
 
 window.__xwapExtractPost = extractPost;
@@ -83,36 +408,51 @@ async function extractPostAsync(article) {
   if (post.error) return post;
 
   const expand = _findExpandControl(article);
-  if (!expand) {
-    _xlog('info', 'tweet-truncated-no-expand-control', { tweetId: post.tweetId });
-    return post;
-  }
+  if (expand) {
+    _xlog('info', 'tweet-expand-started', { tweetId: post.tweetId });
+    try {
+      expand.scrollIntoView({ block: 'center', behavior: 'instant' });
+    } catch {}
+    try { expand.click(); } catch {}
 
-  _xlog('info', 'tweet-expand-started', { tweetId: post.tweetId });
-  try {
-    expand.scrollIntoView({ block: 'center', behavior: 'instant' });
-  } catch {}
-  try { expand.click(); } catch {}
-
-  const originalLength = post.text.length;
-  let expanded = false;
-  for (let i = 0; i < 10; i++) {
-    await sleep(200);
-    const next = extractPost(article);
-    if (next && !next.error && next.text && next.text.length > originalLength) {
-      post = next;
-      expanded = true;
-      break;
+    const originalLength = post.text.length;
+    let expanded = false;
+    for (let i = 0; i < 10; i++) {
+      await sleep(200);
+      const next = extractPost(article);
+      if (next && !next.error && next.text && next.text.length > originalLength) {
+        post = next;
+        expanded = true;
+        break;
+      }
     }
+
+    if (!expanded) {
+      _xlog('warn', 'tweet-expand-failed', { tweetId: post.tweetId, info: 'text-length-unchanged' });
+      return { error: 'tweet-text-truncated', url: post.tweetUrl, tweetId: post.tweetId };
+    }
+
+    _xlog('info', 'tweet-expanded', { tweetId: post.tweetId, before: originalLength, after: post.text.length });
+  } else {
+    _xlog('info', 'tweet-truncated-no-expand-control', { tweetId: post.tweetId });
   }
 
-  if (!expanded) {
-    _xlog('warn', 'tweet-expand-failed', { tweetId: post.tweetId, info: 'text-length-unchanged' });
-    return { error: 'tweet-text-truncated', url: post.tweetUrl, tweetId: post.tweetId };
+  // Ask X for the clicked post's own video streams so the background
+  // worker captures manifests for these videos and not for whatever else
+  // the page happened to load.
+  if (post.hasVideo) {
+    try { await primeVideos(article, 2500); } catch (e) { _xlog('warn', 'tweet-video-prime-failed', { tweetId: post.tweetId, error: e && e.message }); }
+    const after = extractPost(article);
+    if (!after.error) post = after;
   }
 
-  _xlog('info', 'tweet-expanded', { tweetId: post.tweetId, before: originalLength, after: post.text.length });
-  return post;
+  // Recover media from the server-rendered HTML when the live DOM has no
+  // rendered images (headless / lazy-load deferral) or could not name a
+  // video. This also carries the HLS manifests for those video ids.
+  post = await recoverMedia(article, post);
+
+  // Recover canonical URLs hidden behind X link previews / wrapped link displays.
+  return recoverPostLinks(article, post);
 }
 
 window.__xwapExtractPostAsync = extractPostAsync;

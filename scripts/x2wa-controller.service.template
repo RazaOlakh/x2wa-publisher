@@ -1,0 +1,42 @@
+# X → WhatsApp Channel Poster — per-user service.
+#
+# Installed by scripts/install-startup.sh; edits are overwritten on
+# reinstall. Managed with:  systemctl --user {status|restart|stop} x2wa-controller
+#
+# RestartSec/StartLimit keep a crash-looping controller from spinning: the
+# unit is restarted a few times, then left failed for the user to inspect.
+
+[Unit]
+Description=X to WhatsApp Channel Poster controller (local, loopback only)
+Documentation=https://github.com/OWNER/x2wa-publisher
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=__NODE__ __CONTROLLER_SRC__
+WorkingDirectory=__CONTROLLER_DIR__
+Environment=NODE_ENV=production
+Environment=CONTROLLER_PORT=47825
+Environment=SESSION_DIR=__SESSION_DIR__
+Environment=TMP_ROOT=__TMP_ROOT__
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=CHROME_PATH=__CHROME__
+Restart=on-failure
+RestartSec=5s
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+# Operational logs: stdout/stderr go to the journal, which records the
+# connection state and job ids but never QR payloads, cookies or session
+# secrets (the controller never prints those to stdout).
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=x2wa-controller
+
+# Keep the process contained to what it needs.
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target
