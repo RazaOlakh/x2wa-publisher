@@ -345,6 +345,17 @@ function setVer(dotClass, title, detail) {
   ui.verDetail.classList.toggle('hidden', !detail);
 }
 
+// The popup re-reads the status every couple of seconds, which is what keeps
+// "Connecting…" resolving on its own. That must not wipe the answer to
+// something the user just did, so a note written by an action is held for a
+// while and the polling stops overwriting it.
+let verNoteLockUntil = 0;
+const holdVerNote = (ms) => { verNoteLockUntil = Date.now() + (ms || 12000); };
+const verNote = (text, kind) => {
+  if (Date.now() < verNoteLockUntil) return;
+  setNote(ui.verNote, text, kind);
+};
+
 function renderVersion(v) {
   if (!v) {
     setVer('', 'Version unknown', '');
@@ -370,34 +381,34 @@ function renderVersion(v) {
     // Uncommitted work: say so plainly, and do not offer an update that
     // would be refused anyway.
     setVer('wait', 'Local changes', `${where} · not committed`);
-    setNote(ui.verNote,
-      'You have uncommitted changes, so updating is not offered — the update would be refused rather than touching your work.',
-      'warn');
+    verNote('You have uncommitted changes, so updating is not offered — the update would be refused rather than touching your work.', 'warn');
+    return;
+  }
+  if (v.checkFailed === 'unreachable') {
+    // Being unable to ask is not the same as being up to date, so this is
+    // never dressed up as a clean bill of health.
+    setVer('wait', 'Could not reach the remote', where + checked);
+    verNote('The repository could not be reached, so this is the last known result rather than a fresh one.', 'warn');
     return;
   }
   if (v.behind === null || v.behind === undefined) {
     setVer('', 'Update status unknown', where + checked);
-    if (v.checkFailed === 'unreachable') {
-      setNote(ui.verNote, 'The remote could not be reached; showing the last known result.', 'warn');
-    } else if (!v.upstream) {
-      setNote(ui.verNote, 'This checkout has no upstream branch to compare with.', 'warn');
-    } else {
-      setNote(ui.verNote, 'Press Check for updates to ask the remote.', 'idle');
-    }
+    if (!v.upstream) verNote('This checkout has no upstream branch to compare with.', 'warn');
+    else verNote('Press Check for updates to ask the remote.', 'idle');
     return;
   }
   if (Number(v.behind) > 0) {
     setVer('wait', `${v.behind} update${v.behind === 1 ? '' : 's'} available`, where + checked);
-    setNote(ui.verNote, 'Updates fast-forward this checkout to the latest commit on the remote.', 'idle');
+    verNote('Updates fast-forward this checkout to the latest commit on the remote.', 'idle');
     return;
   }
   if (Number(v.ahead) > 0) {
     setVer('', `${v.ahead} local commit${Number(v.ahead) === 1 ? '' : 's'} ahead`, where + checked);
-    setNote(ui.verNote, 'Your checkout has commits the remote has not seen.', 'idle');
+    verNote('Your checkout has commits the remote has not seen.', 'idle');
     return;
   }
   setVer('on', 'Up to date', where + checked);
-  setNote(ui.verNote, '', 'idle');
+  verNote('', 'idle');
 }
 
 async function versionStatus() {
@@ -419,6 +430,7 @@ ui.checkUpd.addEventListener('click', async () => {
   ui.checkUpd.disabled = true;
   setVer('busy', 'Checking…', '');
   setNote(ui.verNote, 'Asking the remote what it has.', 'idle');
+  holdVerNote();
   try {
     const r = await req('/version/check', { method: 'POST' });
     renderVersion(r.ok ? r.body : null);
@@ -434,6 +446,7 @@ ui.update.addEventListener('click', async () => {
     updateArmed = true;
     ui.update.textContent = 'Confirm update';
     ui.update.classList.add('confirm');
+    holdVerNote();
     setNote(ui.verNote,
       'This fast-forwards your checkout to the latest commit on the remote. Uncommitted changes are never touched.',
       'warn');
@@ -441,6 +454,7 @@ ui.update.addEventListener('click', async () => {
     return;
   }
   disarmUpdate();
+  holdVerNote();
   ui.update.disabled = true;
   ui.checkUpd.disabled = true;
   setVer('busy', 'Updating…', '');
