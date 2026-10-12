@@ -298,6 +298,28 @@ background and no filled shape.
 | Text + several media | text as the caption of the **first** item only |
 | Images and videos mixed | every item, in the post's original order |
 
+When a post has **no media of its own** and its text contains a link, the first
+link is placed at the top of the message, on its own line, with the rest of the
+text below it. So
+
+```
+Helllo
+example.com
+how are your?
+```
+
+is posted as
+
+```
+example.com
+Helllo
+how are your?
+```
+
+The Channel then shows the link preview above the words instead of buried
+inside them. A post that has media keeps its text exactly as written — there the
+text is a caption beside the picture, not the whole post.
+
 ### Sending a screenshot of the post
 
 Beside the post button, in the same toolbar row, there is a camera button that
@@ -659,6 +681,7 @@ node extension/test/popup-states.test.js     # every popup state, incl. reconnec
 node controller/test/hls-prefetch.test.js    # HLS parsing, ordered parallel fetch, copy-vs-re-encode, audio preserved
 node controller/test/duplicate-guard.test.js # a post cannot be sent twice while one is running or just after
 node extension/test/video-source.test.js     # an ambiguous video mapping is refused, never guessed
+node extension/test/link-first.test.js       # a text-only post's link moves to the top, media posts untouched
 node scripts/windows/startup.test.js         # Windows launcher contract (static)
 ```
 
