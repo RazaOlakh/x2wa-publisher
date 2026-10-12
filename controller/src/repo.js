@@ -66,7 +66,12 @@ async function local() {
   const [branch, sha, dirty, upstream] = await Promise.all([
     git(['rev-parse', '--abbrev-ref', 'HEAD'], dir, TIMEOUT.quick),
     git(['rev-parse', 'HEAD'], dir, TIMEOUT.quick),
-    git(['status', '--porcelain'], dir, TIMEOUT.normal),
+    // Untracked files are left out on purpose. A fast-forward cannot lose
+    // them - if an incoming file would overwrite one, git refuses the pull by
+    // itself - so they must never be the thing standing between the checkout
+    // and an update. Only edits to tracked files, which a pull would clobber,
+    // are work that blocks it.
+    git(['status', '--porcelain', '--untracked-files=no'], dir, TIMEOUT.normal),
     git(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}'], dir, TIMEOUT.quick),
   ]);
   if (!branch.ok || !sha.ok) return { ok: false, error: 'not-a-repo' };
@@ -120,7 +125,8 @@ async function check() {
 }
 
 // Bring the checkout up to its upstream. Fast-forward only: never a merge
-// commit, never a stash of someone's work, and never over a dirty tree.
+// commit, never a stash of someone's work, and never over uncommitted edits to
+// tracked files. Untracked files do not block it - see local() for why.
 async function update() {
   const l = await local();
   if (!l.ok) return l;

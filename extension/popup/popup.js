@@ -378,10 +378,12 @@ function renderVersion(v) {
   ui.checkUpd.disabled = false;
 
   if (v.dirty) {
-    // Uncommitted work: say so plainly, and do not offer an update that
-    // would be refused anyway.
-    setVer('wait', 'Local changes', `${where} · not committed`);
-    verNote('You have uncommitted changes, so updating is not offered — the update would be refused rather than touching your work.', 'warn');
+    // Uncommitted edits to tracked files: a pull would clobber them, so the
+    // update is not offered rather than being refused after a confirmation.
+    // Untracked files never reach this branch - the controller ignores them.
+    ui.update.classList.add('hidden');
+    setVer('wait', 'Local changes', `${where} · uncommitted`);
+    verNote('You have uncommitted edits, so updating is not offered — the update would be refused rather than touching your work. Untracked files never get in the way.', 'warn');
     return;
   }
   if (v.checkFailed === 'unreachable') {
@@ -448,7 +450,7 @@ ui.update.addEventListener('click', async () => {
     ui.update.classList.add('confirm');
     holdVerNote();
     setNote(ui.verNote,
-      'This fast-forwards your checkout to the latest commit on the remote. Uncommitted changes are never touched.',
+      'This fast-forwards your checkout to the latest commit on the remote. Uncommitted edits are never touched, and untracked files do not block it.',
       'warn');
     setTimeout(disarmUpdate, 6000);
     return;
@@ -473,7 +475,7 @@ ui.update.addEventListener('click', async () => {
   if (!r.ok) {
     ui.update.disabled = false; ui.checkUpd.disabled = false;
     if (body.error === 'local-changes') {
-      setVer('err', 'Update refused', 'You have uncommitted changes.');
+      setVer('err', 'Update refused', 'You have uncommitted edits.');
       setNote(ui.verNote, 'Commit or stash your work first — the update will not touch it.', 'warn');
     } else {
       setVer('err', 'Update failed', '');

@@ -42,6 +42,21 @@ function makeRepo() {
   return dir;
 }
 
+// An origin holding the same first commit, wired up as dir's upstream.
+function makeUpstream(dir) {
+  const origin = fs.mkdtempSync(path.join(os.tmpdir(), 'x2wa-origin-'));
+  git(origin, ['init', '-q', '-b', 'main']);
+  git(origin, ['config', 'user.email', 'test@example.invalid']);
+  git(origin, ['config', 'user.name', 'Test']);
+  fs.writeFileSync(path.join(origin, 'README.md'), 'hello\n');
+  git(origin, ['add', '.']);
+  git(origin, ['commit', '-q', '-m', 'first']);
+  git(dir, ['remote', 'add', 'origin', origin]);
+  git(dir, ['fetch', '-q', 'origin']);
+  git(dir, ['branch', '--set-upstream-to=origin/main', 'main']);
+  return origin;
+}
+
 // ------------------------------------------------------------- local facts
 console.log('reads the checkout it is running in');
 {
@@ -80,6 +95,52 @@ console.log('refuses to update a checkout with uncommitted changes');
   eq('the edit is still there', fs.readFileSync(path.join(dir, 'README.md'), 'utf8'), 'edited by hand\n');
 
   fs.rmSync(dir, { recursive: true, force: true });
+}
+
+// ------------------------------------------------- untracked files ignored
+console.log('an untracked file does not hold up an update');
+{
+  const dir = makeRepo();
+  const origin = makeUpstream(dir);
+  // A commit lands on the remote, so there is something to pull.
+  fs.writeFileSync(path.join(origin, 'new.txt'), 'added\n');
+  git(origin, ['add', '.']);
+  git(origin, ['commit', '-q', '-m', 'second']);
+  git(dir, ['fetch', '-q', 'origin']);
+
+  // A file that was never added: a fast-forward does not clobber it.
+  fs.writeFileSync(path.join(dir, 'scratch.txt'), 'untracked\n');
+
+  const l = inRepo(dir, '(repo) => repo.local()');
+  check('an untracked file is not treated as dirty', l.dirty === false, l);
+
+  const u = inRepo(dir, '(repo) => repo.update()');
+  check('so the update is offered and applies', u.ok === true && u.updated === true, u);
+  check('the new commit is here', git(dir, ['rev-list', '--left-right', '--count', 'origin/main...HEAD']).trim() === '0\t0');
+  eq('and the untracked file is left alone', fs.readFileSync(path.join(dir, 'scratch.txt'), 'utf8'), 'untracked\n');
+
+  fs.rmSync(dir, { recursive: true, force: true });
+  fs.rmSync(origin, { recursive: true, force: true });
+}
+
+console.log('an untracked file an update would overwrite is protected, not clobbered');
+{
+  const dir = makeRepo();
+  const origin = makeUpstream(dir);
+  // The remote adds a file at a path this checkout already has untracked.
+  fs.writeFileSync(path.join(origin, 'collide.txt'), 'from the remote\n');
+  git(origin, ['add', '.']);
+  git(origin, ['commit', '-q', '-m', 'remote collides']);
+  git(dir, ['fetch', '-q', 'origin']);
+  fs.writeFileSync(path.join(dir, 'collide.txt'), 'mine\n');
+
+  const u = inRepo(dir, '(repo) => repo.update()');
+  check('the pull is refused rather than overwriting it', u.ok === false, u);
+  eq('and says the pull failed', u.error, 'pull-failed');
+  eq('the untracked file survives untouched', fs.readFileSync(path.join(dir, 'collide.txt'), 'utf8'), 'mine\n');
+
+  fs.rmSync(dir, { recursive: true, force: true });
+  fs.rmSync(origin, { recursive: true, force: true });
 }
 
 // ----------------------------------------------------------- no upstream

@@ -660,7 +660,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === 'POST' && url.pathname === '/update') {
       const r = await repo.update();
-      log('r.ok' === 'ok' ? 'info' : 'warn', 'update', {
+      log(r.ok ? 'info' : 'warn', 'update', {
         ok: r.ok, error: r.error, from: r.from, to: r.to, files: r.files,
       });
       if (r.ok && r.restartController) {

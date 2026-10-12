@@ -480,12 +480,14 @@ that actually goes to the network.
 | **N local commits ahead** | Commits here the remote has not seen. Push them yourself. |
 | **Update status unknown** | Nothing has been asked yet — press **Check for updates**. |
 | **Could not reach the remote** | The remote could not be asked. The numbers shown are the last known ones, not a fresh answer. |
-| **Local changes** | Uncommitted work, so updating is not offered rather than being refused later. |
+| **Local changes** | Uncommitted edits to tracked files, so updating is not offered rather than being refused later. Untracked files do not count. |
 
 Updating **fast-forwards** your checkout to the latest commit on the remote.
 It never creates a merge commit, never stashes your work, and is refused
-outright if anything is uncommitted. What changed decides what happens next:
-only changes under `extension/` reload the extension, only changes under
+outright if any tracked file has uncommitted edits. Untracked files do not
+block it — a fast-forward cannot lose them, and if an incoming file would
+overwrite one, git refuses the pull itself. What changed decides what happens
+next: only changes under `extension/` reload the extension, only changes under
 `controller/` restart the controller.
 
 ## Installation problems
@@ -623,7 +625,7 @@ debugging, and for scripting a check:
 | `POST /send` | `{ tweetId, tweetUrl, text, media: [{type, source}], mediaFailures?, channelId }` — an image `source` may also be a `data:` URL (a screenshot, which has no URL to fetch); anything not recognised as an image is refused |
 | `GET /version` | `{ branch, sha, dirty, upstream, behind, ahead, checkedAt }` — local facts only, never touches the network; `behind`/`ahead` come from the last check |
 | `POST /version/check` | Fetches from the remote and returns the same shape, with `behind`/`ahead` fresh. `checkFailed: 'unreachable'` if the remote could not be reached |
-| `POST /update` | Fast-forwards to the upstream commit. Refused with `local-changes` on a dirty tree and `no-upstream` when the branch has none. Returns `{ updated, from, to, files, reloadExtension, restartController }` |
+| `POST /update` | Fast-forwards to the upstream commit. Refused with `local-changes` when a tracked file has uncommitted edits (untracked files do not block it) and `no-upstream` when the branch has none. Returns `{ updated, from, to, files, reloadExtension, restartController }` |
 
 `/send` publishes `media` in the post's own order (images and videos
 interleaved) and captions only the first item with `text`. `mediaFailures`
