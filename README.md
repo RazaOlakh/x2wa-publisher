@@ -320,6 +320,23 @@ The Channel then shows the link preview above the words instead of buried
 inside them. A post that has media keeps its text exactly as written — there the
 text is a caption beside the picture, not the whole post.
 
+### Link previews
+
+A text post that contains a link is sent with WhatsApp's **link preview card** —
+the page's title, description and thumbnail, shown above the message.
+
+WhatsApp only returns the full card when the preview request carries a **chat
+context**. The pinned `whatsapp-web.js` build requested previews with no context,
+so WhatsApp answered with a bare `domain.com` line and no image. The controller
+now requests the preview with the destination Channel as context and *awaits* it
+before sending, so the card is complete (title and picture) rather than just the
+domain. That is the programmatic equivalent of typing the link into the Channel's
+message box and waiting for the preview to appear before hitting send.
+
+`controller/scripts/apply-patches.js` applies this to the vendored client, and
+`controller/test/dependency.test.js` guards it. If a link's preview cannot be
+fetched, the message is still sent — only without the card.
+
 ### Sending a screenshot of the post
 
 Beside the post button, in the same toolbar row, there is a camera button that
