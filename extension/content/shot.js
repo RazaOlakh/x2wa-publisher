@@ -23,6 +23,30 @@ function shotClip(rect, scrollX, scrollY, docWidth, docHeight) {
   return { x, y, width: cappedW, height: capped, scale: 1 };
 }
 
+// Which element one post occupies.
+//
+// X renders every post as <article data-testid="tweet">, and the button is
+// injected into that article's own action bar, so the nearest such ancestor of
+// the clicked button is the post. The href is not used at all: the box that
+// matters is the one the page is actually showing.
+//
+// The failure to guard against is a container that holds several posts - the
+// timeline list, or a thread module. Cropping one of those would photograph
+// the neighbouring posts too, so a candidate that contains another post is
+// refused rather than cropped. The caller reports that instead of sending a
+// picture of the wrong thing.
+const SHOT_POST_SELECTOR = 'article[data-testid="tweet"], article[role="article"]';
+
+function shotContainer(start) {
+  if (!start || typeof start.closest !== 'function') return null;
+  const el = start.closest(SHOT_POST_SELECTOR);
+  if (!el) return null;
+  // A post never contains another post. If this one does, it is a wrapper
+  // whose box spans things that are not this post.
+  if (typeof el.querySelectorAll === 'function' && el.querySelectorAll(SHOT_POST_SELECTOR).length > 0) return null;
+  return el;
+}
+
 // A screenshot is deduplicated against screenshots, not against posting the
 // same post: taking a picture of a post must not stop you from posting it,
 // and vice versa.
@@ -51,5 +75,5 @@ function shotErrorHint(code) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { shotClip, shotKey, shotCaption, shotErrorHint, SHOT_ERROR_HINTS };
+  module.exports = { shotClip, shotContainer, SHOT_POST_SELECTOR, shotKey, shotCaption, shotErrorHint, SHOT_ERROR_HINTS };
 }

@@ -301,6 +301,11 @@ The capture is of that one post, not of the window or the page: the crop is
 computed from the post's own position on the page, and the post does not have
 to be fully on screen to be captured.
 
+The box is found from the button itself — the post is the nearest post element
+above the clicked button. A container that holds more than one post (the
+timeline list, or a thread module) is refused rather than cropped, so a
+neighbouring post can never end up in the picture.
+
 Capturing needs the extension's **debugger** permission. It is attached for
 the length of one capture and detached immediately afterwards, and only ever
 to the tab you clicked in. The alternative — `chrome.tabs.captureVisibleTab` —

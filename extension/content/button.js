@@ -198,8 +198,8 @@ function renderShotButton(btn, state) {
 }
 
 // Screenshot button wiring. Kept beside the post button so the two share
-// the same article lookup and the same feedback path.
-function wireShotButton(btn, article) {
+// the same feedback path.
+function wireShotButton(btn) {
   renderShotButton(btn, 'idle');
 
   btn.addEventListener('click', async (ev) => {
@@ -210,7 +210,10 @@ function wireShotButton(btn, article) {
     if (btn.disabled) return;
     const requestId = 'shot-' + Date.now();
 
-    const currentArticle = article && article.isConnected ? article : btn.closest('article');
+    // The post is found from where the button actually is, so the crop is of
+    // this post alone - never the timeline or a thread wrapper, which holds
+    // more than one post and is refused.
+    const currentArticle = shotContainer(btn);
     if (!currentArticle) {
       renderShotButton(btn, 'error');
       showSnackbar('error', 'Could not capture', shotErrorHint('no-article'));
@@ -592,7 +595,7 @@ function injectButton(article) {
   // pair reads as one group.
   const shotBtn = document.createElement('button');
   shotBtn.type = 'button';
-  wireShotButton(shotBtn, article);
+  wireShotButton(shotBtn);
   bar.appendChild(shotBtn);
 }
 
