@@ -556,6 +556,31 @@ own videos — never whatever the page loaded last. Only an HLS **master**
 playlist is sent, because a rendition is a single video-only stream and would
 produce a silent video.
 
+**How a video is produced (the fast path).** Measured on this project's own
+sources, ffmpeg's HLS demuxer spent about **1 s of CPU but 40–150 s of wall
+clock** on a 5-minute X video: it fetches segments one at a time and each one
+waits a round trip, so the wait was the *network*, not the encoding. Two
+changes follow from that:
+
+1. **Segments are fetched in parallel**, then handed to ffmpeg as local files.
+   Eight workers measured ~2.2 MB/s against ~0.3 MB/s serially. Playlist order,
+   the `#EXT-X-MAP` init section, and the separate audio rendition are all
+   preserved, so audio/video sync is unchanged. ffmpeg still does the remux.
+2. **The remux stream-copies** (`-c copy`) by default — no re-encode — and only
+   falls back to `libx264 -preset veryfast` when the copy is unusable. The
+   output is inspected with `ffprobe` either way; a copy that lost the audio
+   track is rejected, not published.
+
+This adds no new dependency: no `yt-dlp`, no `aria2c`. The source must be an
+X HLS master; anything else uses the previous single-download path. Failures
+that re-encoding cannot fix (ambiguous source, expired signature, unreachable
+playlist) are reported instead of retried more slowly.
+
+Note that for a large video the **WhatsApp upload** is usually the largest
+remaining cost — larger than fetching and remuxing combined. Stream-copy also
+avoids the re-encode bloat that made some outputs *bigger* than the source,
+which matters for that upload.
+
 ## Security / isolation
 
 - The controller binds to `127.0.0.1` only; nothing is reachable from the network.
@@ -614,6 +639,9 @@ node controller/test/repo.test.js            # update checks and fast-forward, a
 node extension/test/screenshot.test.js       # screenshot crop targeting + inline-image transfer
 node controller/test/screenshot-pipeline.test.js  # a captured image becomes a real, sniffed image file
 node extension/test/popup-states.test.js     # every popup state, incl. reconnecting and signed-out
+node controller/test/hls-prefetch.test.js    # HLS parsing, ordered parallel fetch, copy-vs-re-encode, audio preserved
+node controller/test/duplicate-guard.test.js # a post cannot be sent twice while one is running or just after
+node extension/test/video-source.test.js     # an ambiguous video mapping is refused, never guessed
 node scripts/windows/startup.test.js         # Windows launcher contract (static)
 ```
 

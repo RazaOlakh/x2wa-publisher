@@ -1,6 +1,9 @@
 // MV3 service worker: handles messages from the content script and talks to the
 // local controller at http://127.0.0.1:47825. Image source resolution is based on
 // article-scoped references gathered by the content script.
+// video-source.js holds the (testable) rule that names a post's video.
+importScripts('video-source.js');
+
 const CONTROLLER = 'http://127.0.0.1:47825';
 
 function swLog(level,event,data){ const rec={ts:new Date().toISOString(),level,component:'sw',event,...(data||{})}; try{ console.log(JSON.stringify(rec)); }catch{ console.log(`${level} ${event}`); } }
@@ -77,18 +80,8 @@ function resolveVideoSource(videoId, tabId, hints) {
   return { error: 'video-master-unavailable' };
 }
 
-// A video whose poster carries no id (older posts show a plain
-// /media/<id>.jpg thumbnail) can still be named when this post's own
-// document holds exactly one video: one video item maps 1:1 onto one
-// manifest id. With more than one candidate the mapping is ambiguous, so
-// the item is reported instead of guessed.
-function inferVideoId(videoId, hints, usedIds, videoCount) {
-  if (videoId) return videoId;
-  const candidates = Object.keys(hints || {}).filter((id) => hints[id] && hints[id].master);
-  if (videoCount !== 1 || candidates.length !== 1) return null;
-  if (usedIds.has(candidates[0])) return null;
-  return candidates[0];
-}
+// inferVideoId() lives in video-source.js so its ambiguity rule can be
+// tested without a browser; see that file for why it refuses to guess.
 
 function reply(sendResponse, obj) {
   try { sendResponse(obj); } catch {}
@@ -256,7 +249,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           if (r.source && !usedSources.has(r.source)) {
             usedSources.add(r.source);
             media.push({ type: 'video', source: r.source });
-            swLog('info','media-resolved',{requestId:msg.requestId,type:'video',index:i,videoId:videoId,via:r.via,inferred:!it.videoId,source:r.source.slice(0,70)});
+            // Only the origin and path are logged: the playlist query carries
+            // signed parameters that should not sit in logs.
+            swLog('info','media-resolved',{requestId:msg.requestId,type:'video',index:i,videoId:videoId,via:r.via,inferred:!it.videoId,source:r.source.split('?')[0]});
           } else {
             const error = usedSources.has(r.source) ? 'video-source-already-used' : (r.error || 'video-source-unavailable');
             mediaFailures.push({ index: i, type: 'video', videoId: videoId || it.videoId || null, error });
