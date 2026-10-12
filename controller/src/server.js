@@ -11,6 +11,7 @@ const { sessionDir, tmpRoot, acquireSessionLock } = require('./platform');
 const { listPostableChannels, canPostToChannel } = require('./channels');
 const { createHeartbeat } = require('./heartbeat');
 const repo = require('./repo');
+const { decodeInlineImage, isInlineImage, MAX_INLINE_BYTES } = require('./inline-media');
 
 const HOST = '127.0.0.1';
 const PORT = parseInt(process.env.CONTROLLER_PORT || '47825', 10);
@@ -322,7 +323,12 @@ function extractionFailures(body) {
 }
 
 function validMedia(m) {
-  return m && ['image', 'video'].includes(m.type) && typeof m.source === 'string' && m.source.length > 0 && m.source.length < 4096;
+  if (!m || !['image', 'video'].includes(m.type)) return false;
+  if (typeof m.source !== 'string' || m.source.length === 0) return false;
+  // A screenshot is sent inline and is far larger than a URL, so it gets a
+  // size bound of its own rather than the URL's character limit.
+  if (isInlineImage(m.source)) return m.type === 'image' && m.source.length <= MAX_INLINE_BYTES;
+  return m.source.length < 4096;
 }
 
 async function download(source, dest, timeoutMs) {
@@ -445,7 +451,13 @@ async function processMedia(item, jobDir, index) {
   }
 
   const file = path.join(jobDir, `${tag}-` + crypto.randomBytes(6).toString('hex') + '.bin');
-  if (/^https?:\/\//i.test(item.source)) {
+  if (isInlineImage(item.source)) {
+    // A screenshot, captured in the browser and handed over in the request.
+    const decoded = decodeInlineImage(item.source);
+    if (decoded.error) throw new Error(decoded.error);
+    fs.writeFileSync(file, decoded.buffer);
+    log('info','media-inline-write',{requestId:currentJob&&currentJob.requestId,jobId:currentJob&&currentJob.jobId,index:tag,type:decoded.type,size:decoded.buffer.length});
+  } else if (/^https?:\/\//i.test(item.source)) {
     await download(item.source, file, DOWNLOAD_TIMEOUT_MS);
   } else if (fs.existsSync(item.source)) {
     fs.copyFileSync(item.source, file);

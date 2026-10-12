@@ -3,7 +3,7 @@
   "name": "X to WhatsApp Channel Poster",
   "version": "1.0.0",
   "description": "Post content from X.com to a WhatsApp Channel via a local controller.",
-  "permissions": ["storage", "webRequest"],
+  "permissions": ["storage", "webRequest", "debugger"],
   "host_permissions": [
     "https://x.com/*",
     "https://twitter.com/*",
@@ -15,7 +15,7 @@
   "content_scripts": [
     {
       "matches": ["https://x.com/*", "https://twitter.com/*"],
-      "js": ["content/tweet-extractor.js", "content/button.js"],
+      "js": ["content/tweet-extractor.js", "content/shot.js", "content/button.js"],
       "run_at": "document_idle"
     }
   ],

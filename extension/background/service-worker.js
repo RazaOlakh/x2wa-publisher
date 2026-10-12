@@ -94,6 +94,37 @@ function reply(sendResponse, obj) {
   try { sendResponse(obj); } catch {}
 }
 
+// --- screenshot capture --------------------------------------------------
+// A post is captured as an image of that post alone, not of the window or
+// the page. That needs the DevTools capture command with a crop, because
+// chrome.tabs.captureVisibleTab can only ever return the whole viewport, and
+// reaching it would mean asking for <all_urls> - a view of every site the
+// user visits - which is far more than this feature needs.
+//
+// The debugger is attached for the length of one capture and detached again
+// immediately, and only ever to the tab the user just clicked in.
+const CAPTURE_FORMAT = 'jpeg';
+const CAPTURE_QUALITY = 88;
+
+async function captureClip(tabId, clip) {
+  const target = { tabId };
+  await chrome.debugger.attach(target, '1.3');
+  try {
+    const shot = await chrome.debugger.sendCommand(target, 'Page.captureScreenshot', {
+      format: CAPTURE_FORMAT,
+      quality: CAPTURE_QUALITY,
+      captureBeyondViewport: true,
+      clip: { x: clip.x, y: clip.y, width: clip.width, height: clip.height, scale: 1 },
+    });
+    if (!shot || !shot.data) return { error: 'capture-failed' };
+    return { dataUrl: `data:image/${CAPTURE_FORMAT};base64,${shot.data}` };
+  } finally {
+    // Always detached, including when the capture threw: leaving it
+    // attached would hold a debugging banner over the user's page.
+    try { await chrome.debugger.detach(target); } catch { /* already gone */ }
+  }
+}
+
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   // Resolve t.co shortlinks to their canonical destination URLs.
   // The content script cannot read the expanded URL from the DOM (X only
@@ -115,6 +146,72 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       } catch (e) {
         swLog('error', 'link-resolve-error', { count: msg.hrefs.length, error: e.message });
         reply(sendResponse, { ok: false, error: e.message });
+      }
+    })();
+    return true;
+  }
+  if (msg && msg.type === 'SEND_SCREENSHOT') {
+    swLog('info', 'screenshot-received', { requestId: msg.requestId, tweetId: msg.post && msg.post.tweetId });
+    (async () => {
+      const tabId = _sender && _sender.tab && _sender.tab.id;
+      if (typeof tabId !== 'number') return reply(sendResponse, { ok: false, error: 'no-tab' });
+      const clip = msg.clip;
+      if (!clip || !(clip.width > 0) || !(clip.height > 0)) {
+        return reply(sendResponse, { ok: false, error: 'capture-too-small' });
+      }
+      const channelId = await getDefaultChannel();
+      if (!channelId) return reply(sendResponse, { ok: false, error: 'no-default-channel' });
+
+      let shot;
+      try {
+        shot = await captureClip(tabId, clip);
+      } catch (e) {
+        // Chrome refuses this while Developer Tools is open on the tab, which
+        // is the common cause and worth saying so plainly.
+        const reason = String((e && e.message) || e);
+        const error = /devtools/i.test(reason) ? 'capture-unavailable' : 'capture-failed';
+        swLog('warn', 'screenshot-capture-failed', { requestId: msg.requestId, error, reason: reason.slice(0, 120) });
+        return reply(sendResponse, { ok: false, error, reason });
+      }
+      if (shot.error) return reply(sendResponse, { ok: false, error: shot.error });
+
+      // The screenshot is deduplicated under its own key, so photographing a
+      // post neither trips nor is tripped by that post's own guard. The
+      // prefix is re-checked rather than trusted, so a stray value cannot
+      // quietly become the post's real id and make a screenshot block the
+      // post it was taken from.
+      const shotId = typeof msg.dedupeKey === 'string' && msg.dedupeKey.indexOf('shot:') === 0
+        ? msg.dedupeKey
+        : `shot:${msg.requestId || Date.now()}`;
+
+      // Sent through exactly the same endpoint and pipeline as a normal
+      // post, so authentication, channel eligibility, media handling,
+      // duplicate protection and error reporting are all the ones already
+      // in use.
+      const payload = {
+        tweetId: shotId,
+        tweetUrl: (msg.post && msg.post.tweetUrl) || null,
+        text: (msg.post && msg.post.text) || '',
+        media: [{ type: 'image', source: shot.dataUrl }],
+        mediaFailures: [],
+        channelId,
+        kind: 'screenshot',
+      };
+      swLog('info', 'screenshot-controller-request', { requestId: msg.requestId, bytes: shot.dataUrl.length });
+      try {
+        const res = await fetch(`${CONTROLLER}/send`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const j = await res.json();
+        if (j && j.ok) return reply(sendResponse, { ok: true, jobId: j.jobId, sent: j.sent });
+        if (j && j.partial) {
+          return reply(sendResponse, { ok: false, partial: true, jobId: j.jobId, sent: j.sent, failures: j.failures, error: j.error || 'partial-send' });
+        }
+        return reply(sendResponse, { ok: false, error: (j && j.error) || 'send-failed', ...(j && j.failures ? { failures: j.failures } : {}) });
+      } catch (e) {
+        reply(sendResponse, { ok: false, error: String((e && e.message) || e) });
       }
     })();
     return true;

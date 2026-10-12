@@ -122,6 +122,165 @@ function renderButton(btn, state, label) {
   btn.dataset.state = state;
 }
 
+// --- screenshot button ---------------------------------------------------
+// A camera button beside the WhatsApp one, capturing this post alone. It
+// has its own states and its own icons: it is a different action, and the
+// tick on the WhatsApp button means "this was posted", which is not what a
+// screenshot does.
+const SHOT_STYLES = {
+  idle:    { bg: 'transparent', fg: '#536471', border: 'rgba(83,100,113,0.4)' },
+  working: { bg: '#1d9bf0', fg: '#ffffff', border: '#1d9bf0' },
+  success: { bg: '#00a884', fg: '#ffffff', border: '#00a884' },
+  error:   { bg: '#f4212e', fg: '#ffffff', border: '#f4212e' },
+};
+
+function cameraIcon() {
+  const svg = svgEl('svg', { viewBox: '0 0 24 24', width: '15', height: '15', 'aria-hidden': 'true', focusable: 'false' });
+  svg.appendChild(svgEl('path', {
+    fill: 'currentColor',
+    d: 'M9.4 4 8.2 6H4.5A1.5 1.5 0 0 0 3 7.5v11A1.5 1.5 0 0 0 4.5 20h15a1.5 1.5 0 0 0 1.5-1.5v-11A1.5 1.5 0 0 0 19.5 6h-3.7L14.6 4Zm2.6 13.2a4.2 4.2 0 1 1 0-8.4 4.2 4.2 0 0 1 0 8.4m0-1.6a2.6 2.6 0 1 0 0-5.2 2.6 2.6 0 0 0 0 5.2',
+  }));
+  return svg;
+}
+
+function shotSpinnerIcon() {
+  const svg = spinnerIcon();
+  svg.setAttribute('stroke', '#ffffff');
+  return svg;
+}
+
+const SHOT_ICONS = {
+  idle: () => cameraIcon(),
+  working: () => shotSpinnerIcon(),
+  success: () => badgeIcon('M9.55 17.6 4.4 12.45l1.65-1.65 3.5 3.5 8.1-8.1 1.65 1.65z', '#00a884'),
+  error: () => badgeIcon('M6.4 5 12 10.6 17.6 5 19 6.4 13.4 12 19 17.6 17.6 19 12 13.4 6.4 19 5 17.6 10.6 12 5 6.4z', '#f4212e'),
+};
+
+const SHOT_LABELS = {
+  idle: 'Screenshot this post',
+  working: 'Capturing…',
+  success: 'Screenshot sent',
+  error: 'Screenshot failed',
+};
+
+function renderShotButton(btn, state) {
+  const tone = SHOT_STYLES[state] || SHOT_STYLES.idle;
+  btn.textContent = '';
+  btn.appendChild((SHOT_ICONS[state] || SHOT_ICONS.idle)());
+  const fixed = (prop, value) => btn.style.setProperty(prop, value, 'important');
+  fixed('box-sizing', 'border-box');
+  fixed('width', '26px');
+  fixed('height', '26px');
+  fixed('min-width', '26px');
+  fixed('max-width', '26px');
+  fixed('min-height', '26px');
+  fixed('max-height', '26px');
+  fixed('padding', '0');
+  fixed('flex', '0 0 auto');
+  fixed('align-self', 'center');
+  fixed('background', tone.bg);
+  fixed('color', tone.fg);
+  fixed('border', '1px solid ' + tone.border);
+  fixed('border-radius', '50%');
+  fixed('display', 'inline-flex');
+  fixed('align-items', 'center');
+  fixed('justify-content', 'center');
+  fixed('font', 'inherit');
+  fixed('cursor', 'pointer');
+  fixed('margin-left', '6px');
+  fixed('flex-shrink', '0');
+  fixed('transition', 'background-color .18s ease, transform .12s ease');
+  fixed('opacity', '1');
+  const label = SHOT_LABELS[state] || SHOT_LABELS.idle;
+  btn.setAttribute('aria-label', 'Post to WhatsApp: ' + label);
+  btn.title = 'Post to WhatsApp — ' + label;
+  btn.dataset.shotState = state;
+}
+
+// Screenshot button wiring. Kept beside the post button so the two share
+// the same article lookup and the same feedback path.
+function wireShotButton(btn, article) {
+  renderShotButton(btn, 'idle');
+
+  btn.addEventListener('click', async (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    // One screenshot at a time per button: a second click while the first
+    // is still in flight would queue a duplicate send.
+    if (btn.disabled) return;
+    const requestId = 'shot-' + Date.now();
+
+    const currentArticle = article && article.isConnected ? article : btn.closest('article');
+    if (!currentArticle) {
+      renderShotButton(btn, 'error');
+      showSnackbar('error', 'Could not capture', shotErrorHint('no-article'));
+      setTimeout(() => renderShotButton(btn, 'idle'), 4000);
+      return;
+    }
+
+    btn.disabled = true;
+    renderShotButton(btn, 'working');
+
+    // Bring the post into view before measuring: captureBeyondViewport can
+    // reach below the fold, but a post scrolled off entirely has nothing to
+    // anchor to, and this also means the user sees what was captured.
+    const rect = currentArticle.getBoundingClientRect();
+    const clip = shotClip(
+      rect, window.scrollX, window.scrollY,
+      document.documentElement.scrollWidth, document.documentElement.scrollHeight,
+    );
+    if (!clip) {
+      btn.disabled = false;
+      renderShotButton(btn, 'error');
+      showSnackbar('error', 'Could not capture', shotErrorHint('capture-too-small'));
+      setTimeout(() => renderShotButton(btn, 'idle'), 4000);
+      return;
+    }
+
+    let tweetId = null;
+    let tweetUrl = null;
+    try { tweetId = tweetIdFromArticle(currentArticle); } catch { /* no id */ }
+    try {
+      const link = currentArticle.querySelector('a[href*="/status/"]');
+      if (link) tweetUrl = new URL(link.href, location.href).href;
+    } catch { /* no permalink */ }
+
+    let result;
+    try {
+      result = await chrome.runtime.sendMessage({
+        type: 'SEND_SCREENSHOT',
+        requestId,
+        clip,
+        dedupeKey: shotKey(tweetId) || `shot:${requestId}`,
+        post: { tweetId, tweetUrl },
+      });
+    } catch (e) {
+      result = { ok: false, error: 'Failed to fetch' };
+    }
+
+    btn.disabled = false;
+    const where = await channelName();
+    if (result && result.ok) {
+      renderShotButton(btn, 'success');
+      showSnackbar('success',
+        where ? 'Screenshot sent to ' + where : 'Screenshot sent',
+        'The image of this post is in the channel.');
+    } else if (result && result.partial) {
+      renderShotButton(btn, 'error');
+      showSnackbar('info', 'Screenshot partly sent',
+        'The channel received it, but something did not send cleanly.');
+    } else {
+      const code = (result && result.error) || 'capture-failed';
+      renderShotButton(btn, 'error');
+      showSnackbar('error', 'Could not capture', shotErrorHint(code));
+    }
+    // Unlike the post button this returns to idle: a screenshot is a
+    // one-off, and leaving a permanent tick would claim the post has been
+    // captured when it may not have been.
+    setTimeout(() => { if (btn.isConnected) renderShotButton(btn, 'idle'); }, 4000);
+  });
+}
+
 // --- snackbar ------------------------------------------------------------
 // The button is icon-only, so the outcome is also reported in a snackbar at
 // the bottom centre. It is built from inline styles only (like the button),
@@ -428,6 +587,13 @@ function injectButton(article) {
   });
 
   bar.appendChild(btn);
+
+  // The screenshot button goes in immediately after the post button so the
+  // pair reads as one group.
+  const shotBtn = document.createElement('button');
+  shotBtn.type = 'button';
+  wireShotButton(shotBtn, article);
+  bar.appendChild(shotBtn);
 }
 
 function scan() {
