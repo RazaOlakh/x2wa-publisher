@@ -283,7 +283,8 @@ button and the screenshot button.
 
 The toolbar is the extension's own row rather than extra buttons inside X's
 action bar, so X's layout cannot squeeze them and the two sets of controls stay
-visually separate. The icons are line icons — outlined, never solid.
+visually separate. The icons are minimal line icons — outlined, with no
+background and no filled shape.
 
 | The post contains | What is published |
 |---|---|
@@ -342,14 +343,15 @@ it.
 
 ### What the button shows
 
-The button is a small icon that changes as the post is sent, so you can see the
-outcome without opening anything:
+The button is a small, outlined icon — no background, no filled shape — that
+changes as the post is sent, so you can see the outcome without opening
+anything. Its colour and glyph both change:
 
 | State | Icon | Colour | Meaning |
 |---|---|---|---|
-| Idle | WhatsApp glyph | green | ready — click to post |
-| Working | spinner | grey | posting (the spinner keeps turning) |
-| Success | check mark | teal | everything was published |
+| Idle | WhatsApp glyph | grey | ready — click to post |
+| Working | spinner | blue | posting (the spinner keeps turning) |
+| Success | check mark | green | everything was published |
 | Partial | warning | amber | some items published, some could not be fetched |
 | Error | cross | red | nothing was published |
 

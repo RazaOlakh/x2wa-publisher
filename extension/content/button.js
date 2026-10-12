@@ -3,27 +3,31 @@
 //
 // Both of the extension's actions live in a toolbar of their own, placed
 // beneath the post's own action bar (see toolbar.js). Each button is a minimal
-// icon that shows one glyph per state:
-//   idle    WhatsApp glyph   (green)   -> post this to the Channel
-//   working spinner         (grey)    -> posting
-//   success check mark      (teal)    -> posted
+// outline icon with no background that shows one glyph per state:
+//   idle    WhatsApp glyph   (grey)    -> post this to the Channel
+//   working spinner         (blue)    -> posting
+//   success check mark      (green)   -> posted
 //   partial warning         (amber)   -> partially posted
 //   error   cross           (red)     -> not posted
 //
-// Icons are inline, outlined SVG (stroke, no fill) built with createElementNS
-// and animated with SMIL, so nothing is fetched and no stylesheet is injected
-// into the page. There is no visible label: the meaning is carried by the
-// glyph, and by aria-label and title so assistive technology and hover still
-// explain what it does and what state it is in.
+// Icons are inline, outlined SVG (stroke, no fill, no solid shape) built with
+// createElementNS and animated with SMIL, so nothing is fetched and no
+// stylesheet is injected into the page. There is no visible label: the meaning
+// is carried by the glyph and its colour, and by aria-label and title so
+// assistive technology and hover still explain what it does and what state it
+// is in.
 const INJECTION_FLAG = '__xwapButtonInjected';
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
+// No background, no border and no filled shape: a state is only the colour of
+// the outline, the way X's own action icons work. The glyph itself carries the
+// meaning, and the colour reinforces it.
 const BUTTON_STYLES = {
-  idle:    { bg: '#25d366', fg: '#fff', border: 'transparent' },
-  working: { bg: '#eff3f4', fg: '#536471', border: '#cfd9de' },
-  success: { bg: '#00a884', fg: '#fff', border: 'transparent' },
-  partial: { bg: '#e8912d', fg: '#fff', border: 'transparent' },
-  error:   { bg: '#f4212e', fg: '#fff', border: 'transparent' },
+  idle:    { fg: '#536471' },
+  working: { fg: '#1d9bf0' },
+  success: { fg: '#00a884' },
+  partial: { fg: '#e8912d' },
+  error:   { fg: '#f4212e' },
 };
 
 function xlog(level, event, data) {
@@ -84,10 +88,11 @@ function crossIcon() {
 }
 
 function alertIcon() {
-  // A stroked stem with a solid dot, so the mark still reads at 16px.
+  // Drawn entirely with strokes: the dot is a round-capped zero-length line,
+  // so nothing in the icon set is a filled shape.
   return lineIcon([
-    ['path', { d: 'M12 6.5v6' }],
-    ['circle', { cx: '12', cy: '16.8', r: '1', fill: 'currentColor', stroke: 'none' }],
+    ['line', { x1: '12', y1: '6.5', x2: '12', y2: '12.5' }],
+    ['line', { x1: '12', y1: '16.6', x2: '12.01', y2: '16.6' }],
   ]);
 }
 
@@ -107,12 +112,12 @@ function renderButton(btn, state, label) {
   btn.textContent = '';
   btn.appendChild(icon);
 
-  // The page's own stylesheet targets the buttons in an action bar, and an
+  // The page's own stylesheet targets buttons in an action bar, and an
   // overfull bar squeezes a flex item's width while leaving its height
-  // alone. Either one turns the circle into a tall ellipse. Setting these
-  // with the important flag means a stylesheet rule -- even one that is
-  // itself important -- cannot resize the button, and fixing the minimum as
-  // well stops the flex layout compressing it.
+  // alone. Either one can distort the icon. Setting these with the important
+  // flag means a stylesheet rule -- even one that is itself important --
+  // cannot resize the button, and fixing the minimum as well stops the flex
+  // layout compressing it.
   const fixed = (prop, value) => btn.style.setProperty(prop, value, 'important');
   const SIZE = '26px';
   fixed('box-sizing', 'border-box');
@@ -126,10 +131,11 @@ function renderButton(btn, state, label) {
   fixed('flex', '0 0 auto');
   fixed('align-self', 'center');
 
-  fixed('background', tone.bg);
+  // No background, no border, no filled shape: the icon is all there is, so
+  // the colour of the stroke is what shows the state.
+  fixed('background', 'transparent');
+  fixed('border', '0');
   fixed('color', tone.fg);
-  fixed('border', '1px solid ' + tone.border);
-  fixed('border-radius', '50%');
   fixed('display', 'inline-flex');
   fixed('align-items', 'center');
   fixed('justify-content', 'center');
@@ -139,7 +145,7 @@ function renderButton(btn, state, label) {
   // sits flush and the spacing lives in one place.
   fixed('margin-left', '0');
   fixed('flex-shrink', '0');
-  fixed('transition', 'background-color .18s ease, transform .12s ease');
+  fixed('transition', 'color .18s ease, transform .12s ease');
   fixed('opacity', '1');
 
   // Icon-only: name the control and its state for assistive tech and hover.
@@ -154,10 +160,10 @@ function renderButton(btn, state, label) {
 // tick on the WhatsApp button means "this was posted", which is not what a
 // screenshot does.
 const SHOT_STYLES = {
-  idle:    { bg: 'transparent', fg: '#536471', border: 'rgba(83,100,113,0.4)' },
-  working: { bg: '#1d9bf0', fg: '#ffffff', border: '#1d9bf0' },
-  success: { bg: '#00a884', fg: '#ffffff', border: '#00a884' },
-  error:   { bg: '#f4212e', fg: '#ffffff', border: '#f4212e' },
+  idle:    { fg: '#536471' },
+  working: { fg: '#1d9bf0' },
+  success: { fg: '#00a884' },
+  error:   { fg: '#f4212e' },
 };
 
 function cameraIcon() {
@@ -169,9 +175,9 @@ function cameraIcon() {
 }
 
 function shotSpinnerIcon() {
-  const svg = spinnerIcon();
-  svg.setAttribute('stroke', '#ffffff');
-  return svg;
+  // Same spinner, coloured by the button's current colour like every other
+  // glyph: no white override, because there is no coloured disc behind it.
+  return spinnerIcon();
 }
 
 const SHOT_ICONS = {
@@ -203,10 +209,9 @@ function renderShotButton(btn, state) {
   fixed('padding', '0');
   fixed('flex', '0 0 auto');
   fixed('align-self', 'center');
-  fixed('background', tone.bg);
+  fixed('background', 'transparent');
+  fixed('border', '0');
   fixed('color', tone.fg);
-  fixed('border', '1px solid ' + tone.border);
-  fixed('border-radius', '50%');
   fixed('display', 'inline-flex');
   fixed('align-items', 'center');
   fixed('justify-content', 'center');
@@ -215,7 +220,7 @@ function renderShotButton(btn, state) {
   // Spaced by the toolbar's gap, like the post button beside it.
   fixed('margin-left', '0');
   fixed('flex-shrink', '0');
-  fixed('transition', 'background-color .18s ease, transform .12s ease');
+  fixed('transition', 'color .18s ease, transform .12s ease');
   fixed('opacity', '1');
   const label = SHOT_LABELS[state] || SHOT_LABELS.idle;
   btn.setAttribute('aria-label', 'Post to WhatsApp: ' + label);
