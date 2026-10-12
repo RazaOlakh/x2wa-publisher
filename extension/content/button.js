@@ -1,18 +1,20 @@
 // Content script: inject the "Post to WhatsApp" button and delegate the
 // actual work to the background worker.
 //
-// The button is a minimal icon that shows one glyph per state:
+// Both of the extension's actions live in a toolbar of their own, placed
+// beneath the post's own action bar (see toolbar.js). Each button is a minimal
+// icon that shows one glyph per state:
 //   idle    WhatsApp glyph   (green)   -> post this to the Channel
 //   working spinner         (grey)    -> posting
 //   success check mark      (teal)    -> posted
 //   partial warning         (amber)   -> partially posted
 //   error   cross           (red)     -> not posted
 //
-// Icons are inline SVG built with createElementNS and animated with SMIL, so
-// nothing is fetched and no stylesheet is injected into the page. There is no
-// visible label: the meaning is carried by the glyph, and by aria-label and
-// title so assistive technology and hover still explain what it does and what
-// state it is in.
+// Icons are inline, outlined SVG (stroke, no fill) built with createElementNS
+// and animated with SMIL, so nothing is fetched and no stylesheet is injected
+// into the page. There is no visible label: the meaning is carried by the
+// glyph, and by aria-label and title so assistive technology and hover still
+// explain what it does and what state it is in.
 const INJECTION_FLAG = '__xwapButtonInjected';
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -36,17 +38,30 @@ function svgEl(tag, attrs) {
 }
 
 // --- icons ---------------------------------------------------------------
-function whatsappIcon() {
-  const svg = svgEl('svg', { viewBox: '0 0 24 24', width: '15', height: '15', 'aria-hidden': 'true', focusable: 'false' });
-  svg.appendChild(svgEl('path', {
-    fill: 'currentColor',
-    d: 'M12.04 2C6.58 2 2.13 6.45 2.13 11.91c0 1.75.46 3.45 1.32 4.95L2 22l5.25-1.38a9.9 9.9 0 0 0 4.79 1.22h.01c5.46 0 9.91-4.45 9.91-9.91 0-2.65-1.03-5.14-2.9-7.01A9.82 9.82 0 0 0 12.04 2m0 18.15h-.01a8.2 8.2 0 0 1-4.19-1.15l-.3-.18-3.12.82.83-3.04-.2-.31a8.17 8.17 0 0 1-1.26-4.38c0-4.54 3.7-8.23 8.25-8.23a8.2 8.2 0 0 1 5.83 2.42 8.18 8.18 0 0 1 2.41 5.82c0 4.54-3.7 8.23-8.24 8.23m4.52-6.16c-.25-.12-1.47-.72-1.69-.81-.23-.08-.39-.12-.56.13-.16.24-.64.8-.79.97-.14.16-.29.19-.54.06-.25-.12-1.05-.39-1.99-1.23-.74-.66-1.24-1.47-1.38-1.72-.15-.25-.02-.38.11-.51.11-.11.25-.29.37-.43.13-.15.17-.25.25-.41.08-.17.04-.31-.02-.43-.06-.12-.56-1.34-.76-1.84-.2-.48-.4-.41-.56-.42h-.48c-.16 0-.43.06-.65.31s-.86.84-.86 2.05.88 2.38 1 2.54c.12.17 1.75 2.67 4.23 3.74.59.26 1.05.41 1.41.52.59.19 1.13.16 1.56.1.48-.07 1.47-.6 1.67-1.18.21-.58.21-1.07.15-1.18-.06-.1-.23-.16-.48-.28',
-  }));
+// Outline, not solid: every glyph is drawn as a stroke with no fill, so the
+// whole set reads as one line-icon family. The colour of the button behind it
+// carries the state, so the glyph only has to say what the action is.
+const ICON_CANVAS = { viewBox: '0 0 24 24', width: '16', height: '16', 'aria-hidden': 'true', focusable: 'false' };
+
+function lineIcon(children) {
+  const svg = svgEl('svg', Object.assign({
+    fill: 'none', stroke: 'currentColor', 'stroke-width': '2',
+    'stroke-linecap': 'round', 'stroke-linejoin': 'round',
+  }, ICON_CANVAS));
+  for (const child of children) svg.appendChild(svgEl(child[0], child[1]));
   return svg;
 }
 
+function whatsappIcon() {
+  // A speech bubble with its tail, and the handset outlined inside it.
+  return lineIcon([
+    ['path', { d: 'M12 3.2a8.8 8.8 0 0 0-7.5 13.4L3.2 20.8l4.3-1.2A8.8 8.8 0 1 0 12 3.2Z' }],
+    ['path', { 'stroke-width': '1.5', d: 'M9.1 8.2c-.2 0-.5 0-.7.3-.2.3-.8.8-.8 1.9s.8 2.2 1 2.4c.1.2 1.6 2.4 3.8 3.3 1.9.8 2.2.6 2.6.6.4 0 1.3-.5 1.5-1.1.2-.5.2-1 .1-1.1 0-.1-.2-.2-.4-.3-.3-.1-1.3-.7-1.5-.7-.2-.1-.4-.1-.5.1-.2.2-.6.8-.7.9-.1.1-.3.2-.5 0-.3-.1-1-.4-1.8-1.1-.7-.6-1.1-1.3-1.3-1.5-.1-.2 0-.4.1-.5l.4-.4c.1-.1.1-.2.2-.4 0-.1 0-.3 0-.4-.1-.1-.5-1.2-.7-1.6-.2-.4-.4-.3-.5-.3Z' }],
+  ]);
+}
+
 function spinnerIcon() {
-  const svg = svgEl('svg', { viewBox: '0 0 24 24', width: '15', height: '15', 'aria-hidden': 'true', focusable: 'false' });
+  const svg = svgEl('svg', Object.assign({}, ICON_CANVAS));
   svg.appendChild(svgEl('circle', {
     cx: '12', cy: '12', r: '9',
     fill: 'none', stroke: 'currentColor', 'stroke-width': '2.5', 'stroke-linecap': 'round',
@@ -60,17 +75,26 @@ function spinnerIcon() {
   return svg;
 }
 
-function badgeIcon(pathD, bg) {
-  const svg = svgEl('svg', { viewBox: '0 0 24 24', width: '15', height: '15', 'aria-hidden': 'true', focusable: 'false' });
-  svg.appendChild(svgEl('circle', { cx: '12', cy: '12', r: '11', fill: 'rgba(255,255,255,0.22)' }));
-  svg.appendChild(svgEl('path', { fill: '#fff', d: pathD }));
-  return svg;
+function checkIcon() {
+  return lineIcon([['path', { d: 'M5 12.5 9.5 17 19 7.5' }]]);
+}
+
+function crossIcon() {
+  return lineIcon([['path', { d: 'M6.5 6.5 17.5 17.5' }], ['path', { d: 'M17.5 6.5 6.5 17.5' }]]);
+}
+
+function alertIcon() {
+  // A stroked stem with a solid dot, so the mark still reads at 16px.
+  return lineIcon([
+    ['path', { d: 'M12 6.5v6' }],
+    ['circle', { cx: '12', cy: '16.8', r: '1', fill: 'currentColor', stroke: 'none' }],
+  ]);
 }
 
 const ICONS = {
-  success: () => badgeIcon('M9.55 17.6 4.4 12.45l1.65-1.65 3.5 3.5 8.1-8.1 1.65 1.65z', '#00a884'),
-  error:   () => badgeIcon('M6.4 5 12 10.6 17.6 5 19 6.4 13.4 12 19 17.6 17.6 19 12 13.4 6.4 19 5 17.6 10.6 12 5 6.4z', '#f4212e'),
-  partial: () => badgeIcon('M11 5h2v8h-2zm0 10h2v2h-2z', '#e8912d'),
+  success: () => checkIcon(),
+  error:   () => crossIcon(),
+  partial: () => alertIcon(),
 };
 
 // --- rendering -----------------------------------------------------------
@@ -111,7 +135,9 @@ function renderButton(btn, state, label) {
   fixed('justify-content', 'center');
   fixed('font', 'inherit');
   fixed('cursor', 'pointer');
-  fixed('margin-left', '6px');
+  // No left margin: the toolbar spaces its icons with a gap, so each button
+  // sits flush and the spacing lives in one place.
+  fixed('margin-left', '0');
   fixed('flex-shrink', '0');
   fixed('transition', 'background-color .18s ease, transform .12s ease');
   fixed('opacity', '1');
@@ -135,12 +161,11 @@ const SHOT_STYLES = {
 };
 
 function cameraIcon() {
-  const svg = svgEl('svg', { viewBox: '0 0 24 24', width: '15', height: '15', 'aria-hidden': 'true', focusable: 'false' });
-  svg.appendChild(svgEl('path', {
-    fill: 'currentColor',
-    d: 'M9.4 4 8.2 6H4.5A1.5 1.5 0 0 0 3 7.5v11A1.5 1.5 0 0 0 4.5 20h15a1.5 1.5 0 0 0 1.5-1.5v-11A1.5 1.5 0 0 0 19.5 6h-3.7L14.6 4Zm2.6 13.2a4.2 4.2 0 1 1 0-8.4 4.2 4.2 0 0 1 0 8.4m0-1.6a2.6 2.6 0 1 0 0-5.2 2.6 2.6 0 0 0 0 5.2',
-  }));
-  return svg;
+  // Body, lens and the small viewfinder bump, all stroked.
+  return lineIcon([
+    ['path', { d: 'M3 8.6A2.6 2.6 0 0 1 5.6 6h1.8l1.2-2h6.8l1.2 2h1.8A2.6 2.6 0 0 1 21 8.6v7.8A2.6 2.6 0 0 1 18.4 19H5.6A2.6 2.6 0 0 1 3 16.4Z' }],
+    ['circle', { cx: '12', cy: '12.4', r: '3.2' }],
+  ]);
 }
 
 function shotSpinnerIcon() {
@@ -152,8 +177,8 @@ function shotSpinnerIcon() {
 const SHOT_ICONS = {
   idle: () => cameraIcon(),
   working: () => shotSpinnerIcon(),
-  success: () => badgeIcon('M9.55 17.6 4.4 12.45l1.65-1.65 3.5 3.5 8.1-8.1 1.65 1.65z', '#00a884'),
-  error: () => badgeIcon('M6.4 5 12 10.6 17.6 5 19 6.4 13.4 12 19 17.6 17.6 19 12 13.4 6.4 19 5 17.6 10.6 12 5 6.4z', '#f4212e'),
+  success: () => checkIcon(),
+  error: () => crossIcon(),
 };
 
 const SHOT_LABELS = {
@@ -187,7 +212,8 @@ function renderShotButton(btn, state) {
   fixed('justify-content', 'center');
   fixed('font', 'inherit');
   fixed('cursor', 'pointer');
-  fixed('margin-left', '6px');
+  // Spaced by the toolbar's gap, like the post button beside it.
+  fixed('margin-left', '0');
   fixed('flex-shrink', '0');
   fixed('transition', 'background-color .18s ease, transform .12s ease');
   fixed('opacity', '1');
@@ -589,14 +615,18 @@ function injectButton(article) {
     }
   });
 
-  bar.appendChild(btn);
+  // Both actions live in our own row beneath X's icons, not inside X's action
+  // bar: the page's flex layout can no longer squeeze them, and later actions
+  // have somewhere obvious to go.
+  const toolbar = toolbarFor(bar);
+  toolbar.appendChild(btn);
 
-  // The screenshot button goes in immediately after the post button so the
-  // pair reads as one group.
+  // The screenshot button sits beside the post button so the pair reads as
+  // one group.
   const shotBtn = document.createElement('button');
   shotBtn.type = 'button';
   wireShotButton(shotBtn);
-  bar.appendChild(shotBtn);
+  toolbar.appendChild(shotBtn);
 }
 
 function scan() {

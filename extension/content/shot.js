@@ -25,8 +25,8 @@ function shotClip(rect, scrollX, scrollY, docWidth, docHeight) {
 
 // Which element one post occupies.
 //
-// X renders every post as <article data-testid="tweet">, and the button is
-// injected into that article's own action bar, so the nearest such ancestor of
+// X renders every post as <article data-testid="tweet">, and the buttons are
+// injected into a toolbar inside that article, so the nearest such ancestor of
 // the clicked button is the post. The href is not used at all: the box that
 // matters is the one the page is actually showing.
 //

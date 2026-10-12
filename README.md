@@ -276,7 +276,14 @@ cleared and the popup explains why, rather than leaving you posting to nowhere.
 
 # Post something
 
-Go to x.com, and every post gets a **Post to WhatsApp** button.
+Go to x.com, and every post gets the extension's **toolbar**: a row of its own
+icons, sitting directly beneath the post's own action bar (reply, repost, like,
+share). New actions go in that row; for now it holds the **Post to WhatsApp**
+button and the screenshot button.
+
+The toolbar is the extension's own row rather than extra buttons inside X's
+action bar, so X's layout cannot squeeze them and the two sets of controls stay
+visually separate. The icons are line icons — outlined, never solid.
 
 | The post contains | What is published |
 |---|---|
@@ -292,10 +299,10 @@ Go to x.com, and every post gets a **Post to WhatsApp** button.
 
 ### Sending a screenshot of the post
 
-Next to the post button there is a camera button that sends **a picture of the
-post itself** — the text, images and layout as they appear — instead of the
-post's own media. Useful when you want the Channel to look like what you saw,
-rather than a pile of separate images and videos.
+Beside the post button, in the same toolbar row, there is a camera button that
+sends **a picture of the post itself** — the text, images and layout as they
+appear — instead of the post's own media. Useful when you want the Channel to
+look like what you saw, rather than a pile of separate images and videos.
 
 The capture is of that one post, not of the window or the page: the crop is
 computed from the post's own position on the page, and the post does not have
@@ -644,6 +651,7 @@ node controller/test/dependency.test.js      # vendored library + patches intact
 node controller/test/controller.test.js      # session paths, single-instance lock, channel eligibility, liveness watchdog
 node controller/test/repo.test.js            # update checks and fast-forward, against throwaway repos (no network)
 node extension/test/screenshot.test.js       # screenshot crop targeting + inline-image transfer
+node extension/test/toolbar.test.js          # our icons get a row of their own beneath X's action bar
 node controller/test/screenshot-pipeline.test.js  # a captured image becomes a real, sniffed image file
 node extension/test/popup-states.test.js     # every popup state, incl. reconnecting and signed-out
 node controller/test/hls-prefetch.test.js    # HLS parsing, ordered parallel fetch, copy-vs-re-encode, audio preserved
