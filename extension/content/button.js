@@ -149,9 +149,18 @@ function renderButton(btn, state, label) {
   fixed('opacity', '1');
 
   // Icon-only: name the control and its state for assistive tech and hover.
-  btn.setAttribute('aria-label', 'Post to WhatsApp: ' + label);
-  btn.title = 'Post to WhatsApp — ' + label;
+  // The "name the author" variant is otherwise an exact copy, so the two are
+  // told apart by this label (and by position) rather than by a different glyph.
+  const action = buttonAction(btn);
+  const stateText = state === 'idle' ? '' : (label || '');
+  btn.setAttribute('aria-label', stateText ? action + ': ' + stateText : action);
+  btn.title = stateText ? action + ' \u2014 ' + stateText : action;
   btn.dataset.state = state;
+}
+
+// The two send buttons share one glyph and one handler; only this name differs.
+function buttonAction(btn) {
+  return btn.getAttribute('data-xwap-named') === '1' ? 'Post with author name' : 'Post to WhatsApp';
 }
 
 // --- screenshot button ---------------------------------------------------
@@ -505,8 +514,9 @@ function rememberSent(tweetId, where) {
 
 function markSent(btn) {
   renderButton(btn, 'success', 'Sent');
-  btn.title = 'Post to WhatsApp \u2014 already sent';
-  btn.setAttribute('aria-label', 'Post to WhatsApp: already sent');
+  const action = buttonAction(btn);
+  btn.title = action + ' \u2014 already sent';
+  btn.setAttribute('aria-label', action + ': already sent');
 }
 
 // Restores the tick on a post that has already been sent. Synchronous once
@@ -525,15 +535,14 @@ function restoreSentState(article, btn) {
   });
 }
 
-function injectButton(article) {
-  if (article[INJECTION_FLAG]) return;
-  article[INJECTION_FLAG] = true;
-
-  const bar = article.querySelector('div[role="group"]');
-  if (!bar) return;
-
+// Build one of the two send buttons. They are identical apart from what they
+// send: the second also puts the author's name above the post. `named` lives on
+// the element so every later state - including the restored "already sent"
+// tick - keeps the right name for assistive tech and hover.
+function createPostButton(article, named) {
   const btn = document.createElement('button');
   btn.type = 'button';
+  if (named) btn.setAttribute('data-xwap-named', '1');
   renderButton(btn, 'idle', 'Post to WhatsApp');
   // Hidden for the moment it takes to find out whether this post has already
   // been sent, so it can never be seen as untried first.
@@ -541,93 +550,111 @@ function injectButton(article) {
   restoreSentState(article, btn).then(() => {
     btn.style.setProperty('visibility', 'visible', 'important');
   }, () => { btn.style.setProperty('visibility', 'visible', 'important'); });
+  btn.addEventListener('click', (ev) => onPostClick(ev, btn, named));
+  return btn;
+}
 
-  btn.addEventListener('click', async (ev) => {
-    ev.preventDefault();
-    ev.stopPropagation();
-    if (btn.disabled) return;
-    const requestId = 'req-' + Date.now();
-    try { xlog('info', 'button-click', { requestId, articleUrl: location.href }); } catch {}
+async function onPostClick(ev, btn, named) {
+  ev.preventDefault();
+  ev.stopPropagation();
+  if (btn.disabled) return;
+  const requestId = 'req-' + Date.now();
+  try { xlog('info', 'button-click', { requestId, named: !!named, articleUrl: location.href }); } catch {}
 
-    const currentArticle = btn.closest('article');
-    if (!currentArticle) {
-      renderButton(btn, 'error', 'Err');
-      showSnackbar('error', 'Could not post', 'The post could not be read from the page.');
-      xlog('error', 'extraction-failed', { requestId, error: 'no article' });
-      return;
+  const currentArticle = btn.closest('article');
+  if (!currentArticle) {
+    renderButton(btn, 'error', 'Err');
+    showSnackbar('error', 'Could not post', 'The post could not be read from the page.');
+    xlog('error', 'extraction-failed', { requestId, error: 'no article' });
+    return;
+  }
+
+  try { xlog('info', 'extraction-started', { requestId }); } catch {}
+  let post = await window.__xwapExtractPostAsync(currentArticle);
+  try { xlog('info', 'extraction-succeeded', { requestId, tweetId: post && post.tweetId, textLength: post && post.text ? post.text.length : 0, mediaTypes: post ? [post.hasImage ? 'image' : null, post.hasVideo ? 'video' : null].filter(Boolean) : [], error: post ? post.error : 'missing' }); } catch {}
+
+  if (post.error) {
+    renderButton(btn, 'error', 'Unsupported');
+    showSnackbar('error', 'Could not post this one', 'X did not expose the text, link or media of this post.');
+    xlog('error', 'extraction-failed', { requestId, error: post.error });
+    setTimeout(() => renderButton(btn, 'idle', 'Post to WhatsApp'), 4000);
+    return;
+  }
+
+  // Only the "name the author" button changes the post, and it changes only
+  // the front of it, so the link-first order arranged above stays beneath the
+  // name. With no author found the text goes through untouched.
+  if (named) post = { ...post, text: withAuthorHeader(post.text, post.author) };
+
+  btn.disabled = true;
+  renderButton(btn, 'working', 'Sending…');
+  // Once it is sent the tick stays put; only a failure reverts, so the
+  // post can be tried again.
+  let sent = false;
+  try {
+    const started = Date.now();
+    try { xlog('info', 'send-started', { requestId, tweetId: post.tweetId, named: !!named, mediaTypes: post.hasImage ? ['image'] : [] }); } catch {}
+    const result = await chrome.runtime.sendMessage({ type: 'SEND_POST', post, requestId });
+    try { xlog('info', 'response-received', { requestId, jobId: result && result.jobId, durationMs: Date.now() - started }); } catch {}
+    const total = (result && result.sent ? result.sent.length : 0) + (result && result.failures ? result.failures.length : 0);
+    const where = await channelName();
+    if (result && result.ok) {
+      sent = true;
+      renderButton(btn, 'success', 'Sent');
+      rememberSent(post.tweetId, where);
+      const count = result.sent ? result.sent.length : 0;
+      showSnackbar('success', where ? 'Posted to ' + where : 'Posted to WhatsApp',
+        count > 1 ? count + ' messages sent.' : 'Your post is in the channel.');
+      try { xlog('info', 'send-succeeded', { requestId, tweetId: post.tweetId, jobId: result.jobId }); } catch {}
+    } else if (result && result.partial) {
+      const sentCount = result.sent ? result.sent.length : 0;
+      renderButton(btn, 'partial', `Partial ${sentCount}/${total}`);
+      showSnackbar('info', 'Partly posted',
+        sentCount + ' of ' + total + ' items reached the channel — some media could not be fetched.');
+      try { xlog('warn', 'send-partial', { requestId, tweetId: post.tweetId, jobId: result.jobId, sent: sentCount, failures: result.failures }); } catch {}
+    } else {
+      const code = (result && result.error) || 'failed';
+      renderButton(btn, 'error', `Err: ${code}`);
+      showSnackbar('error', 'Could not post', errorDetail(code));
+      try { xlog('error', 'send-failed', { requestId, tweetId: post.tweetId, error: result ? result.error : 'unknown' }); } catch {}
     }
+  } catch (e) {
+    renderButton(btn, 'error', 'Err');
+    showSnackbar('error', 'Could not post', errorDetail('Failed to fetch'));
+    try { xlog('error', 'send-failed', { requestId, tweetId: post.tweetId, error: e && e.message }); } catch {}
+  } finally {
+    btn.disabled = false;
+  }
+  // Never wipe a tick: neither one this send just produced, nor one
+  // restored while the send was running. A send still in flight is
+  // left alone too, or a second click would be reset out from under
+  // itself.
+  if (!sent) {
+    setTimeout(() => {
+      const s = btn.dataset.state;
+      if (s !== 'success' && s !== 'working') renderButton(btn, 'idle', 'Post to WhatsApp');
+    }, 4000);
+  }
+}
 
-    try { xlog('info', 'extraction-started', { requestId }); } catch {}
-    const post = await window.__xwapExtractPostAsync(currentArticle);
-    try { xlog('info', 'extraction-succeeded', { requestId, tweetId: post && post.tweetId, textLength: post && post.text ? post.text.length : 0, mediaTypes: post ? [post.hasImage ? 'image' : null, post.hasVideo ? 'video' : null].filter(Boolean) : [], error: post ? post.error : 'missing' }); } catch {}
+function injectButton(article) {
+  if (article[INJECTION_FLAG]) return;
+  article[INJECTION_FLAG] = true;
 
-    if (post.error) {
-      renderButton(btn, 'error', 'Unsupported');
-      showSnackbar('error', 'Could not post this one', 'X did not expose the text, link or media of this post.');
-      xlog('error', 'extraction-failed', { requestId, error: post.error });
-      setTimeout(() => renderButton(btn, 'idle', 'Post to WhatsApp'), 4000);
-      return;
-    }
-
-    btn.disabled = true;
-    renderButton(btn, 'working', 'Sending…');
-    // Once it is sent the tick stays put; only a failure reverts, so the
-    // post can be tried again.
-    let sent = false;
-    try {
-      const started = Date.now();
-      try { xlog('info', 'send-started', { requestId, tweetId: post.tweetId, mediaTypes: post.hasImage ? ['image'] : [] }); } catch {}
-      const result = await chrome.runtime.sendMessage({ type: 'SEND_POST', post, requestId });
-      try { xlog('info', 'response-received', { requestId, jobId: result && result.jobId, durationMs: Date.now() - started }); } catch {}
-      const total = (result && result.sent ? result.sent.length : 0) + (result && result.failures ? result.failures.length : 0);
-      const where = await channelName();
-      if (result && result.ok) {
-        sent = true;
-        renderButton(btn, 'success', 'Sent');
-        rememberSent(post.tweetId, where);
-        const count = result.sent ? result.sent.length : 0;
-        showSnackbar('success', where ? 'Posted to ' + where : 'Posted to WhatsApp',
-          count > 1 ? count + ' messages sent.' : 'Your post is in the channel.');
-        try { xlog('info', 'send-succeeded', { requestId, tweetId: post.tweetId, jobId: result.jobId }); } catch {}
-      } else if (result && result.partial) {
-        const sentCount = result.sent ? result.sent.length : 0;
-        renderButton(btn, 'partial', `Partial ${sentCount}/${total}`);
-        showSnackbar('info', 'Partly posted',
-          sentCount + ' of ' + total + ' items reached the channel — some media could not be fetched.');
-        try { xlog('warn', 'send-partial', { requestId, tweetId: post.tweetId, jobId: result.jobId, sent: sentCount, failures: result.failures }); } catch {}
-      } else {
-        const code = (result && result.error) || 'failed';
-        renderButton(btn, 'error', `Err: ${code}`);
-        showSnackbar('error', 'Could not post', errorDetail(code));
-        try { xlog('error', 'send-failed', { requestId, tweetId: post.tweetId, error: result ? result.error : 'unknown' }); } catch {}
-      }
-    } catch (e) {
-      renderButton(btn, 'error', 'Err');
-      showSnackbar('error', 'Could not post', errorDetail('Failed to fetch'));
-      try { xlog('error', 'send-failed', { requestId, tweetId: post.tweetId, error: e && e.message }); } catch {}
-    } finally {
-      btn.disabled = false;
-    }
-    // Never wipe a tick: neither one this send just produced, nor one
-    // restored while the send was running. A send still in flight is
-    // left alone too, or a second click would be reset out from under
-    // itself.
-    if (!sent) {
-      setTimeout(() => {
-        const s = btn.dataset.state;
-        if (s !== 'success' && s !== 'working') renderButton(btn, 'idle', 'Post to WhatsApp');
-      }, 4000);
-    }
-  });
+  const bar = article.querySelector('div[role="group"]');
+  if (!bar) return;
 
   // Both actions live in our own row beneath X's icons, not inside X's action
   // bar: the page's flex layout can no longer squeeze them, and later actions
   // have somewhere obvious to go.
   const toolbar = toolbarFor(bar);
-  toolbar.appendChild(btn);
 
-  // The screenshot button sits beside the post button so the pair reads as
-  // one group.
+  // The plain send button, and beside it a duplicate that also puts the
+  // author's name above the post ("Imran Khan's Tweet").
+  toolbar.appendChild(createPostButton(article, false));
+  toolbar.appendChild(createPostButton(article, true));
+
+  // The screenshot button sits beside the pair so the row reads as one group.
   const shotBtn = document.createElement('button');
   shotBtn.type = 'button';
   wireShotButton(shotBtn);

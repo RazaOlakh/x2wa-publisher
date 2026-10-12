@@ -279,7 +279,8 @@ cleared and the popup explains why, rather than leaving you posting to nowhere.
 Go to x.com, and every post gets the extension's **toolbar**: a row of its own
 icons, sitting directly beneath the post's own action bar (reply, repost, like,
 share). New actions go in that row; for now it holds the **Post to WhatsApp**
-button and the screenshot button.
+button, a duplicate **Post with the author's name** button, and the screenshot
+button.
 
 The toolbar is the extension's own row rather than extra buttons inside X's
 action bar, so X's layout cannot squeeze them and the two sets of controls stay
@@ -336,6 +337,25 @@ message box and waiting for the preview to appear before hitting send.
 `controller/scripts/apply-patches.js` applies this to the vendored client, and
 `controller/test/dependency.test.js` guards it. If a link's preview cannot be
 fetched, the message is still sent — only without the card.
+
+### Naming the author
+
+Beside the post button there is a duplicate of it that puts the **author's name
+on top of the post**. A post by Imran Khan is sent as
+
+```
+Imran Khan's Tweet
+
+<the post>
+```
+
+The name is read from the post's own byline — the display name only, never the
+`@handle`, the timestamp, or the author of a quoted post nested inside it. If
+the name cannot be read, the post is still sent, just without the header.
+
+The header goes above whatever the post's text already is, so a text post's
+link-first order (above) is kept beneath the name. Both send buttons publish the
+same post; the only difference is that one names the author.
 
 ### Sending a screenshot of the post
 
@@ -699,6 +719,7 @@ node controller/test/hls-prefetch.test.js    # HLS parsing, ordered parallel fet
 node controller/test/duplicate-guard.test.js # a post cannot be sent twice while one is running or just after
 node extension/test/video-source.test.js     # an ambiguous video mapping is refused, never guessed
 node extension/test/link-first.test.js       # a text-only post's link moves to the top, media posts untouched
+node extension/test/author-header.test.js    # the author's name is read cleanly and put above the post
 node scripts/windows/startup.test.js         # Windows launcher contract (static)
 ```
 

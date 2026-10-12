@@ -19,6 +19,69 @@ function findTweetId(url) {
   return m ? m[1] : null;
 }
 
+// --- Author name ---
+// The author's display name sits in [data-testid="User-Name"], beside a link to
+// the profile: the first anchor is the name, the second is the @handle, and a
+// third (a /status/ link) is the timestamp. Only the name is wanted, so the
+// handle and the timestamp are skipped rather than guessed from position.
+
+// Collapse X's whitespace so a name that wraps cannot carry a newline into the
+// middle of a post's first line.
+function normalizeAuthorName(value) {
+  return String(value == null ? '' : value).replace(/\s+/g, ' ').trim();
+}
+
+// Pick the display name from the User-Name block's anchors. Pure, so the rule
+// can be tested without a browser: the first anchor that is neither the @handle
+// nor the timestamp link is the name.
+function pickAuthorName(anchors) {
+  for (const a of anchors || []) {
+    const text = normalizeAuthorName(a && a.text);
+    if (!text) continue;
+    if (text.charAt(0) === '@') continue;                 // the @handle
+    if (/\/status\//.test((a && a.href) || '')) continue;  // the timestamp
+    if (/^[·•]$/.test(text)) continue;                     // the separator dot
+    return text;
+  }
+  return null;
+}
+
+function findTweetAuthor(article) {
+  if (!article || !article.querySelectorAll) return null;
+  const blocks = article.querySelectorAll('[data-testid="User-Name"]');
+  for (const block of blocks) {
+    // The post's own name block, never one belonging to a quoted post nested
+    // inside this article (those render their own <article>).
+    if (block.closest && block.closest('article') !== article) continue;
+    if (block.closest && block.closest('[data-testid="quoteTweet"]')) continue;
+    const anchors = [];
+    const found = block.querySelectorAll ? block.querySelectorAll('a') : [];
+    for (const a of found) {
+      anchors.push({ text: a.innerText || a.textContent || '', href: a.getAttribute('href') || '' });
+    }
+    const name = pickAuthorName(anchors);
+    if (name) return name;
+  }
+  return null;
+}
+
+// The line that goes above a post when it is sent in "name the author" mode:
+// "Imran Khan" -> "Imran Khan's Tweet". Empty when there is no name to show.
+function authorHeader(name) {
+  const n = normalizeAuthorName(name);
+  return n ? n + "'s Tweet" : '';
+}
+
+// Put the author's name above the post. The rest of the text is only trimmed at
+// its ends, so the link-first reorder and any blank lines inside it survive
+// untouched. With no name the text is returned exactly as it was.
+function withAuthorHeader(text, name) {
+  const header = authorHeader(name);
+  if (!header) return text || '';
+  const body = String(text == null ? '' : text).replace(/^\s+|\s+$/g, '');
+  return body ? header + '\n\n' + body : header;
+}
+
 function findPhotoLinks(article) {
   // Only keep media links whose nearest <article> is the article we were
   // asked about (not nested quotes/reposts in another article).
@@ -406,6 +469,7 @@ function extractPost(article) {
   return {
     tweetId: id,
     tweetUrl: url,
+    author: findTweetAuthor(article),
     text,
     hasImage: photoHrefs.length > 0 || mediaItems.some((m) => m.type === 'image'),
     hasVideo: hasVideo(article) || mediaItems.some((m) => m.type === 'video'),
