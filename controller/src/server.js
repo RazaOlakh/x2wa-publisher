@@ -2,7 +2,7 @@
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
-const { spawn, execFile, execSync } = require('child_process');
+const { execSync } = require('child_process');
 const crypto = require('crypto');
 const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
@@ -11,6 +11,10 @@ const { sessionDir, tmpRoot, acquireSessionLock, findChromeExecutable } = requir
 const { listPostableChannels, canPostToChannel } = require('./channels');
 const { createHeartbeat } = require('./heartbeat');
 const repo = require('./repo');
+const { decodeInlineImage, isInlineImage, MAX_INLINE_BYTES } = require('./inline-media');
+const videoPipeline = require('./video-pipeline');
+const hlsPrefetch = require('./hls-prefetch');
+const duplicate = require('./duplicate-guard');
 
 const HOST = '127.0.0.1';
 const PORT = parseInt(process.env.CONTROLLER_PORT || '47825', 10);
@@ -19,6 +23,11 @@ const TMP_ROOT = tmpRoot();
 const MAX_MEDIA_BYTES = 64 * 1024 * 1024;
 const FFMPEG_TIMEOUT_MS = 5 * 60 * 1000;
 const DOWNLOAD_TIMEOUT_MS = 60 * 1000;
+// HLS segment fetching. 8 workers measured 2.24 MB/s against 0.29 MB/s
+// serially on this project's own sources; the cap keeps a large video from
+// opening an unbounded number of sockets.
+const HLS_CONCURRENCY = 8;
+const HLS_RETRIES = 3;
 
 fs.mkdirSync(TMP_ROOT, { recursive: true });
 // Refuse to start a second client against the same session directory.
@@ -343,7 +352,12 @@ function extractionFailures(body) {
 }
 
 function validMedia(m) {
-  return m && ['image', 'video'].includes(m.type) && typeof m.source === 'string' && m.source.length > 0 && m.source.length < 4096;
+  if (!m || !['image', 'video'].includes(m.type)) return false;
+  if (typeof m.source !== 'string' || m.source.length === 0) return false;
+  // A screenshot is sent inline and is far larger than a URL, so it gets a
+  // size bound of its own rather than the URL's character limit.
+  if (isInlineImage(m.source)) return m.type === 'image' && m.source.length <= MAX_INLINE_BYTES;
+  return m.source.length < 4096;
 }
 
 async function download(source, dest, timeoutMs) {
@@ -369,44 +383,13 @@ async function download(source, dest, timeoutMs) {
   });
 }
 
-function ffprobeOk(file) {
-  log('info','media-validate-start',{requestId:currentJob&&currentJob.requestId,jobId:currentJob&&currentJob.jobId,file});
-  return new Promise((resolve) => {
-    execFile('ffprobe', ['-v', 'error', '-show_streams', '-of', 'json', file], { timeout: 30000 }, (err, stdout) => {
-      if (err) { try{ log('error','media-validate-error',{requestId:currentJob&&currentJob.requestId,jobId:currentJob&&currentJob.jobId,error:err&&err.message}); }catch{} return resolve(false); }
-      try {
-        const j = JSON.parse(stdout);
-        const hasVideo = j.streams && j.streams.some((s) => s.codec_type === 'video');
-        const hasAudio = Boolean(j.streams && j.streams.some((s) => s.codec_type === 'audio'));
-        // Log what the delivered file really contains: a muxed HLS master
-        // must yield both a picture and an audio track.
-        log('info','media-validate-streams',{
-          requestId:currentJob&&currentJob.requestId,
-          jobId:currentJob&&currentJob.jobId,
-          hasVideo:Boolean(hasVideo),
-          hasAudio,
-          codecs:(j.streams||[]).map((s) => s.codec_type + ':' + (s.codec_name || '?')),
-        });
-        if (!j.streams || !hasVideo) { log('warn','media-validate-no-video',{requestId:currentJob&&currentJob.requestId,jobId:currentJob&&currentJob.jobId}); }
-        resolve(Boolean(hasVideo));
-      } catch { resolve(false); }
-    });
-  });
-}
-
-function ffmpegMux(input, output) {
-  log('info','media-ffmpeg-start',{requestId:currentJob&&currentJob.requestId,jobId:currentJob&&currentJob.jobId,input});
-  return new Promise((resolve, reject) => {
-    const args = ['-y', '-i', input, '-c:v', 'libx264', '-c:a', 'aac', '-shortest', output];
-    const p = spawn('ffmpeg', args, { stdio: 'ignore' });
-    const t = setTimeout(() => { p.kill('SIGKILL'); log('warn','media-ffmpeg-timeout',{requestId:currentJob&&currentJob.requestId,jobId:currentJob&&currentJob.jobId}); reject(new Error('ffmpeg-timeout')); }, FFMPEG_TIMEOUT_MS);
-    p.on('exit', (code) => {
-      clearTimeout(t);
-      if (code === 0) { log('info','media-ffmpeg-done',{requestId:currentJob&&currentJob.requestId,jobId:currentJob&&currentJob.jobId}); resolve(); }
-      else { try{ log('error','media-ffmpeg-failed',{requestId:currentJob&&currentJob.requestId,jobId:currentJob&&currentJob.jobId,code}); }catch{} reject(new Error('ffmpeg-failed')); }
-    });
-    p.on('error', reject);
-  });
+// X media URLs are signed with query parameters. Those are needed to fetch
+// the media but must not accumulate in logs, so anything logged for a URL is
+// reduced to its origin and path.
+function redactUrl(u) {
+  if (typeof u !== 'string') return u;
+  const i = u.indexOf('?');
+  return i === -1 ? u : `${u.slice(0, i)}?…`;
 }
 
 // X media URLs (e.g. pbs.twimg.com/...?format=webp&name=large)
@@ -441,32 +424,84 @@ async function processMedia(item, jobDir, index) {
   log('info','media-process-start',{requestId:currentJob&&currentJob.requestId,jobId:currentJob&&currentJob.jobId,type:item.type,index:tag});
   if (item.type === 'video') {
     const out = path.join(jobDir, `out-${tag}.mp4`);
-    if (/^https?:\/\//i.test(item.source)) {
-      // For HLS-style sources we feed the URL directly to ffmpeg rather than trying to
-      // download it as a static object.
-      if (/\.m3u8(\?|$)/i.test(item.source)) {
-        await ffmpegMux(item.source, out);
-      } else {
-        const file = path.join(jobDir, `input-${tag}.bin`);
-        await download(item.source, file, DOWNLOAD_TIMEOUT_MS);
-        const stat = fs.statSync(file);
-        if (stat.size > MAX_MEDIA_BYTES) throw new Error('media-too-large');
-        await ffmpegMux(file, out);
+    const t0 = Date.now();
+    let built = null;
+
+    if (/^https?:\/\//i.test(item.source) && /\.m3u8(\?|$)/i.test(item.source)) {
+      // HLS. Fetch the segments concurrently, then remux locally.
+      //
+      // ffmpeg's own HLS demuxer pulls one segment at a time, and each one
+      // costs a round trip: measured on a 5-minute X video it used ~1s of
+      // CPU and ~40-70s of wall clock, so the wait was the network, not the
+      // encoding. Fetching in parallel and handing ffmpeg local files keeps
+      // ffmpeg doing the demux while taking that serial wait out.
+      const dir = path.join(jobDir, `hls-${tag}`);
+      const fp0 = Date.now();
+      let plan = null;
+      try {
+        plan = await hlsPrefetch.prefetch(item.source, dir, {
+          concurrency: HLS_CONCURRENCY,
+          retries: HLS_RETRIES,
+          maxBytes: MAX_MEDIA_BYTES,
+        });
+      } catch (e) {
+        // A prefetch failure is a source failure, not something a re-encode
+        // can repair, so it is reported rather than retried more slowly.
+        log('warn','media-hls-prefetch-failed',{requestId:currentJob&&currentJob.requestId,jobId:currentJob&&currentJob.jobId,index:tag,error:String((e&&e.message)||e)});
+        throw new Error('video-prefetch-failed');
       }
+      const fetchMs = Date.now() - fp0;
+      log('info','media-hls-prefetched',{
+        requestId:currentJob&&currentJob.requestId,jobId:currentJob&&currentJob.jobId,index:tag,
+        fetchMs, videoSegments:plan.videoSegments, audioSegments:plan.audioSegments,
+        bytes:plan.bytes, retries:plan.retries, resolution:plan.variant&&plan.variant.resolution,
+      });
+      built = await videoPipeline.buildVideo(
+        plan.audioPlaylist ? [plan.videoPlaylist, plan.audioPlaylist] : [plan.videoPlaylist],
+        out,
+        { expectsAudio: plan.expectsAudio, localInput: true },
+      );
+    } else if (/^https?:\/\//i.test(item.source)) {
+      const file = path.join(jobDir, `input-${tag}.bin`);
+      await download(item.source, file, DOWNLOAD_TIMEOUT_MS);
+      const stat = fs.statSync(file);
+      if (stat.size > MAX_MEDIA_BYTES) throw new Error('media-too-large');
+      built = await videoPipeline.buildVideo([file], out, {});
     } else if (fs.existsSync(item.source)) {
       const stat = fs.statSync(item.source);
       if (stat.size > MAX_MEDIA_BYTES) throw new Error('media-too-large');
-      await ffmpegMux(item.source, out);
+      built = await videoPipeline.buildVideo([item.source], out, {});
     } else {
       throw new Error('media-source-invalid');
     }
-    if (!(await ffprobeOk(out))) { log('error','media-process-ffprobe-failed',{requestId:currentJob&&currentJob.requestId,jobId:currentJob&&currentJob.jobId,index:tag}); throw new Error('ffprobe-validation-failed'); }
-    log('info','media-process-done',{requestId:currentJob&&currentJob.requestId,jobId:currentJob&&currentJob.jobId,type:item.type,index:tag});
+
+    if (!built || !built.ok) {
+      log('error','media-video-build-failed',{
+        requestId:currentJob&&currentJob.requestId,jobId:currentJob&&currentJob.jobId,index:tag,
+        path:built&&built.path, attempts:built&&built.attempts,
+      });
+      throw new Error((built && built.error) || 'ffmpeg-validation-failed');
+    }
+    const stat = fs.statSync(out);
+    log('info','media-video-built',{
+      requestId:currentJob&&currentJob.requestId,jobId:currentJob&&currentJob.jobId,index:tag,
+      path:built.path, totalMs:Date.now()-t0, size:stat.size,
+      videoCodec:built.info&&built.info.videoCodec, audioCodec:built.info&&built.info.audioCodec,
+      width:built.info&&built.info.width, height:built.info&&built.info.height,
+      duration:built.info&&built.info.duration,
+      attempts:built.attempts.map((a) => ({ path: a.path, ok: a.ok, ms: a.ms, reason: a.reason, skipped: a.skipped })),
+    });
     return out;
   }
 
   const file = path.join(jobDir, `${tag}-` + crypto.randomBytes(6).toString('hex') + '.bin');
-  if (/^https?:\/\//i.test(item.source)) {
+  if (isInlineImage(item.source)) {
+    // A screenshot, captured in the browser and handed over in the request.
+    const decoded = decodeInlineImage(item.source);
+    if (decoded.error) throw new Error(decoded.error);
+    fs.writeFileSync(file, decoded.buffer);
+    log('info','media-inline-write',{requestId:currentJob&&currentJob.requestId,jobId:currentJob&&currentJob.jobId,index:tag,type:decoded.type,size:decoded.buffer.length});
+  } else if (/^https?:\/\//i.test(item.source)) {
     await download(item.source, file, DOWNLOAD_TIMEOUT_MS);
   } else if (fs.existsSync(item.source)) {
     fs.copyFileSync(item.source, file);
@@ -505,7 +540,7 @@ async function runSend(body) {
   currentJob = { requestId, jobId: null, tweetId, channelId };
   log('info','send-request-received',{requestId,tweetId,channelId,mediaTypes:media&&media.map(m=>m.type)});
   const prev = duplicateLog.get(key);
-  if (prev && now - prev.ts < 120000 && prev.status !== 'failed') {
+  if (duplicate.isDuplicate(prev, now)) {
     log('warn','duplicate-send',{requestId,tweetId,channelId,prior: prev});
     return { ok: false, error: 'duplicate-send', prior: prev };
   }
@@ -552,7 +587,7 @@ async function runSend(body) {
       for (let i = 0; i < media.length; i++) {
         const m = media[i];
         if (!validMedia(m)) { sendFailures.push({ index: i, type: m && m.type, error: 'bad-media' }); log('error','bad-media',{requestId,jobId,tweetId,index:i}); continue; }
-        try { log('info','media-process-url',{requestId,jobId,type:m.type,index:i,source:m.source}); const f = await processMedia(m, jobDir, i); mediaFiles.push({ type: m.type, file: f, index: i }); }
+        try { log('info','media-process-url',{requestId,jobId,type:m.type,index:i,source:redactUrl(m.source)}); const f = await processMedia(m, jobDir, i); mediaFiles.push({ type: m.type, file: f, index: i, size: fs.existsSync(f) ? fs.statSync(f).size : 0 }); }
         catch (e) { try{ console.log('sendJob media error:', e && e.message, e && e.stack); }catch{} sendFailures.push({ index: i, type: m.type, error: errMsg(e) }); log('error','media-process-failed',{requestId,jobId,tweetId,index:i,error:errMsg(e)}); }
       }
     }
@@ -573,12 +608,22 @@ async function runSend(body) {
     } else {
       for (let i = 0; i < mediaFiles.length; i++) {
         const mf = mediaFiles[i];
+        // Timed separately from the processing above: for a large video the
+        // upload can cost more than everything else combined, and "ffmpeg got
+        // faster" is not the same as "the post arrives sooner".
+        const up0 = Date.now();
         try {
+          const read0 = Date.now();
           const msg = MessageMedia.fromFilePath(mf.file);
+          const readMs = Date.now() - read0;
           const m = i === 0
             ? await client.sendMessage(channelId, msg, { caption: text || undefined })
             : await client.sendMessage(channelId, msg);
           sent.push({ type: mf.type, id: m && m.id });
+          log('info','media-upload-timed',{
+            requestId,jobId,index:mf.index,type:mf.type,
+            bytes:mf.size,readMs,uploadMs:Date.now()-up0,totalMs:Date.now()-up0,
+          });
         } catch (e) { sendFailures.push({ index: mf.index, type: mf.type, error: errMsg(e) }); log('error','whatsapp-send-media-failed',{requestId,jobId,tweetId,index:mf.index,error:errMsg(e)}); }
       }
     }

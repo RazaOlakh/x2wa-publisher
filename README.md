@@ -290,6 +290,44 @@ Go to x.com, and every post gets a **Post to WhatsApp** button.
 | Text + several media | text as the caption of the **first** item only |
 | Images and videos mixed | every item, in the post's original order |
 
+### Sending a screenshot of the post
+
+Next to the post button there is a camera button that sends **a picture of the
+post itself** — the text, images and layout as they appear — instead of the
+post's own media. Useful when you want the Channel to look like what you saw,
+rather than a pile of separate images and videos.
+
+The capture is of that one post, not of the window or the page: the crop is
+computed from the post's own position on the page, and the post does not have
+to be fully on screen to be captured.
+
+Capturing needs the extension's **debugger** permission. It is attached for
+the length of one capture and detached immediately afterwards, and only ever
+to the tab you clicked in. The alternative — `chrome.tabs.captureVisibleTab` —
+can only ever photograph the whole viewport, and reaching it would mean asking
+for `<all_urls>`, which is a view of every site you visit. That is a much
+larger permission than this needs, so it is not used.
+
+| The popup says | Meaning |
+|---|---|
+| **Could not capture** | The capture did not happen. The usual cause is Developer Tools being open on that tab — close it and try again. |
+| **Nothing could be captured from this post** | The post was not on screen, so there was no box to capture. |
+
+What a screenshot **cannot** include:
+
+- **Playing video.** A video frame is captured as whatever is on screen at that
+  moment, which is often the poster image or a black rectangle. Use the post
+  button when you want the video itself.
+- **Content below the fold that has not loaded yet.** Lazy-loaded images that
+  have not appeared are simply absent.
+- **Anything the page has not rendered** — expanded threads are captured in
+  their collapsed state.
+- **Private or cross-origin frames** X does not paint into the page.
+
+Screenshots are deduplicated separately from posts, so photographing a post
+does not stop you posting it, and posting it does not stop you photographing
+it.
+
 ### What the button shows
 
 The button is a small icon that changes as the post is sent, so you can see the
@@ -518,6 +556,31 @@ own videos — never whatever the page loaded last. Only an HLS **master**
 playlist is sent, because a rendition is a single video-only stream and would
 produce a silent video.
 
+**How a video is produced (the fast path).** Measured on this project's own
+sources, ffmpeg's HLS demuxer spent about **1 s of CPU but 40–150 s of wall
+clock** on a 5-minute X video: it fetches segments one at a time and each one
+waits a round trip, so the wait was the *network*, not the encoding. Two
+changes follow from that:
+
+1. **Segments are fetched in parallel**, then handed to ffmpeg as local files.
+   Eight workers measured ~2.2 MB/s against ~0.3 MB/s serially. Playlist order,
+   the `#EXT-X-MAP` init section, and the separate audio rendition are all
+   preserved, so audio/video sync is unchanged. ffmpeg still does the remux.
+2. **The remux stream-copies** (`-c copy`) by default — no re-encode — and only
+   falls back to `libx264 -preset veryfast` when the copy is unusable. The
+   output is inspected with `ffprobe` either way; a copy that lost the audio
+   track is rejected, not published.
+
+This adds no new dependency: no `yt-dlp`, no `aria2c`. The source must be an
+X HLS master; anything else uses the previous single-download path. Failures
+that re-encoding cannot fix (ambiguous source, expired signature, unreachable
+playlist) are reported instead of retried more slowly.
+
+Note that for a large video the **WhatsApp upload** is usually the largest
+remaining cost — larger than fetching and remuxing combined. Stream-copy also
+avoids the re-encode bloat that made some outputs *bigger* than the source,
+which matters for that upload.
+
 ## Security / isolation
 
 - The controller binds to `127.0.0.1` only; nothing is reachable from the network.
@@ -552,7 +615,7 @@ debugging, and for scripting a check:
 | `POST /auth/start` | Idempotent: reconnects, or starts pairing if there is nothing to reconnect to |
 | `POST /auth/logout` | `{ confirm: true }` — signs the account out (the flag is required) and offers a fresh QR |
 | `GET /channels` | `{ channels, checked, ineligible }` — only channels this account may post to; `ineligible` is kept for diagnostics; results are cached for 30s |
-| `POST /send` | `{ tweetId, tweetUrl, text, media: [{type, source}], mediaFailures?, channelId }` |
+| `POST /send` | `{ tweetId, tweetUrl, text, media: [{type, source}], mediaFailures?, channelId }` — an image `source` may also be a `data:` URL (a screenshot, which has no URL to fetch); anything not recognised as an image is refused |
 | `GET /version` | `{ branch, sha, dirty, upstream, behind, ahead, checkedAt }` — local facts only, never touches the network; `behind`/`ahead` come from the last check |
 | `POST /version/check` | Fetches from the remote and returns the same shape, with `behind`/`ahead` fresh. `checkFailed: 'unreachable'` if the remote could not be reached |
 | `POST /update` | Fast-forwards to the upstream commit. Refused with `local-changes` on a dirty tree and `no-upstream` when the branch has none. Returns `{ updated, from, to, files, reloadExtension, restartController }` |
@@ -573,7 +636,12 @@ curl -s http://127.0.0.1:47825/channels
 node controller/test/dependency.test.js      # vendored library + patches intact
 node controller/test/controller.test.js      # session paths, single-instance lock, channel eligibility, liveness watchdog
 node controller/test/repo.test.js            # update checks and fast-forward, against throwaway repos (no network)
+node extension/test/screenshot.test.js       # screenshot crop targeting + inline-image transfer
+node controller/test/screenshot-pipeline.test.js  # a captured image becomes a real, sniffed image file
 node extension/test/popup-states.test.js     # every popup state, incl. reconnecting and signed-out
+node controller/test/hls-prefetch.test.js    # HLS parsing, ordered parallel fetch, copy-vs-re-encode, audio preserved
+node controller/test/duplicate-guard.test.js # a post cannot be sent twice while one is running or just after
+node extension/test/video-source.test.js     # an ambiguous video mapping is refused, never guessed
 node scripts/windows/startup.test.js         # Windows launcher contract (static)
 ```
 
