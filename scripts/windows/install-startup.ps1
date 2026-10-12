@@ -56,6 +56,11 @@ function Get-ControllerProcess {
     Where-Object { $_.CommandLine -and $_.CommandLine -like "*$ControllerJs*" }
 }
 
+function Get-SessionChromeProcesses {
+  Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" -ErrorAction SilentlyContinue |
+    Where-Object { $_.CommandLine -and $_.CommandLine -like "*$SessionDir*" }
+}
+
 function Test-Prerequisites {
   if (-not (Test-Path -LiteralPath $ControllerJs)) { throw "controller not found at $ControllerJs" }
   if (-not (Test-Path -LiteralPath (Join-Path $ControllerDir 'node_modules\whatsapp-web.js'))) {
@@ -104,7 +109,7 @@ set "CHROME_PATH=$chromeExe"
 start "x2wa-controller" /min "$nodeExe" "$ControllerJs" >> "%X2WA_LOG%" 2>&1
 
 rem Give it a moment, then record whether it actually came up.
-timeout /t 8 /nobreak >nul
+ping 127.0.0.1 -n 9 >nul
 powershell -NoProfile -Command "try { (Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:$Port/health' -TimeoutSec 3).Content | Out-File -Append -Encoding UTF8 '%X2WA_LOG%' } catch { ('[%DATE% %TIME%] ERROR: controller did not answer on port $Port - see the log above.' | Out-File -Append -Encoding UTF8 '%X2WA_LOG%') }"
 "@
 
@@ -144,6 +149,10 @@ switch ($Action) {
       Write-Step "Stopping controller pid $($p.ProcessId)"
       Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
     }
+    foreach ($p in (Get-SessionChromeProcesses)) {
+      Write-Step "Stopping session browser pid $($p.ProcessId)"
+      Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
+    }
     Write-Host "Your WhatsApp session in $SessionDir was left untouched."
   }
   'status' {
@@ -160,6 +169,7 @@ switch ($Action) {
   }
   'restart' {
     foreach ($p in (Get-ControllerProcess)) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }
+    foreach ($p in (Get-SessionChromeProcesses)) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }
     Start-Sleep -Seconds 2
     if (-not (Test-Path -LiteralPath $VbsLauncherPath) -and -not (Test-Path -LiteralPath $LegacyCmdPath)) { throw "not installed - run: $PSCommandPath install" }
     $toStart = if (Test-Path -LiteralPath $VbsLauncherPath) { $VbsLauncherPath } else { $LegacyCmdPath }
