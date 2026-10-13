@@ -279,8 +279,8 @@ cleared and the popup explains why, rather than leaving you posting to nowhere.
 Go to x.com, and every post gets the extension's **toolbar**: a row of its own
 icons, sitting directly beneath the post's own action bar (reply, repost, like,
 share). New actions go in that row; for now it holds the **Post to WhatsApp**
-button, a duplicate **Post with the author's name** button, and the screenshot
-button.
+button, a duplicate **Post with the author's name** button (the `@` icon), and
+the screenshot button.
 
 The toolbar is the extension's own row rather than extra buttons inside X's
 action bar, so X's layout cannot squeeze them and the two sets of controls stay
@@ -340,8 +340,9 @@ fetched, the message is still sent — only without the card.
 
 ### Naming the author
 
-Beside the post button there is a duplicate of it that puts the **author's name
-on top of the post**. A post by Imran Khan is sent as
+Beside the post button there is a duplicate of it — marked with an **`@`** icon
+instead of the WhatsApp bubble — that puts the **author's name on top of the
+post**. A post by Imran Khan is sent as
 
 ```
 Imran Khan's Tweet

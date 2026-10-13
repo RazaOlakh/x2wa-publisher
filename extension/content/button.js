@@ -5,6 +5,7 @@
 // beneath the post's own action bar (see toolbar.js). Each button is a minimal
 // outline icon with no background that shows one glyph per state:
 //   idle    WhatsApp glyph   (grey)    -> post this to the Channel
+//   idle    "@" glyph        (grey)    -> post it with the author's name
 //   working spinner         (blue)    -> posting
 //   success check mark      (green)   -> posted
 //   partial warning         (amber)   -> partially posted
@@ -64,6 +65,16 @@ function whatsappIcon() {
   ]);
 }
 
+function atIcon() {
+  // The "@" in the same outline family: the inner ring and the outer ring with
+  // its tail. It marks the send button that names the author, so the two send
+  // buttons read apart at a glance.
+  return lineIcon([
+    ['circle', { cx: '12', cy: '12', r: '4' }],
+    ['path', { d: 'M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-3.92 7.94' }],
+  ]);
+}
+
 function spinnerIcon() {
   const svg = svgEl('svg', Object.assign({}, ICON_CANVAS));
   svg.appendChild(svgEl('circle', {
@@ -105,7 +116,10 @@ const ICONS = {
 // --- rendering -----------------------------------------------------------
 function renderButton(btn, state, label) {
   const tone = BUTTON_STYLES[state] || BUTTON_STYLES.idle;
-  const icon = state === 'idle' ? whatsappIcon()
+  const named = btn.getAttribute('data-xwap-named') === '1';
+  // The two send buttons share every state glyph; only the idle mark differs,
+  // the "@" for the one that names the author versus the WhatsApp bubble.
+  const icon = state === 'idle' ? (named ? atIcon() : whatsappIcon())
     : state === 'working' ? spinnerIcon()
     : (ICONS[state] || ICONS.error)();
 
