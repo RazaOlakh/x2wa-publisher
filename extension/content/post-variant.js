@@ -7,7 +7,7 @@
 // the button's rendering and its click handling.
 //
 //   plain  the post as written
-//   named  the same post with the author's name above it ("…'s Tweet")
+//   named  the same post with the author's name above it
 //   urdu   the same post with its text translated to Urdu
 //
 // `icon` names the idle glyph in button.js, `action` is what assistive tech and

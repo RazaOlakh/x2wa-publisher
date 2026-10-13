@@ -675,15 +675,14 @@ async function onPostClick(ev, btn, variant) {
 
   // Only the "name the author" variant changes the post, and it changes only
   // the front of it, so the link-first order arranged above stays beneath the
-  // name. The header is written in the post's own language: an Urdu post is
-  // headed in Urdu (the name translated), an English one as before. The post
-  // itself is left as written; the Urdu variant is the one that translates it,
-  // in the controller, after this reordering so the link stays first. With no
-  // author found the text goes through untouched.
+  // name. The name is written in the post's own language: an Urdu post is headed
+  // with the name in Urdu (translated), an English one with the name as it
+  // stands. The post itself is left as written; the Urdu variant is the one that
+  // translates it, in the controller, after this reordering so the link stays
+  // first. With no author found the text goes through untouched.
   if (v.nameTheAuthor) {
-    const lang = isUrduText(post.text) ? 'ur' : 'en';
-    const name = lang === 'ur' ? await urduAuthorName(post.author, requestId) : post.author;
-    post = { ...post, text: withAuthorHeader(post.text, name, lang) };
+    const name = isUrduText(post.text) ? await urduAuthorName(post.author, requestId) : post.author;
+    post = { ...post, text: withAuthorHeader(post.text, name) };
   }
 
   // Once it is sent the tick stays put; only a failure reverts, so the
@@ -748,9 +747,9 @@ function injectButton(article) {
   // have somewhere obvious to go.
   const toolbar = toolbarFor(bar);
 
-  // The plain post, then the same post with the author's name above it
-  // ("Imran Khan's Tweet"), then the same post translated to Urdu - three ways
-  // of sending this one post, in the order they were added.
+  // The plain post, then the same post with the author's name above it, then
+  // the same post translated to Urdu - three ways of sending this one post, in
+  // the order they were added.
   toolbar.appendChild(createPostButton(article, 'plain'));
   toolbar.appendChild(createPostButton(article, 'named'));
   toolbar.appendChild(createPostButton(article, 'urdu'));

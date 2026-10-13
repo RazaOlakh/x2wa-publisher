@@ -94,26 +94,20 @@ function isUrduText(text) {
   return arabic > latin;
 }
 
-// The line that goes above a post when it is sent in "name the author" mode.
-// The post's own language decides the language of that line, so an Urdu post is
-// headed in Urdu and an English one as before:
-//   "Imran Khan", 'en' -> "Imran Khan's Tweet"
-//   "عمران خان",  'ur' -> "عمران خان کی ٹویٹ"
-// Empty when there is no name to show.
-const AUTHOR_HEADER_SUFFIX = { en: "'s Tweet", ur: ' کی ٹویٹ' };
-
-function authorHeader(name, lang) {
-  const n = normalizeAuthorName(name);
-  if (!n) return '';
-  return n + (AUTHOR_HEADER_SUFFIX[lang] || AUTHOR_HEADER_SUFFIX.en);
+// The line that goes above a post when it is sent in "name the author" mode:
+// the author's name, and nothing else. The name is written in the post's own
+// language (see button.js - an Urdu post's name is translated first), so an
+// English post is headed "Imran Khan" and an Urdu one "عمران خان". Empty when
+// there is no name to show.
+function authorHeader(name) {
+  return normalizeAuthorName(name);
 }
 
-// Put the author's name above the post, in the post's own language. The rest of
-// the text is only trimmed at its ends, so the link-first reorder and any blank
-// lines inside it survive untouched. With no name the text is returned exactly
-// as it was.
-function withAuthorHeader(text, name, lang) {
-  const header = authorHeader(name, lang);
+// Put the author's name above the post. The rest of the text is only trimmed at
+// its ends, so the link-first reorder and any blank lines inside it survive
+// untouched. With no name the text is returned exactly as it was.
+function withAuthorHeader(text, name) {
+  const header = authorHeader(name);
   if (!header) return text || '';
   const body = String(text == null ? '' : text).replace(/^\s+|\s+$/g, '');
   return body ? header + '\n\n' + body : header;

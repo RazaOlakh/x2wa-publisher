@@ -359,20 +359,20 @@ instead of the WhatsApp bubble — that puts the **author's name on top of the
 post**. A post by Imran Khan is sent as
 
 ```
-Imran Khan's Tweet
+Imran Khan
 
 <the post>
 ```
 
 The name is read from the post's own byline — the display name only, never the
 `@handle`, the timestamp, or the author of a quoted post nested inside it. If
-the name cannot be read, the post is still sent, just without the header.
+the name cannot be read, the post is still sent, just without the name above it.
 
-The header is written in the **post's own language**. An English post gets
-`Imran Khan's Tweet`; an Urdu post gets the name and the wrapper in Urdu:
+The name is written in the **post's own language**. An English post gets the
+name as it stands; an Urdu post gets the name in Urdu:
 
 ```
-عمران خان کی ٹویٹ
+عمران خان
 
 <the post>
 ```
@@ -380,16 +380,15 @@ The header is written in the **post's own language**. An English post gets
 The language is decided from the post's own letters (Urdu is written in the
 Arabic script), so it needs no network call, and a long link inside an Urdu post
 cannot make it read as English. When the post is Urdu and the author's name is
-spelled in English, the **controller translates the name** so the header matches
-the post; the post itself is left exactly as written. A name that is already
-Urdu is used as it is, and if the name cannot be translated the original name is
-kept rather than dropping the header. This is the only thing the `@` button
-translates — it is the one that names the author, not the one that translates the
-post.
+spelled in English, the **controller translates the name** so it matches the
+post; the post itself is left exactly as written. A name that is already Urdu is
+used as it is, and if the name cannot be translated the original name is kept
+rather than dropped. This is the only thing the `@` button translates — it is
+the one that names the author, not the one that translates the post.
 
-The header goes above whatever the post's text already is, so a text post's
-link-first order (above) is kept beneath the name. Both send buttons publish the
-same post; the only difference is that one names the author.
+The name goes above whatever the post's text already is, so a text post's
+link-first order (above) is kept beneath it. Both send buttons publish the same
+post; the only difference is that one names the author.
 
 ### Posting in Urdu
 
@@ -696,7 +695,7 @@ Extension service worker
   ↓ POST http://127.0.0.1:47825/send
 Controller (Node, loopback only)
   ↓ "Post in Urdu": the text is translated first; links are left intact
-  ↓ "name the author": an Urdu post's header name is translated; the post is not
+  ↓ "name the author": an Urdu post's name is translated; the post is not
   ↓ whatsapp-web.js + LocalAuth session
 WhatsApp Channel
 ```
@@ -819,7 +818,7 @@ node controller/test/hls-prefetch.test.js    # HLS parsing, ordered parallel fet
 node controller/test/duplicate-guard.test.js # a post cannot be sent twice while one is running or just after
 node extension/test/video-source.test.js     # an ambiguous video mapping is refused, never guessed
 node extension/test/link-first.test.js       # a text-only post's link moves to the top, media posts untouched
-node extension/test/author-header.test.js    # the author's name is read cleanly, the header follows the post's language, and it sits above the post
+node extension/test/author-header.test.js    # the author's name is read cleanly, written in the post's language, and put above the post
 node controller/test/translate.test.js       # the Urdu button: the split, the endpoint's shapes, the request, standalone name requests
 node extension/test/post-variant.test.js     # each send button's variant: name, glyph, author, translate
 node scripts/windows/startup.test.js         # Windows launcher contract (static)
