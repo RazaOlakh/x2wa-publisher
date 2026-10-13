@@ -14,6 +14,7 @@ const { decodeInlineImage, isInlineImage, MAX_INLINE_BYTES } = require('./inline
 const videoPipeline = require('./video-pipeline');
 const hlsPrefetch = require('./hls-prefetch');
 const duplicate = require('./duplicate-guard');
+const { translateText } = require('./translate');
 
 const HOST = '127.0.0.1';
 const PORT = parseInt(process.env.CONTROLLER_PORT || '47825', 10);
@@ -561,6 +562,27 @@ async function runSend(body) {
     }
     const mediaFiles = [];
     const sendFailures = [];
+    // The "post in Urdu" button asks for the text to be translated before it
+    // is sent. Only the text goes to the translator; its link stays in place,
+    // so a text-only post's link-first order (and the preview it earns) is
+    // preserved. A failure is reported rather than quietly posting the
+    // original, which would be the wrong language with nothing to show for it.
+    let outText = text;
+    if (body.translateTo) {
+      const target = String(body.translateTo);
+      const t0 = Date.now();
+      log('info','translate-start',{requestId,jobId,channelId,target,chars:text.length});
+      try {
+        outText = await translateText(text, target);
+        log('info','translate-done',{requestId,jobId,target,charsIn:text.length,charsOut:outText.length,ms:Date.now()-t0});
+      } catch (e) {
+        duplicateLog.set(key, { ts: now, status: 'failed', jobId });
+        jobs.set(jobId, { status: 'failed', error: 'translate-failed' });
+        cleanup(jobDir);
+        log('warn','translate-failed',{requestId,jobId,target,error:errMsg(e)});
+        return { ok: false, error: 'translate-failed', jobId, retryable: true };
+      }
+    }
     if (Array.isArray(media) && media.length > 0) {
       for (let i = 0; i < media.length; i++) {
         const m = media[i];
@@ -573,14 +595,14 @@ async function runSend(body) {
     log('info','whatsapp-send-start',{requestId,jobId,channelId,tweetId});
     const sent = [];
     if (mediaFiles.length === 0) {
-      if (!text) {
+      if (!outText) {
         // Nothing could be processed: report every intended-but-missing item.
         const none = [].concat(extractionFailures(body), sendFailures);
         jobs.set(jobId, { status: 'failed', error: 'empty-post', failures: none }); cleanup(jobDir); log('error','whatsapp-send-empty',{requestId,jobId,tweetId,failed:none.length}); return { ok: false, error: 'empty-post', jobId, ...(none.length ? { failures: none } : {}) };
       }
       log('info','whatsapp-send-text',{requestId,jobId});
       try {
-        const m = await client.sendMessage(channelId, text);
+        const m = await client.sendMessage(channelId, outText);
         sent.push({ type: 'text', id: m && m.id });
       } catch (e) { sendFailures.push({ index: -1, type: 'text', error: errMsg(e) }); log('error','whatsapp-send-text-failed',{requestId,jobId,tweetId,error:errMsg(e)}); }
     } else {
@@ -595,7 +617,7 @@ async function runSend(body) {
           const msg = MessageMedia.fromFilePath(mf.file);
           const readMs = Date.now() - read0;
           const m = i === 0
-            ? await client.sendMessage(channelId, msg, { caption: text || undefined })
+            ? await client.sendMessage(channelId, msg, { caption: outText || undefined })
             : await client.sendMessage(channelId, msg);
           sent.push({ type: mf.type, id: m && m.id });
           log('info','media-upload-timed',{
@@ -736,6 +758,12 @@ const server = http.createServer(async (req, res) => {
       const body = JSON.parse(await readBody(req));
       if (!body || typeof body !== 'object' || !body.tweetId || !body.tweetUrl || !body.channelId || typeof body.text !== 'string' || !Array.isArray(body.media)) {
         log('error','send-rejected-bad-request',{hasTweetId:!!(body&&body.tweetId)});
+        return json(res, 400, { error: 'bad-request' });
+      }
+      // An optional target language for the text; a short code, nothing else,
+      // so a stray value can never reshape the translate request.
+      if (body.translateTo != null && (typeof body.translateTo !== 'string' || body.translateTo.length === 0 || body.translateTo.length > 8)) {
+        log('error','send-rejected-bad-request',{badField:'translateTo'});
         return json(res, 400, { error: 'bad-request' });
       }
       log('info','send-request-validated',{requestId:body.requestId,tweetId:body.tweetId,mediaTypes:body.media.map(m=>m.type)});

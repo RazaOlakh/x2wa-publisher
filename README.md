@@ -279,8 +279,8 @@ cleared and the popup explains why, rather than leaving you posting to nowhere.
 Go to x.com, and every post gets the extension's **toolbar**: a row of its own
 icons, sitting directly beneath the post's own action bar (reply, repost, like,
 share). New actions go in that row; for now it holds the **Post to WhatsApp**
-button, a duplicate **Post with the author's name** button (the `@` icon), and
-the screenshot button.
+button, a duplicate **Post with the author's name** button (the `@` icon), a
+duplicate **Post in Urdu** button (the globe icon), and the screenshot button.
 
 The toolbar is the extension's own row rather than extra buttons inside X's
 action bar, so X's layout cannot squeeze them and the two sets of controls stay
@@ -358,6 +358,33 @@ The header goes above whatever the post's text already is, so a text post's
 link-first order (above) is kept beneath the name. Both send buttons publish the
 same post; the only difference is that one names the author.
 
+### Posting in Urdu
+
+Beside the other two send buttons there is a third — marked with a **globe**
+icon — that has the post's **text translated to Urdu** before it is sent. A post
+with media is translated too: the text becomes the caption, in Urdu, and the
+images or video go with it unchanged.
+
+The translation happens in the **controller**, not the browser: it is a small
+request to Google's keyless translate endpoint (the same one a dictionary
+lookup uses), made from the local controller so it is not subject to the page's
+origin rules and so the request and its outcome are logged in one place. Only
+the post's **text** is sent to it. A URL in the text is left exactly as it is, so
+a text post's link-first order — and the preview card it earns — still works,
+and the words around it arrive in Urdu.
+
+If the translation cannot be fetched, the post is **not** sent in the wrong
+language: the button reports `Could not translate this post just now` and the
+post can be tried again.
+
+This endpoint is Google's and is not an official, supported API. It is used
+because it needs no key and no setup, but it is a network request that leaves
+your machine, and it is the one part of this tool that sends post content
+anywhere other than WhatsApp. See
+[Security / isolation](#security--isolation). To use a different translator,
+change `translateText` in `controller/src/translate.js`; it is the only place
+translation happens.
+
 ### Sending a screenshot of the post
 
 Beside the post button, in the same toolbar row, there is a camera button that
@@ -401,33 +428,36 @@ Screenshots are deduplicated separately from posts, so photographing a post
 does not stop you posting it, and posting it does not stop you photographing
 it.
 
-### What the button shows
+### What the buttons show
 
-The button is a small, outlined icon — no background, no filled shape — that
-changes as the post is sent, so you can see the outcome without opening
-anything. Its colour and glyph both change:
+Each send button is a small, outlined icon — no background, no filled shape —
+that changes as the post is sent, so you can see the outcome without opening
+anything. The three send buttons share every state; only the idle glyph tells
+them apart (the WhatsApp bubble, the `@`, the globe). Their colour and glyph
+both change:
 
 | State | Icon | Colour | Meaning |
 |---|---|---|---|
-| Idle | WhatsApp glyph | grey | ready — click to post |
+| Idle | WhatsApp / `@` / globe glyph | grey | ready — click to post |
 | Working | spinner | blue | posting (the spinner keeps turning) |
 | Success | check mark | green | everything was published |
 | Partial | warning | amber | some items published, some could not be fetched |
 | Error | cross | red | nothing was published |
 
-There is no text on the button. Hover it for a tooltip with the detail
+There is no text on a button. Hover it for a tooltip with the detail
 (for example *Partial 3/4* or *Err: channel-not-permitted*), and the same
 information is exposed to screen readers as an `aria-label`.
 
-**A post that was sent keeps its tick.** It does not turn back into the
-WhatsApp icon, and scrolling away and back does not lose it — the sent post
-is remembered, so the tick comes back with the post when X rebuilds the page.
-Hover it to see *already sent*. Clicking it still works, if you ever want to
-send that post again.
+**A post that was sent keeps its tick.** It does not turn back into its idle
+icon, and scrolling away and back does not lose it — the sent post is
+remembered, so the tick comes back with the post when X rebuilds the page. All
+three send buttons show it, since they publish the same post. Hover it to see
+*already sent*. Clicking it still works, if you ever want to send that post
+again (the controller refuses a repeat within two minutes).
 
 Anything that did not go through — a failure, or a post X would not let us
-read — goes back to the WhatsApp icon after a few seconds, so you can simply
-click again and try once more.
+read — goes back to its idle icon after a few seconds, so you can simply click
+again and try once more.
 
 ### The notification
 
@@ -450,6 +480,7 @@ error codes, for example:
 | `channel-not-permitted` | pick a different channel in the popup |
 | `permission-check-failed` | could not confirm permission — please try again |
 | `duplicate-send` | this post already went to that channel moments ago |
+| `translate-failed` | could not translate this post just now — please try again |
 | `Failed to fetch` | the controller is not reachable |
 
 A post is never silently downgraded: if an image or video cannot be retrieved,
@@ -608,6 +639,7 @@ Extension service worker
   ↓ resolves each video to the HLS manifest that names it
   ↓ POST http://127.0.0.1:47825/send
 Controller (Node, loopback only)
+  ↓ "Post in Urdu": the text is translated first; links are left intact
   ↓ whatsapp-web.js + LocalAuth session
 WhatsApp Channel
 ```
@@ -665,6 +697,11 @@ which matters for that upload.
 - Temporary media is deleted as soon as a job finishes or fails.
 - ffmpeg produces WhatsApp-safe H.264/AAC MP4; media over 64 MB is rejected.
 - The same post cannot be sent to the same channel twice within 120 seconds.
+- The one time post content leaves the machine for anything other than WhatsApp
+  is the **Post in Urdu** button, which sends the post's text (never its media)
+  to Google's public translate endpoint. No other button, and no other part of
+  the tool, makes an outside request with post content. See
+  [Posting in Urdu](#posting-in-urdu).
 
 ## Dependency pin
 
@@ -691,7 +728,7 @@ debugging, and for scripting a check:
 | `POST /auth/start` | Idempotent: reconnects, or starts pairing if there is nothing to reconnect to |
 | `POST /auth/logout` | `{ confirm: true }` — signs the account out (the flag is required) and offers a fresh QR |
 | `GET /channels` | `{ channels, checked, ineligible }` — only channels this account may post to; `ineligible` is kept for diagnostics; results are cached for 30s |
-| `POST /send` | `{ tweetId, tweetUrl, text, media: [{type, source}], mediaFailures?, channelId }` — an image `source` may also be a `data:` URL (a screenshot, which has no URL to fetch); anything not recognised as an image is refused |
+| `POST /send` | `{ tweetId, tweetUrl, text, media: [{type, source}], mediaFailures?, channelId, translateTo? }` — an image `source` may also be a `data:` URL (a screenshot, which has no URL to fetch); anything not recognised as an image is refused; `translateTo` (a short language code, e.g. `ur`) translates `text` before sending |
 | `GET /version` | `{ branch, sha, dirty, upstream, behind, ahead, checkedAt }` — local facts only, never touches the network; `behind`/`ahead` come from the last check |
 | `POST /version/check` | Fetches from the remote and returns the same shape, with `behind`/`ahead` fresh. `checkFailed: 'unreachable'` if the remote could not be reached |
 | `POST /update` | Fast-forwards to the upstream commit. Refused with `local-changes` when a tracked file has uncommitted edits (untracked files do not block it) and `no-upstream` when the branch has none. Returns `{ updated, from, to, files, reloadExtension, restartController }` |
@@ -700,6 +737,9 @@ debugging, and for scripting a check:
 interleaved) and captions only the first item with `text`. `mediaFailures`
 lists items the extension could not resolve, so the response reports `partial`
 instead of a false success. Posting rights are re-checked before every send.
+When `translateTo` is set, `text` is translated to that language first (a
+failure is reported, never sent untranslated); the response is otherwise
+unchanged.
 
 ```bash
 curl -s http://127.0.0.1:47825/status
@@ -721,6 +761,8 @@ node controller/test/duplicate-guard.test.js # a post cannot be sent twice while
 node extension/test/video-source.test.js     # an ambiguous video mapping is refused, never guessed
 node extension/test/link-first.test.js       # a text-only post's link moves to the top, media posts untouched
 node extension/test/author-header.test.js    # the author's name is read cleanly and put above the post
+node controller/test/translate.test.js       # the Urdu button: the split, the endpoint's shapes, the request
+node extension/test/post-variant.test.js     # each send button's variant: name, glyph, author, translate
 node scripts/windows/startup.test.js         # Windows launcher contract (static)
 ```
 

@@ -210,7 +210,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return true;
   }
   if (!msg || msg.type !== 'SEND_POST') return false;
-  swLog('info','received-message',{requestId:msg.requestId,type:msg.type,tweetId:msg.post&&msg.post.tweetId,mediaTypes:(msg.post&&msg.post.mediaItems||[]).map((m)=>m.type),hasImage:msg.post&&msg.post.hasImage,hasVideo:msg.post&&msg.post.hasVideo});
+  swLog('info','received-message',{requestId:msg.requestId,type:msg.type,tweetId:msg.post&&msg.post.tweetId,translateTo:msg.translateTo||null,mediaTypes:(msg.post&&msg.post.mediaItems||[]).map((m)=>m.type),hasImage:msg.post&&msg.post.hasImage,hasVideo:msg.post&&msg.post.hasVideo});
   (async () => {
     try {
       const p = msg.post;
@@ -301,6 +301,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         imageFailures: mediaFailures,
         channelId: await getDefaultChannel(),
       };
+      // The "post in Urdu" button asks the controller to translate the text
+      // before sending it. Forwarded as-is; the controller validates it.
+      if (msg.translateTo) payload.translateTo = msg.translateTo;
 
       if (!payload.channelId) {
         return reply(sendResponse, { ok: false, error: 'no-default-channel' });

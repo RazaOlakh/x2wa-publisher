@@ -1,11 +1,12 @@
 // Content script: inject the "Post to WhatsApp" button and delegate the
 // actual work to the background worker.
 //
-// Both of the extension's actions live in a toolbar of their own, placed
-// beneath the post's own action bar (see toolbar.js). Each button is a minimal
-// outline icon with no background that shows one glyph per state:
+// The extension's actions live in a toolbar of their own, placed beneath the
+// post's own action bar (see toolbar.js). Each button is a minimal outline
+// icon with no background that shows one glyph per state:
 //   idle    WhatsApp glyph   (grey)    -> post this to the Channel
 //   idle    "@" glyph        (grey)    -> post it with the author's name
+//   idle    globe glyph      (grey)    -> post it translated to Urdu
 //   working spinner         (blue)    -> posting
 //   success check mark      (green)   -> posted
 //   partial warning         (amber)   -> partially posted
@@ -75,6 +76,26 @@ function atIcon() {
   ]);
 }
 
+function globeIcon() {
+  // A globe: the mark for "send this in another language". The meridian and
+  // the equator make it read as a world rather than a plain ring, so it is
+  // distinct at a glance from the WhatsApp bubble and the "@".
+  return lineIcon([
+    ['circle', { cx: '12', cy: '12', r: '9' }],
+    ['line', { x1: '3', y1: '12', x2: '21', y2: '12' }],
+    ['path', { d: 'M12 3a13.5 13.5 0 0 1 3.5 9 13.5 13.5 0 0 1-3.5 9 13.5 13.5 0 0 1-3.5-9 13.5 13.5 0 0 1 3.5-9z' }],
+  ]);
+}
+
+// Which idle glyph each variant wears (see post-variant.js). Every other state
+// is shared, so a variant is only ever told apart by this mark and by its
+// action name.
+const IDLE_ICONS = {
+  whatsapp: whatsappIcon,
+  at: atIcon,
+  globe: globeIcon,
+};
+
 function spinnerIcon() {
   const svg = svgEl('svg', Object.assign({}, ICON_CANVAS));
   svg.appendChild(svgEl('circle', {
@@ -116,10 +137,11 @@ const ICONS = {
 // --- rendering -----------------------------------------------------------
 function renderButton(btn, state, label) {
   const tone = BUTTON_STYLES[state] || BUTTON_STYLES.idle;
-  const named = btn.getAttribute('data-xwap-named') === '1';
-  // The two send buttons share every state glyph; only the idle mark differs,
-  // the "@" for the one that names the author versus the WhatsApp bubble.
-  const icon = state === 'idle' ? (named ? atIcon() : whatsappIcon())
+  const variant = postVariant(buttonVariant(btn));
+  // The send buttons share every state glyph; only the idle mark differs - the
+  // WhatsApp bubble, the "@" for the one that names the author, the globe for
+  // the one that translates.
+  const icon = state === 'idle' ? (IDLE_ICONS[variant.icon] || whatsappIcon)()
     : state === 'working' ? spinnerIcon()
     : (ICONS[state] || ICONS.error)();
 
@@ -163,8 +185,8 @@ function renderButton(btn, state, label) {
   fixed('opacity', '1');
 
   // Icon-only: name the control and its state for assistive tech and hover.
-  // The "name the author" variant is otherwise an exact copy, so the two are
-  // told apart by this label (and by position) rather than by a different glyph.
+  // The variants are otherwise exact copies of one another, so each is told
+  // apart by this label, by its idle glyph and by position.
   const action = buttonAction(btn);
   const stateText = state === 'idle' ? '' : (label || '');
   btn.setAttribute('aria-label', stateText ? action + ': ' + stateText : action);
@@ -172,9 +194,14 @@ function renderButton(btn, state, label) {
   btn.dataset.state = state;
 }
 
-// The two send buttons share one glyph and one handler; only this name differs.
+// The send buttons share one set of glyphs and one handler; the variant, kept
+// on the element, is what tells them apart.
+function buttonVariant(btn) {
+  return btn && btn.getAttribute('data-xwap-variant');
+}
+
 function buttonAction(btn) {
-  return btn.getAttribute('data-xwap-named') === '1' ? 'Post with author name' : 'Post to WhatsApp';
+  return postVariant(buttonVariant(btn)).action;
 }
 
 // --- screenshot button ---------------------------------------------------
@@ -457,6 +484,7 @@ const ERROR_HINTS = {
   'channel-not-permitted': 'This account cannot post in that channel. Pick a different one in the extension popup.',
   'permission-check-failed': 'Could not confirm posting permission just now. Please try again.',
   'duplicate-send': 'This post was already sent to that channel moments ago.',
+  'translate-failed': 'Could not translate this post just now. Please try again.',
   'empty-post': 'There was nothing to send.',
   'no-default-channel': 'Choose a destination channel in the extension popup first.',
   'video-media-unavailable': 'X did not provide a usable stream for this video.',
@@ -549,14 +577,16 @@ function restoreSentState(article, btn) {
   });
 }
 
-// Build one of the two send buttons. They are identical apart from what they
-// send: the second also puts the author's name above the post. `named` lives on
-// the element so every later state - including the restored "already sent"
-// tick - keeps the right name for assistive tech and hover.
-function createPostButton(article, named) {
+// Build one of the send buttons. They are identical apart from the variant
+// they carry (see post-variant.js): the plain post, the post with the author's
+// name above it, or the post translated to Urdu. `variant` lives on the element
+// so every later state - including the restored "already sent" tick - keeps the
+// right name, glyph and payload for assistive tech and hover.
+function createPostButton(article, variant) {
+  const v = POST_VARIANTS[variant] ? variant : 'plain';
   const btn = document.createElement('button');
   btn.type = 'button';
-  if (named) btn.setAttribute('data-xwap-named', '1');
+  btn.setAttribute('data-xwap-variant', v);
   renderButton(btn, 'idle', 'Post to WhatsApp');
   // Hidden for the moment it takes to find out whether this post has already
   // been sent, so it can never be seen as untried first.
@@ -564,7 +594,7 @@ function createPostButton(article, named) {
   restoreSentState(article, btn).then(() => {
     btn.style.setProperty('visibility', 'visible', 'important');
   }, () => { btn.style.setProperty('visibility', 'visible', 'important'); });
-  btn.addEventListener('click', (ev) => onPostClick(ev, btn, named));
+  btn.addEventListener('click', (ev) => onPostClick(ev, btn, v));
   return btn;
 }
 
@@ -580,17 +610,18 @@ function showReadError(btn, label, title, detail, requestId, error) {
   }, 4000);
 }
 
-async function onPostClick(ev, btn, named) {
+async function onPostClick(ev, btn, variant) {
   ev.preventDefault();
   ev.stopPropagation();
   if (btn.disabled) return;
+  const v = postVariant(variant);
   // Acknowledge the click at once: reading the post can take a moment - a long
   // post is expanded, a video's streams are primed, a link is resolved - and
   // the spinner must cover all of that, not just the send that follows.
   btn.disabled = true;
   renderButton(btn, 'working', 'Sending…');
   const requestId = 'req-' + Date.now();
-  try { xlog('info', 'button-click', { requestId, named: !!named, articleUrl: location.href }); } catch {}
+  try { xlog('info', 'button-click', { requestId, variant: variant, articleUrl: location.href }); } catch {}
 
   const currentArticle = btn.closest('article');
   if (!currentArticle) {
@@ -607,18 +638,21 @@ async function onPostClick(ev, btn, named) {
     return;
   }
 
-  // Only the "name the author" button changes the post, and it changes only
+  // Only the "name the author" variant changes the post, and it changes only
   // the front of it, so the link-first order arranged above stays beneath the
-  // name. With no author found the text goes through untouched.
-  if (named) post = { ...post, text: withAuthorHeader(post.text, post.author) };
+  // name. With no author found the text goes through untouched. The Urdu
+  // variant leaves the text alone here: the controller translates it, after
+  // this reordering, so the link stays first in the message too.
+  if (v.nameTheAuthor) post = { ...post, text: withAuthorHeader(post.text, post.author) };
 
   // Once it is sent the tick stays put; only a failure reverts, so the
   // post can be tried again.
   let sent = false;
   try {
     const started = Date.now();
-    try { xlog('info', 'send-started', { requestId, tweetId: post.tweetId, named: !!named, mediaTypes: post.hasImage ? ['image'] : [] }); } catch {}
-    const result = await chrome.runtime.sendMessage({ type: 'SEND_POST', post, requestId });
+    try { xlog('info', 'send-started', { requestId, tweetId: post.tweetId, variant: variant, translateTo: v.translateTo, mediaTypes: post.hasImage ? ['image'] : [] }); } catch {}
+    const result = await chrome.runtime.sendMessage(
+      { type: 'SEND_POST', post, requestId, ...(v.translateTo ? { translateTo: v.translateTo } : {}) });
     try { xlog('info', 'response-received', { requestId, jobId: result && result.jobId, durationMs: Date.now() - started }); } catch {}
     const total = (result && result.sent ? result.sent.length : 0) + (result && result.failures ? result.failures.length : 0);
     const where = await channelName();
@@ -668,17 +702,19 @@ function injectButton(article) {
   const bar = article.querySelector('div[role="group"]');
   if (!bar) return;
 
-  // Both actions live in our own row beneath X's icons, not inside X's action
+  // Our actions live in our own row beneath X's icons, not inside X's action
   // bar: the page's flex layout can no longer squeeze them, and later actions
   // have somewhere obvious to go.
   const toolbar = toolbarFor(bar);
 
-  // The plain send button, and beside it a duplicate that also puts the
-  // author's name above the post ("Imran Khan's Tweet").
-  toolbar.appendChild(createPostButton(article, false));
-  toolbar.appendChild(createPostButton(article, true));
+  // The plain post, then the same post with the author's name above it
+  // ("Imran Khan's Tweet"), then the same post translated to Urdu - three ways
+  // of sending this one post, in the order they were added.
+  toolbar.appendChild(createPostButton(article, 'plain'));
+  toolbar.appendChild(createPostButton(article, 'named'));
+  toolbar.appendChild(createPostButton(article, 'urdu'));
 
-  // The screenshot button sits beside the pair so the row reads as one group.
+  // The screenshot button sits beside them so the row reads as one group.
   const shotBtn = document.createElement('button');
   shotBtn.type = 'button';
   wireShotButton(shotBtn);
