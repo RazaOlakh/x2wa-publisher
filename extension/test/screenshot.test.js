@@ -28,7 +28,7 @@ function eq(name, got, want) {
 const sandbox = { module: undefined, window: {} };
 vm.createContext(sandbox);
 vm.runInContext(shotSrc, sandbox);
-const { shotClip, shotKey, shotCaption, shotErrorHint } = sandbox;
+const { shotClip, shotContainer, shotKey, shotCaption, shotErrorHint } = sandbox;
 
 // ------------------------------------------------------- capture targeting
 console.log('captures this post alone, in page coordinates');
@@ -68,6 +68,111 @@ console.log('captures this post alone, in page coordinates');
   const a = shotClip({ left: 0, top: 0, width: 500, height: 200 }, 0, 0, 1000, 2000);
   const b = shotClip({ left: 0, top: 700, width: 500, height: 200 }, 0, 0, 1000, 2000);
   check('two different posts give two different crops', a.y !== b.y, { a: a.y, b: b.y });
+}
+
+// ------------------------------------------------- post container selection
+//
+// A tiny element stand-in: a parent/child tree, an attribute bag, and the two
+// selector calls shotContainer makes. Only the selectors shot.js uses are
+// understood, which is the point - the test asserts the *decision*, not a
+// general CSS engine.
+function fakeEl(tag, attrs) {
+  const el = {
+    tagName: String(tag).toUpperCase(),
+    attrs: attrs || {},
+    parent: null,
+    children: [],
+    getAttribute(name) { return Object.prototype.hasOwnProperty.call(el.attrs, name) ? el.attrs[name] : null; },
+    append(child) { child.parent = el; el.children.push(child); return child; },
+    matches(sel) { return sel.split(',').some((s) => matchSimple(el, s.trim())); },
+    closest(sel) { let c = el; while (c) { if (c.matches && c.matches(sel)) return c; c = c.parent; } return null; },
+    querySelectorAll(sel) {
+      const out = [];
+      (function walk(n) { for (const ch of n.children) { if (ch.matches && ch.matches(sel)) out.push(ch); walk(ch); } })(el);
+      return out;
+    },
+  };
+  return el;
+}
+function matchSimple(el, sel) {
+  const m = /^([a-zA-Z]+)(?:\[([\w-]+)="([^"]*)"\])?$/.exec(sel);
+  if (!m) return false;
+  if (el.tagName !== m[1].toUpperCase()) return false;
+  return m[2] ? el.getAttribute(m[2]) === m[3] : true;
+}
+// One post plus the action bar the button lives in, mirroring X's article.
+function fakePost(extraAttrs) {
+  const article = fakeEl('article', Object.assign({ 'data-testid': 'tweet', role: 'article' }, extraAttrs || {}));
+  const bar = fakeEl('div', { role: 'group' });
+  article.append(bar);
+  return { article, bar };
+}
+
+console.log('the crop is taken from the clicked button\'s own post');
+{
+  // A timeline: a list container holding several posts. The button is in the
+  // second post, so that post - not the list - is the container.
+  const list = fakeEl('div', {});
+  const p1 = fakePost();
+  const p2 = fakePost();
+  const p3 = fakePost();
+  list.append(p1.article); list.append(p2.article); list.append(p3.article);
+  const btn = fakeEl('button', {});
+  p2.bar.append(btn);
+
+  check('the second post is selected, not the timeline list', shotContainer(btn) === p2.article);
+  check('and not the first or third post', shotContainer(btn) !== p1.article && shotContainer(btn) !== p3.article);
+  check('the chosen container holds a single post', shotContainer(btn).querySelectorAll('article').length === 0);
+}
+{
+  // Two buttons, two different posts: each resolves to its own article, which
+  // is what makes two posts on one page crop to two different boxes.
+  const list = fakeEl('div', {});
+  const a = fakePost(); const b = fakePost();
+  list.append(a.article); list.append(b.article);
+  const btnA = fakeEl('button', {}); a.bar.append(btnA);
+  const btnB = fakeEl('button', {}); b.bar.append(btnB);
+  check('each button finds its own post', shotContainer(btnA) === a.article && shotContainer(btnB) === b.article);
+  check('the two posts are different', shotContainer(btnA) !== shotContainer(btnB));
+}
+{
+  // A quoted post is rendered inside this post as a link card, not as a
+  // nested post - verified against live X. The outer article therefore still
+  // holds a single post and is the container.
+  const outer = fakePost();
+  const quoteCard = fakeEl('div', { role: 'link' });
+  outer.article.append(quoteCard);
+  const btn = fakeEl('button', {}); outer.bar.append(btn);
+  check('a post with a quoted card still selects the outer post', shotContainer(btn) === outer.article);
+}
+{
+  // The guard: whatever X does, a container that holds more than one post is
+  // never cropped. Capturing it would include the neighbouring posts. Here the
+  // button's nearest post ancestor is itself a wrapper holding two posts.
+  const wrapper = fakeEl('article', { 'data-testid': 'tweet', role: 'article' });
+  const inner1 = fakePost(); const inner2 = fakePost();
+  wrapper.append(inner1.article); wrapper.append(inner2.article);
+  const btn = fakeEl('button', {}); wrapper.append(btn);
+  check('a container holding other posts is refused', shotContainer(btn) === null);
+  check('even when it is itself marked as a post', wrapper.querySelectorAll('article').length === 2);
+  // A button inside a real post is unaffected by a multi-post wrapper above it.
+  const deepBtn = fakeEl('button', {}); inner2.bar.append(deepBtn);
+  check('a button inside one of its posts still resolves to that post', shotContainer(deepBtn) === inner2.article);
+}
+{
+  const btn = fakeEl('button', {});
+  fakeEl('div', {}).append(btn); // somewhere that is not a post
+  check('a button outside any post yields nothing', shotContainer(btn) === null);
+  check('nothing at all yields nothing', shotContainer(null) === null);
+  check('something without closest() yields nothing', shotContainer({}) === null);
+}
+{
+  // The selector is anchored on the post element, so a status-page article
+  // and a timeline article are both found the same way.
+  const roleOnly = fakeEl('article', { role: 'article' });
+  const bar = fakeEl('div', { role: 'group' }); roleOnly.append(bar);
+  const btn = fakeEl('button', {}); bar.append(btn);
+  check('an article without the testid is still a post', shotContainer(btn) === roleOnly);
 }
 
 // ------------------------------------------------------------- duplicate

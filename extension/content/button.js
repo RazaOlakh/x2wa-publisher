@@ -1,27 +1,35 @@
 // Content script: inject the "Post to WhatsApp" button and delegate the
 // actual work to the background worker.
 //
-// The button is a minimal icon that shows one glyph per state:
-//   idle    WhatsApp glyph   (green)   -> post this to the Channel
-//   working spinner         (grey)    -> posting
-//   success check mark      (teal)    -> posted
+// The extension's actions live in a toolbar of their own, placed beneath the
+// post's own action bar (see toolbar.js). Each button is a minimal outline
+// icon with no background that shows one glyph per state:
+//   idle    WhatsApp glyph   (grey)    -> post this to the Channel
+//   idle    "@" glyph        (grey)    -> post it with the author's name
+//   idle    globe glyph      (grey)    -> post it translated to Urdu
+//   working spinner         (blue)    -> posting
+//   success check mark      (green)   -> posted
 //   partial warning         (amber)   -> partially posted
 //   error   cross           (red)     -> not posted
 //
-// Icons are inline SVG built with createElementNS and animated with SMIL, so
-// nothing is fetched and no stylesheet is injected into the page. There is no
-// visible label: the meaning is carried by the glyph, and by aria-label and
-// title so assistive technology and hover still explain what it does and what
-// state it is in.
+// Icons are inline, outlined SVG (stroke, no fill, no solid shape) built with
+// createElementNS and animated with SMIL, so nothing is fetched and no
+// stylesheet is injected into the page. There is no visible label: the meaning
+// is carried by the glyph and its colour, and by aria-label and title so
+// assistive technology and hover still explain what it does and what state it
+// is in.
 const INJECTION_FLAG = '__xwapButtonInjected';
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
+// No background, no border and no filled shape: a state is only the colour of
+// the outline, the way X's own action icons work. The glyph itself carries the
+// meaning, and the colour reinforces it.
 const BUTTON_STYLES = {
-  idle:    { bg: '#25d366', fg: '#fff', border: 'transparent' },
-  working: { bg: '#eff3f4', fg: '#536471', border: '#cfd9de' },
-  success: { bg: '#00a884', fg: '#fff', border: 'transparent' },
-  partial: { bg: '#e8912d', fg: '#fff', border: 'transparent' },
-  error:   { bg: '#f4212e', fg: '#fff', border: 'transparent' },
+  idle:    { fg: '#536471' },
+  working: { fg: '#1d9bf0' },
+  success: { fg: '#00a884' },
+  partial: { fg: '#e8912d' },
+  error:   { fg: '#f4212e' },
 };
 
 function xlog(level, event, data) {
@@ -36,17 +44,60 @@ function svgEl(tag, attrs) {
 }
 
 // --- icons ---------------------------------------------------------------
-function whatsappIcon() {
-  const svg = svgEl('svg', { viewBox: '0 0 24 24', width: '15', height: '15', 'aria-hidden': 'true', focusable: 'false' });
-  svg.appendChild(svgEl('path', {
-    fill: 'currentColor',
-    d: 'M12.04 2C6.58 2 2.13 6.45 2.13 11.91c0 1.75.46 3.45 1.32 4.95L2 22l5.25-1.38a9.9 9.9 0 0 0 4.79 1.22h.01c5.46 0 9.91-4.45 9.91-9.91 0-2.65-1.03-5.14-2.9-7.01A9.82 9.82 0 0 0 12.04 2m0 18.15h-.01a8.2 8.2 0 0 1-4.19-1.15l-.3-.18-3.12.82.83-3.04-.2-.31a8.17 8.17 0 0 1-1.26-4.38c0-4.54 3.7-8.23 8.25-8.23a8.2 8.2 0 0 1 5.83 2.42 8.18 8.18 0 0 1 2.41 5.82c0 4.54-3.7 8.23-8.24 8.23m4.52-6.16c-.25-.12-1.47-.72-1.69-.81-.23-.08-.39-.12-.56.13-.16.24-.64.8-.79.97-.14.16-.29.19-.54.06-.25-.12-1.05-.39-1.99-1.23-.74-.66-1.24-1.47-1.38-1.72-.15-.25-.02-.38.11-.51.11-.11.25-.29.37-.43.13-.15.17-.25.25-.41.08-.17.04-.31-.02-.43-.06-.12-.56-1.34-.76-1.84-.2-.48-.4-.41-.56-.42h-.48c-.16 0-.43.06-.65.31s-.86.84-.86 2.05.88 2.38 1 2.54c.12.17 1.75 2.67 4.23 3.74.59.26 1.05.41 1.41.52.59.19 1.13.16 1.56.1.48-.07 1.47-.6 1.67-1.18.21-.58.21-1.07.15-1.18-.06-.1-.23-.16-.48-.28',
-  }));
+// Outline, not solid: every glyph is drawn as a stroke with no fill, so the
+// whole set reads as one line-icon family. The colour of the button behind it
+// carries the state, so the glyph only has to say what the action is.
+const ICON_CANVAS = { viewBox: '0 0 24 24', width: '16', height: '16', 'aria-hidden': 'true', focusable: 'false' };
+
+function lineIcon(children) {
+  const svg = svgEl('svg', Object.assign({
+    fill: 'none', stroke: 'currentColor', 'stroke-width': '2',
+    'stroke-linecap': 'round', 'stroke-linejoin': 'round',
+  }, ICON_CANVAS));
+  for (const child of children) svg.appendChild(svgEl(child[0], child[1]));
   return svg;
 }
 
+function whatsappIcon() {
+  // A speech bubble with its tail, and the handset outlined inside it.
+  return lineIcon([
+    ['path', { d: 'M12 3.2a8.8 8.8 0 0 0-7.5 13.4L3.2 20.8l4.3-1.2A8.8 8.8 0 1 0 12 3.2Z' }],
+    ['path', { 'stroke-width': '1.5', d: 'M9.1 8.2c-.2 0-.5 0-.7.3-.2.3-.8.8-.8 1.9s.8 2.2 1 2.4c.1.2 1.6 2.4 3.8 3.3 1.9.8 2.2.6 2.6.6.4 0 1.3-.5 1.5-1.1.2-.5.2-1 .1-1.1 0-.1-.2-.2-.4-.3-.3-.1-1.3-.7-1.5-.7-.2-.1-.4-.1-.5.1-.2.2-.6.8-.7.9-.1.1-.3.2-.5 0-.3-.1-1-.4-1.8-1.1-.7-.6-1.1-1.3-1.3-1.5-.1-.2 0-.4.1-.5l.4-.4c.1-.1.1-.2.2-.4 0-.1 0-.3 0-.4-.1-.1-.5-1.2-.7-1.6-.2-.4-.4-.3-.5-.3Z' }],
+  ]);
+}
+
+function atIcon() {
+  // The "@" in the same outline family: the inner ring and the outer ring with
+  // its tail. It marks the send button that names the author, so the two send
+  // buttons read apart at a glance.
+  return lineIcon([
+    ['circle', { cx: '12', cy: '12', r: '4' }],
+    ['path', { d: 'M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-3.92 7.94' }],
+  ]);
+}
+
+function globeIcon() {
+  // A globe: the mark for "send this in another language". The meridian and
+  // the equator make it read as a world rather than a plain ring, so it is
+  // distinct at a glance from the WhatsApp bubble and the "@".
+  return lineIcon([
+    ['circle', { cx: '12', cy: '12', r: '9' }],
+    ['line', { x1: '3', y1: '12', x2: '21', y2: '12' }],
+    ['path', { d: 'M12 3a13.5 13.5 0 0 1 3.5 9 13.5 13.5 0 0 1-3.5 9 13.5 13.5 0 0 1-3.5-9 13.5 13.5 0 0 1 3.5-9z' }],
+  ]);
+}
+
+// Which idle glyph each variant wears (see post-variant.js). Every other state
+// is shared, so a variant is only ever told apart by this mark and by its
+// action name.
+const IDLE_ICONS = {
+  whatsapp: whatsappIcon,
+  at: atIcon,
+  globe: globeIcon,
+};
+
 function spinnerIcon() {
-  const svg = svgEl('svg', { viewBox: '0 0 24 24', width: '15', height: '15', 'aria-hidden': 'true', focusable: 'false' });
+  const svg = svgEl('svg', Object.assign({}, ICON_CANVAS));
   svg.appendChild(svgEl('circle', {
     cx: '12', cy: '12', r: '9',
     fill: 'none', stroke: 'currentColor', 'stroke-width': '2.5', 'stroke-linecap': 'round',
@@ -60,35 +111,49 @@ function spinnerIcon() {
   return svg;
 }
 
-function badgeIcon(pathD, bg) {
-  const svg = svgEl('svg', { viewBox: '0 0 24 24', width: '15', height: '15', 'aria-hidden': 'true', focusable: 'false' });
-  svg.appendChild(svgEl('circle', { cx: '12', cy: '12', r: '11', fill: 'rgba(255,255,255,0.22)' }));
-  svg.appendChild(svgEl('path', { fill: '#fff', d: pathD }));
-  return svg;
+function checkIcon() {
+  return lineIcon([['path', { d: 'M5 12.5 9.5 17 19 7.5' }]]);
+}
+
+function crossIcon() {
+  return lineIcon([['path', { d: 'M6.5 6.5 17.5 17.5' }], ['path', { d: 'M17.5 6.5 6.5 17.5' }]]);
+}
+
+function alertIcon() {
+  // Drawn entirely with strokes: the dot is a round-capped zero-length line,
+  // so nothing in the icon set is a filled shape.
+  return lineIcon([
+    ['line', { x1: '12', y1: '6.5', x2: '12', y2: '12.5' }],
+    ['line', { x1: '12', y1: '16.6', x2: '12.01', y2: '16.6' }],
+  ]);
 }
 
 const ICONS = {
-  success: () => badgeIcon('M9.55 17.6 4.4 12.45l1.65-1.65 3.5 3.5 8.1-8.1 1.65 1.65z', '#00a884'),
-  error:   () => badgeIcon('M6.4 5 12 10.6 17.6 5 19 6.4 13.4 12 19 17.6 17.6 19 12 13.4 6.4 19 5 17.6 10.6 12 5 6.4z', '#f4212e'),
-  partial: () => badgeIcon('M11 5h2v8h-2zm0 10h2v2h-2z', '#e8912d'),
+  success: () => checkIcon(),
+  error:   () => crossIcon(),
+  partial: () => alertIcon(),
 };
 
 // --- rendering -----------------------------------------------------------
 function renderButton(btn, state, label) {
   const tone = BUTTON_STYLES[state] || BUTTON_STYLES.idle;
-  const icon = state === 'idle' ? whatsappIcon()
+  const variant = postVariant(buttonVariant(btn));
+  // The send buttons share every state glyph; only the idle mark differs - the
+  // WhatsApp bubble, the "@" for the one that names the author, the globe for
+  // the one that translates.
+  const icon = state === 'idle' ? (IDLE_ICONS[variant.icon] || whatsappIcon)()
     : state === 'working' ? spinnerIcon()
     : (ICONS[state] || ICONS.error)();
 
   btn.textContent = '';
   btn.appendChild(icon);
 
-  // The page's own stylesheet targets the buttons in an action bar, and an
+  // The page's own stylesheet targets buttons in an action bar, and an
   // overfull bar squeezes a flex item's width while leaving its height
-  // alone. Either one turns the circle into a tall ellipse. Setting these
-  // with the important flag means a stylesheet rule -- even one that is
-  // itself important -- cannot resize the button, and fixing the minimum as
-  // well stops the flex layout compressing it.
+  // alone. Either one can distort the icon. Setting these with the important
+  // flag means a stylesheet rule -- even one that is itself important --
+  // cannot resize the button, and fixing the minimum as well stops the flex
+  // layout compressing it.
   const fixed = (prop, value) => btn.style.setProperty(prop, value, 'important');
   const SIZE = '26px';
   fixed('box-sizing', 'border-box');
@@ -102,24 +167,41 @@ function renderButton(btn, state, label) {
   fixed('flex', '0 0 auto');
   fixed('align-self', 'center');
 
-  fixed('background', tone.bg);
+  // No background, no border, no filled shape: the icon is all there is, so
+  // the colour of the stroke is what shows the state.
+  fixed('background', 'transparent');
+  fixed('border', '0');
   fixed('color', tone.fg);
-  fixed('border', '1px solid ' + tone.border);
-  fixed('border-radius', '50%');
   fixed('display', 'inline-flex');
   fixed('align-items', 'center');
   fixed('justify-content', 'center');
   fixed('font', 'inherit');
   fixed('cursor', 'pointer');
-  fixed('margin-left', '6px');
+  // No left margin: the toolbar spaces its icons with a gap, so each button
+  // sits flush and the spacing lives in one place.
+  fixed('margin-left', '0');
   fixed('flex-shrink', '0');
-  fixed('transition', 'background-color .18s ease, transform .12s ease');
+  fixed('transition', 'color .18s ease, transform .12s ease');
   fixed('opacity', '1');
 
   // Icon-only: name the control and its state for assistive tech and hover.
-  btn.setAttribute('aria-label', 'Post to WhatsApp: ' + label);
-  btn.title = 'Post to WhatsApp — ' + label;
+  // The variants are otherwise exact copies of one another, so each is told
+  // apart by this label, by its idle glyph and by position.
+  const action = buttonAction(btn);
+  const stateText = state === 'idle' ? '' : (label || '');
+  btn.setAttribute('aria-label', stateText ? action + ': ' + stateText : action);
+  btn.title = stateText ? action + ' \u2014 ' + stateText : action;
   btn.dataset.state = state;
+}
+
+// The send buttons share one set of glyphs and one handler; the variant, kept
+// on the element, is what tells them apart.
+function buttonVariant(btn) {
+  return btn && btn.getAttribute('data-xwap-variant');
+}
+
+function buttonAction(btn) {
+  return postVariant(buttonVariant(btn)).action;
 }
 
 // --- screenshot button ---------------------------------------------------
@@ -128,32 +210,31 @@ function renderButton(btn, state, label) {
 // tick on the WhatsApp button means "this was posted", which is not what a
 // screenshot does.
 const SHOT_STYLES = {
-  idle:    { bg: 'transparent', fg: '#536471', border: 'rgba(83,100,113,0.4)' },
-  working: { bg: '#1d9bf0', fg: '#ffffff', border: '#1d9bf0' },
-  success: { bg: '#00a884', fg: '#ffffff', border: '#00a884' },
-  error:   { bg: '#f4212e', fg: '#ffffff', border: '#f4212e' },
+  idle:    { fg: '#536471' },
+  working: { fg: '#1d9bf0' },
+  success: { fg: '#00a884' },
+  error:   { fg: '#f4212e' },
 };
 
 function cameraIcon() {
-  const svg = svgEl('svg', { viewBox: '0 0 24 24', width: '15', height: '15', 'aria-hidden': 'true', focusable: 'false' });
-  svg.appendChild(svgEl('path', {
-    fill: 'currentColor',
-    d: 'M9.4 4 8.2 6H4.5A1.5 1.5 0 0 0 3 7.5v11A1.5 1.5 0 0 0 4.5 20h15a1.5 1.5 0 0 0 1.5-1.5v-11A1.5 1.5 0 0 0 19.5 6h-3.7L14.6 4Zm2.6 13.2a4.2 4.2 0 1 1 0-8.4 4.2 4.2 0 0 1 0 8.4m0-1.6a2.6 2.6 0 1 0 0-5.2 2.6 2.6 0 0 0 0 5.2',
-  }));
-  return svg;
+  // Body, lens and the small viewfinder bump, all stroked.
+  return lineIcon([
+    ['path', { d: 'M3 8.6A2.6 2.6 0 0 1 5.6 6h1.8l1.2-2h6.8l1.2 2h1.8A2.6 2.6 0 0 1 21 8.6v7.8A2.6 2.6 0 0 1 18.4 19H5.6A2.6 2.6 0 0 1 3 16.4Z' }],
+    ['circle', { cx: '12', cy: '12.4', r: '3.2' }],
+  ]);
 }
 
 function shotSpinnerIcon() {
-  const svg = spinnerIcon();
-  svg.setAttribute('stroke', '#ffffff');
-  return svg;
+  // Same spinner, coloured by the button's current colour like every other
+  // glyph: no white override, because there is no coloured disc behind it.
+  return spinnerIcon();
 }
 
 const SHOT_ICONS = {
   idle: () => cameraIcon(),
   working: () => shotSpinnerIcon(),
-  success: () => badgeIcon('M9.55 17.6 4.4 12.45l1.65-1.65 3.5 3.5 8.1-8.1 1.65 1.65z', '#00a884'),
-  error: () => badgeIcon('M6.4 5 12 10.6 17.6 5 19 6.4 13.4 12 19 17.6 17.6 19 12 13.4 6.4 19 5 17.6 10.6 12 5 6.4z', '#f4212e'),
+  success: () => checkIcon(),
+  error: () => crossIcon(),
 };
 
 const SHOT_LABELS = {
@@ -178,18 +259,18 @@ function renderShotButton(btn, state) {
   fixed('padding', '0');
   fixed('flex', '0 0 auto');
   fixed('align-self', 'center');
-  fixed('background', tone.bg);
+  fixed('background', 'transparent');
+  fixed('border', '0');
   fixed('color', tone.fg);
-  fixed('border', '1px solid ' + tone.border);
-  fixed('border-radius', '50%');
   fixed('display', 'inline-flex');
   fixed('align-items', 'center');
   fixed('justify-content', 'center');
   fixed('font', 'inherit');
   fixed('cursor', 'pointer');
-  fixed('margin-left', '6px');
+  // Spaced by the toolbar's gap, like the post button beside it.
+  fixed('margin-left', '0');
   fixed('flex-shrink', '0');
-  fixed('transition', 'background-color .18s ease, transform .12s ease');
+  fixed('transition', 'color .18s ease, transform .12s ease');
   fixed('opacity', '1');
   const label = SHOT_LABELS[state] || SHOT_LABELS.idle;
   btn.setAttribute('aria-label', 'Post to WhatsApp: ' + label);
@@ -198,8 +279,8 @@ function renderShotButton(btn, state) {
 }
 
 // Screenshot button wiring. Kept beside the post button so the two share
-// the same article lookup and the same feedback path.
-function wireShotButton(btn, article) {
+// the same feedback path.
+function wireShotButton(btn) {
   renderShotButton(btn, 'idle');
 
   btn.addEventListener('click', async (ev) => {
@@ -210,7 +291,10 @@ function wireShotButton(btn, article) {
     if (btn.disabled) return;
     const requestId = 'shot-' + Date.now();
 
-    const currentArticle = article && article.isConnected ? article : btn.closest('article');
+    // The post is found from where the button actually is, so the crop is of
+    // this post alone - never the timeline or a thread wrapper, which holds
+    // more than one post and is refused.
+    const currentArticle = shotContainer(btn);
     if (!currentArticle) {
       renderShotButton(btn, 'error');
       showSnackbar('error', 'Could not capture', shotErrorHint('no-article'));
@@ -400,6 +484,7 @@ const ERROR_HINTS = {
   'channel-not-permitted': 'This account cannot post in that channel. Pick a different one in the extension popup.',
   'permission-check-failed': 'Could not confirm posting permission just now. Please try again.',
   'duplicate-send': 'This post was already sent to that channel moments ago.',
+  'translate-failed': 'Could not translate this post just now. Please try again.',
   'empty-post': 'There was nothing to send.',
   'no-default-channel': 'Choose a destination channel in the extension popup first.',
   'video-media-unavailable': 'X did not provide a usable stream for this video.',
@@ -471,8 +556,9 @@ function rememberSent(tweetId, where) {
 
 function markSent(btn) {
   renderButton(btn, 'success', 'Sent');
-  btn.title = 'Post to WhatsApp \u2014 already sent';
-  btn.setAttribute('aria-label', 'Post to WhatsApp: already sent');
+  const action = buttonAction(btn);
+  btn.title = action + ' \u2014 already sent';
+  btn.setAttribute('aria-label', action + ': already sent');
 }
 
 // Restores the tick on a post that has already been sent. Synchronous once
@@ -491,15 +577,16 @@ function restoreSentState(article, btn) {
   });
 }
 
-function injectButton(article) {
-  if (article[INJECTION_FLAG]) return;
-  article[INJECTION_FLAG] = true;
-
-  const bar = article.querySelector('div[role="group"]');
-  if (!bar) return;
-
+// Build one of the send buttons. They are identical apart from the variant
+// they carry (see post-variant.js): the plain post, the post with the author's
+// name above it, or the post translated to Urdu. `variant` lives on the element
+// so every later state - including the restored "already sent" tick - keeps the
+// right name, glyph and payload for assistive tech and hover.
+function createPostButton(article, variant) {
+  const v = POST_VARIANTS[variant] ? variant : 'plain';
   const btn = document.createElement('button');
   btn.type = 'button';
+  btn.setAttribute('data-xwap-variant', v);
   renderButton(btn, 'idle', 'Post to WhatsApp');
   // Hidden for the moment it takes to find out whether this post has already
   // been sent, so it can never be seen as untried first.
@@ -507,93 +594,131 @@ function injectButton(article) {
   restoreSentState(article, btn).then(() => {
     btn.style.setProperty('visibility', 'visible', 'important');
   }, () => { btn.style.setProperty('visibility', 'visible', 'important'); });
+  btn.addEventListener('click', (ev) => onPostClick(ev, btn, v));
+  return btn;
+}
 
-  btn.addEventListener('click', async (ev) => {
-    ev.preventDefault();
-    ev.stopPropagation();
-    if (btn.disabled) return;
-    const requestId = 'req-' + Date.now();
-    try { xlog('info', 'button-click', { requestId, articleUrl: location.href }); } catch {}
+// A post that could not be read at all: report it, then let the button fall
+// back to its idle icon so the post can be tried again.
+function showReadError(btn, label, title, detail, requestId, error) {
+  btn.disabled = false;
+  renderButton(btn, 'error', label);
+  showSnackbar('error', title, detail);
+  try { xlog('error', 'extraction-failed', { requestId, error }); } catch {}
+  setTimeout(() => {
+    if (btn.isConnected && btn.dataset.state === 'error') renderButton(btn, 'idle', 'Post to WhatsApp');
+  }, 4000);
+}
 
-    const currentArticle = btn.closest('article');
-    if (!currentArticle) {
-      renderButton(btn, 'error', 'Err');
-      showSnackbar('error', 'Could not post', 'The post could not be read from the page.');
-      xlog('error', 'extraction-failed', { requestId, error: 'no article' });
-      return;
+async function onPostClick(ev, btn, variant) {
+  ev.preventDefault();
+  ev.stopPropagation();
+  if (btn.disabled) return;
+  const v = postVariant(variant);
+  // Acknowledge the click at once: reading the post can take a moment - a long
+  // post is expanded, a video's streams are primed, a link is resolved - and
+  // the spinner must cover all of that, not just the send that follows.
+  btn.disabled = true;
+  renderButton(btn, 'working', 'Sending…');
+  const requestId = 'req-' + Date.now();
+  try { xlog('info', 'button-click', { requestId, variant: variant, articleUrl: location.href }); } catch {}
+
+  const currentArticle = btn.closest('article');
+  if (!currentArticle) {
+    showReadError(btn, 'Err', 'Could not post', 'The post could not be read from the page.', requestId, 'no article');
+    return;
+  }
+
+  try { xlog('info', 'extraction-started', { requestId }); } catch {}
+  let post = await window.__xwapExtractPostAsync(currentArticle);
+  try { xlog('info', 'extraction-succeeded', { requestId, tweetId: post && post.tweetId, textLength: post && post.text ? post.text.length : 0, mediaTypes: post ? [post.hasImage ? 'image' : null, post.hasVideo ? 'video' : null].filter(Boolean) : [], error: post ? post.error : 'missing' }); } catch {}
+
+  if (post.error) {
+    showReadError(btn, 'Unsupported', 'Could not post this one', 'X did not expose the text, link or media of this post.', requestId, post.error);
+    return;
+  }
+
+  // Only the "name the author" variant changes the post, and it changes only
+  // the front of it, so the link-first order arranged above stays beneath the
+  // name. With no author found the text goes through untouched. The Urdu
+  // variant leaves the text alone here: the controller translates it, after
+  // this reordering, so the link stays first in the message too.
+  if (v.nameTheAuthor) post = { ...post, text: withAuthorHeader(post.text, post.author) };
+
+  // Once it is sent the tick stays put; only a failure reverts, so the
+  // post can be tried again.
+  let sent = false;
+  try {
+    const started = Date.now();
+    try { xlog('info', 'send-started', { requestId, tweetId: post.tweetId, variant: variant, translateTo: v.translateTo, mediaTypes: post.hasImage ? ['image'] : [] }); } catch {}
+    const result = await chrome.runtime.sendMessage(
+      { type: 'SEND_POST', post, requestId, ...(v.translateTo ? { translateTo: v.translateTo } : {}) });
+    try { xlog('info', 'response-received', { requestId, jobId: result && result.jobId, durationMs: Date.now() - started }); } catch {}
+    const total = (result && result.sent ? result.sent.length : 0) + (result && result.failures ? result.failures.length : 0);
+    const where = await channelName();
+    if (result && result.ok) {
+      sent = true;
+      renderButton(btn, 'success', 'Sent');
+      rememberSent(post.tweetId, where);
+      const count = result.sent ? result.sent.length : 0;
+      showSnackbar('success', where ? 'Posted to ' + where : 'Posted to WhatsApp',
+        count > 1 ? count + ' messages sent.' : 'Your post is in the channel.');
+      try { xlog('info', 'send-succeeded', { requestId, tweetId: post.tweetId, jobId: result.jobId }); } catch {}
+    } else if (result && result.partial) {
+      const sentCount = result.sent ? result.sent.length : 0;
+      renderButton(btn, 'partial', `Partial ${sentCount}/${total}`);
+      showSnackbar('info', 'Partly posted',
+        sentCount + ' of ' + total + ' items reached the channel — some media could not be fetched.');
+      try { xlog('warn', 'send-partial', { requestId, tweetId: post.tweetId, jobId: result.jobId, sent: sentCount, failures: result.failures }); } catch {}
+    } else {
+      const code = (result && result.error) || 'failed';
+      renderButton(btn, 'error', `Err: ${code}`);
+      showSnackbar('error', 'Could not post', errorDetail(code));
+      try { xlog('error', 'send-failed', { requestId, tweetId: post.tweetId, error: result ? result.error : 'unknown' }); } catch {}
     }
+  } catch (e) {
+    renderButton(btn, 'error', 'Err');
+    showSnackbar('error', 'Could not post', errorDetail('Failed to fetch'));
+    try { xlog('error', 'send-failed', { requestId, tweetId: post.tweetId, error: e && e.message }); } catch {}
+  } finally {
+    btn.disabled = false;
+  }
+  // Never wipe a tick: neither one this send just produced, nor one
+  // restored while the send was running. A send still in flight is
+  // left alone too, or a second click would be reset out from under
+  // itself.
+  if (!sent) {
+    setTimeout(() => {
+      const s = btn.dataset.state;
+      if (s !== 'success' && s !== 'working') renderButton(btn, 'idle', 'Post to WhatsApp');
+    }, 4000);
+  }
+}
 
-    try { xlog('info', 'extraction-started', { requestId }); } catch {}
-    const post = await window.__xwapExtractPostAsync(currentArticle);
-    try { xlog('info', 'extraction-succeeded', { requestId, tweetId: post && post.tweetId, textLength: post && post.text ? post.text.length : 0, mediaTypes: post ? [post.hasImage ? 'image' : null, post.hasVideo ? 'video' : null].filter(Boolean) : [], error: post ? post.error : 'missing' }); } catch {}
+function injectButton(article) {
+  if (article[INJECTION_FLAG]) return;
+  article[INJECTION_FLAG] = true;
 
-    if (post.error) {
-      renderButton(btn, 'error', 'Unsupported');
-      showSnackbar('error', 'Could not post this one', 'X did not expose the text, link or media of this post.');
-      xlog('error', 'extraction-failed', { requestId, error: post.error });
-      setTimeout(() => renderButton(btn, 'idle', 'Post to WhatsApp'), 4000);
-      return;
-    }
+  const bar = article.querySelector('div[role="group"]');
+  if (!bar) return;
 
-    btn.disabled = true;
-    renderButton(btn, 'working', 'Sending…');
-    // Once it is sent the tick stays put; only a failure reverts, so the
-    // post can be tried again.
-    let sent = false;
-    try {
-      const started = Date.now();
-      try { xlog('info', 'send-started', { requestId, tweetId: post.tweetId, mediaTypes: post.hasImage ? ['image'] : [] }); } catch {}
-      const result = await chrome.runtime.sendMessage({ type: 'SEND_POST', post, requestId });
-      try { xlog('info', 'response-received', { requestId, jobId: result && result.jobId, durationMs: Date.now() - started }); } catch {}
-      const total = (result && result.sent ? result.sent.length : 0) + (result && result.failures ? result.failures.length : 0);
-      const where = await channelName();
-      if (result && result.ok) {
-        sent = true;
-        renderButton(btn, 'success', 'Sent');
-        rememberSent(post.tweetId, where);
-        const count = result.sent ? result.sent.length : 0;
-        showSnackbar('success', where ? 'Posted to ' + where : 'Posted to WhatsApp',
-          count > 1 ? count + ' messages sent.' : 'Your post is in the channel.');
-        try { xlog('info', 'send-succeeded', { requestId, tweetId: post.tweetId, jobId: result.jobId }); } catch {}
-      } else if (result && result.partial) {
-        const sentCount = result.sent ? result.sent.length : 0;
-        renderButton(btn, 'partial', `Partial ${sentCount}/${total}`);
-        showSnackbar('info', 'Partly posted',
-          sentCount + ' of ' + total + ' items reached the channel — some media could not be fetched.');
-        try { xlog('warn', 'send-partial', { requestId, tweetId: post.tweetId, jobId: result.jobId, sent: sentCount, failures: result.failures }); } catch {}
-      } else {
-        const code = (result && result.error) || 'failed';
-        renderButton(btn, 'error', `Err: ${code}`);
-        showSnackbar('error', 'Could not post', errorDetail(code));
-        try { xlog('error', 'send-failed', { requestId, tweetId: post.tweetId, error: result ? result.error : 'unknown' }); } catch {}
-      }
-    } catch (e) {
-      renderButton(btn, 'error', 'Err');
-      showSnackbar('error', 'Could not post', errorDetail('Failed to fetch'));
-      try { xlog('error', 'send-failed', { requestId, tweetId: post.tweetId, error: e && e.message }); } catch {}
-    } finally {
-      btn.disabled = false;
-    }
-    // Never wipe a tick: neither one this send just produced, nor one
-    // restored while the send was running. A send still in flight is
-    // left alone too, or a second click would be reset out from under
-    // itself.
-    if (!sent) {
-      setTimeout(() => {
-        const s = btn.dataset.state;
-        if (s !== 'success' && s !== 'working') renderButton(btn, 'idle', 'Post to WhatsApp');
-      }, 4000);
-    }
-  });
+  // Our actions live in our own row beneath X's icons, not inside X's action
+  // bar: the page's flex layout can no longer squeeze them, and later actions
+  // have somewhere obvious to go.
+  const toolbar = toolbarFor(bar);
 
-  bar.appendChild(btn);
+  // The plain post, then the same post with the author's name above it
+  // ("Imran Khan's Tweet"), then the same post translated to Urdu - three ways
+  // of sending this one post, in the order they were added.
+  toolbar.appendChild(createPostButton(article, 'plain'));
+  toolbar.appendChild(createPostButton(article, 'named'));
+  toolbar.appendChild(createPostButton(article, 'urdu'));
 
-  // The screenshot button goes in immediately after the post button so the
-  // pair reads as one group.
+  // The screenshot button sits beside them so the row reads as one group.
   const shotBtn = document.createElement('button');
   shotBtn.type = 'button';
-  wireShotButton(shotBtn, article);
-  bar.appendChild(shotBtn);
+  wireShotButton(shotBtn);
+  toolbar.appendChild(shotBtn);
 }
 
 function scan() {

@@ -49,6 +49,17 @@ console.log('WhatsApp Channel media patch (PR #201824) is applied');
   }
 }
 
+console.log('Link preview chat-context patch is applied');
+{
+    const f = path.join(LIB, 'src', 'util', 'Injected', 'Utils.js');
+    if (fs.existsSync(f)) {
+        const src = fs.readFileSync(f, 'utf8');
+        check('send passes chat id to getLinkPreview', src.includes('.getLinkPreview(link, { id: chat.id._serialized })'));
+        check('edit passes chat id to getLinkPreview', src.includes('.getLinkPreview(link, { id: msg.id.remote })'));
+        check('bare one-arg getLinkPreview calls removed', !/\.getLinkPreview\(link\);/.test(src));
+    }
+}
+
 console.log('WhatsApp Web message-ID compatibility fixes are present');
 {
   const f = path.join(LIB, 'src', 'util', 'Injected', 'Utils.js');

@@ -19,6 +19,69 @@ function findTweetId(url) {
   return m ? m[1] : null;
 }
 
+// --- Author name ---
+// The author's display name sits in [data-testid="User-Name"], beside a link to
+// the profile: the first anchor is the name, the second is the @handle, and a
+// third (a /status/ link) is the timestamp. Only the name is wanted, so the
+// handle and the timestamp are skipped rather than guessed from position.
+
+// Collapse X's whitespace so a name that wraps cannot carry a newline into the
+// middle of a post's first line.
+function normalizeAuthorName(value) {
+  return String(value == null ? '' : value).replace(/\s+/g, ' ').trim();
+}
+
+// Pick the display name from the User-Name block's anchors. Pure, so the rule
+// can be tested without a browser: the first anchor that is neither the @handle
+// nor the timestamp link is the name.
+function pickAuthorName(anchors) {
+  for (const a of anchors || []) {
+    const text = normalizeAuthorName(a && a.text);
+    if (!text) continue;
+    if (text.charAt(0) === '@') continue;                 // the @handle
+    if (/\/status\//.test((a && a.href) || '')) continue;  // the timestamp
+    if (/^[·•]$/.test(text)) continue;                     // the separator dot
+    return text;
+  }
+  return null;
+}
+
+function findTweetAuthor(article) {
+  if (!article || !article.querySelectorAll) return null;
+  const blocks = article.querySelectorAll('[data-testid="User-Name"]');
+  for (const block of blocks) {
+    // The post's own name block, never one belonging to a quoted post nested
+    // inside this article (those render their own <article>).
+    if (block.closest && block.closest('article') !== article) continue;
+    if (block.closest && block.closest('[data-testid="quoteTweet"]')) continue;
+    const anchors = [];
+    const found = block.querySelectorAll ? block.querySelectorAll('a') : [];
+    for (const a of found) {
+      anchors.push({ text: a.innerText || a.textContent || '', href: a.getAttribute('href') || '' });
+    }
+    const name = pickAuthorName(anchors);
+    if (name) return name;
+  }
+  return null;
+}
+
+// The line that goes above a post when it is sent in "name the author" mode:
+// "Imran Khan" -> "Imran Khan's Tweet". Empty when there is no name to show.
+function authorHeader(name) {
+  const n = normalizeAuthorName(name);
+  return n ? n + "'s Tweet" : '';
+}
+
+// Put the author's name above the post. The rest of the text is only trimmed at
+// its ends, so the link-first reorder and any blank lines inside it survive
+// untouched. With no name the text is returned exactly as it was.
+function withAuthorHeader(text, name) {
+  const header = authorHeader(name);
+  if (!header) return text || '';
+  const body = String(text == null ? '' : text).replace(/^\s+|\s+$/g, '');
+  return body ? header + '\n\n' + body : header;
+}
+
 function findPhotoLinks(article) {
   // Only keep media links whose nearest <article> is the article we were
   // asked about (not nested quotes/reposts in another article).
@@ -292,6 +355,57 @@ function textIncludesUrl(text, url) {
   return Boolean(text && url && (text.includes(url) || text.includes(cleanDisplayUrl(url))));
 }
 
+// Close the gap a removed link leaves behind, without disturbing the lines on
+// either side of it. A link that had a line to itself leaves no blank line; one
+// that sat inside a sentence leaves a single space, not two.
+function joinAroundLink(before, after) {
+  const aloneOnLine = (before === '' || /\n[ \t]*$/.test(before))
+    && (after === '' || /^[ \t]*\n/.test(after));
+  if (aloneOnLine) {
+    // The link's line goes away, so the neighbouring lines end up separated by
+    // the one newline that was already between them (or by nothing at either
+    // end of the text).
+    const join = (before === '' || after === '') ? '' : '\n';
+    return before.replace(/\n[ \t]*$/, '') + join + after.replace(/^[ \t]*\n/, '');
+  }
+  // Inline: drop the link and keep at most one of the spaces around it.
+  const leftWs = (before.match(/[ \t]*$/) || [''])[0];
+  const rightWs = (after.match(/^[ \t]*/) || [''])[0];
+  const sep = (leftWs && rightWs) ? ' ' : '';
+  return before.slice(0, before.length - leftWs.length) + sep + after.slice(rightWs.length);
+}
+
+// Only a post with no media of its own is just its text, and only then is a
+// link better off first. A post with media keeps its words as written: there
+// the text is a caption beside the picture, not the whole post.
+function shouldLinkFirst(post) {
+  return Boolean(post) && !post.hasImage && !post.hasVideo;
+}
+
+// Move the first link in the text to the top, on a line of its own, leaving the
+// rest of the text in order. The Channel then shows the link preview above the
+// words instead of buried inside them.
+function moveFirstLinkToFront(text, urls) {
+  if (!text || !urls || !urls.length) return text;
+  let hit = null;
+  for (const url of urls) {
+    if (!url) continue;
+    const at = text.indexOf(url);
+    if (at === -1) continue;
+    if (!hit || at < hit.at) hit = { at, url };
+  }
+  if (!hit || hit.at === 0) return text;
+  const before = text.slice(0, hit.at);
+  const after = text.slice(hit.at + hit.url.length);
+  // Tidy only the seam the link left: no trailing spaces on a line, and no more
+  // than one blank line where the link used to be.
+  const rest = joinAroundLink(before, after)
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .replace(/^\s+|\s+$/g, '');
+  return rest ? hit.url + '\n' + rest : hit.url;
+}
+
 async function resolveLinkUrls(hrefs) {
   if (!hrefs.length) return {};
   try {
@@ -308,6 +422,7 @@ async function recoverPostLinks(article, post) {
   if (!links.length) return post;
   const resolvedMap = await resolveLinkUrls(links.map((link) => link.href));
   let text = post.text;
+  const finalUrls = [];
   const appended = [];
   for (const link of links) {
     const resolved = resolvedMap[link.href];
@@ -318,6 +433,7 @@ async function recoverPostLinks(article, post) {
       || (link.inText ? cleanDisplayUrl(link.display) : null)
       || link.href;
     if (!finalUrl) continue;
+    finalUrls.push(finalUrl);
     if (link.inText) {
       text = replaceDisplayInText(text, link.display, finalUrl);
     }
@@ -326,6 +442,14 @@ async function recoverPostLinks(article, post) {
   if (appended.length) {
     text = text.trim();
     text = (text ? text + '\n' : '') + appended.join('\n');
+  }
+  // Text-only posts put their link first (see shouldLinkFirst).
+  if (shouldLinkFirst(post) && finalUrls.length) {
+    const reordered = moveFirstLinkToFront(text, finalUrls);
+    if (reordered !== text) {
+      text = reordered;
+      _xlog('info', 'tweet-link-moved-first', { tweetId: post.tweetId });
+    }
   }
   if (text !== post.text) {
     _xlog('info', 'tweet-links-recovered', { tweetId: post.tweetId, links: links.length, appended: appended.length });
@@ -345,6 +469,7 @@ function extractPost(article) {
   return {
     tweetId: id,
     tweetUrl: url,
+    author: findTweetAuthor(article),
     text,
     hasImage: photoHrefs.length > 0 || mediaItems.some((m) => m.type === 'image'),
     hasVideo: hasVideo(article) || mediaItems.some((m) => m.type === 'video'),
