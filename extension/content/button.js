@@ -326,6 +326,17 @@ function wireShotButton(btn) {
       return;
     }
 
+    // Tag this exact post with a token the worker can find again through the
+    // debugger, and hand it the box that was just measured. If the post has
+    // been replaced (the tag is gone) or has moved by the time of the capture,
+    // the worker refuses rather than sending a picture of the wrong place.
+    const marker = shotMarkerToken();
+    try { currentArticle.setAttribute(SHOT_MARKER_ATTR, marker); } catch { /* no marker, no re-check */ }
+    const measured = {
+      rect: { left: rect.left, top: rect.top, width: rect.width, height: rect.height },
+      scroll: { x: window.scrollX, y: window.scrollY },
+    };
+
     let tweetId = null;
     let tweetUrl = null;
     try { tweetId = tweetIdFromArticle(currentArticle); } catch { /* no id */ }
@@ -351,12 +362,16 @@ function wireShotButton(btn) {
         type: 'SEND_SCREENSHOT',
         requestId,
         clip,
+        marker,
+        rect: measured.rect,
+        scroll: measured.scroll,
         dedupeKey: shotKey(tweetId) || `shot:${requestId}`,
         post: { tweetId, tweetUrl },
       });
     } catch (e) {
       result = { ok: false, error: 'Failed to fetch' };
     } finally {
+      try { currentArticle.removeAttribute(SHOT_MARKER_ATTR); } catch { /* already gone */ }
       shotShowChrome(hidden);
     }
 

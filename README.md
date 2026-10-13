@@ -452,6 +452,16 @@ crop stops above is found from the post's **like** button, and a quoted post's
 own like row inside the post is skipped, so the wrong row is never used as the
 cut-off.
 
+The crop is measured in the page's own CSS pixels, but the capture command
+addresses the page's pixels scaled by the browser's **page zoom**. At 100% zoom
+the two are the same; at any other zoom (`Ctrl` + `+` / `-`, or a zoom
+remembered per site) they are not, so the crop is scaled by that factor before
+it is captured — otherwise a zoomed page is photographed at an offset and the
+wrong size. Right before the capture the post is tagged, and found again through
+the debugger by that tag: if X has re-rendered or moved it in that instant, the
+capture is refused and nothing is sent, rather than a picture of the wrong
+place.
+
 Capturing needs the extension's **debugger** permission. It is attached for
 the length of one capture and detached immediately afterwards, and only ever
 to the tab you clicked in. The alternative — `chrome.tabs.captureVisibleTab` —
@@ -463,6 +473,8 @@ larger permission than this needs, so it is not used.
 |---|---|
 | **Could not capture** | The capture did not happen. The usual cause is Developer Tools being open on that tab — close it and try again. |
 | **Nothing could be captured from this post** | The post was not on screen, so there was no box to capture. |
+| **The post changed on the page before it could be captured** | X re-rendered the post between the click and the capture, so the wrong thing would have been photographed. Try again. |
+| **The post moved on the page before it could be captured** | The post shifted between the click and the capture. Try again. |
 
 What a screenshot **cannot** include:
 
@@ -813,7 +825,7 @@ curl -s http://127.0.0.1:47825/channels
 node controller/test/dependency.test.js      # vendored library + patches intact
 node controller/test/controller.test.js      # session paths, browser choice, single-instance lock, channel eligibility, liveness watchdog
 node controller/test/repo.test.js            # update checks and fast-forward, against throwaway repos (no network)
-node extension/test/screenshot.test.js       # screenshot crop targeting (stops above the action bar; hides the page chrome) + inline-image transfer
+node extension/test/screenshot.test.js       # screenshot crop targeting (stops above the action bar; hides the page chrome), the page-zoom -> DIP conversion, and the capture-time re-check + inline-image transfer
 node extension/test/toolbar.test.js          # our icons get a row of their own beneath X's action bar
 node controller/test/screenshot-pipeline.test.js  # a captured image becomes a real, sniffed image file
 node extension/test/popup-states.test.js     # every popup state, incl. reconnecting and signed-out

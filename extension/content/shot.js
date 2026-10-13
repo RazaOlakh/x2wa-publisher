@@ -141,11 +141,24 @@ function shotCaption(tweetUrl) {
   return tweetUrl || '';
 }
 
+// A token naming this one capture. It is put on the post element and sent
+// with the request, so the worker can find that exact node again through the
+// debugger and confirm it is still where it was measured - a post X has
+// re-rendered or moved in between is refused instead of photographed in the
+// wrong place. The value is ours: a short, safe token, never read from the
+// page, so it can only ever address this attribute.
+function shotMarkerToken() {
+  return 's' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+}
+
 const SHOT_ERROR_HINTS = {
   'no-article': 'The post could not be read from the page.',
   'capture-unavailable': 'Chrome would not let the extension capture this tab. Close any Developer Tools window for this tab and try again.',
   'capture-failed': 'The screenshot came back empty. Try scrolling the post into view and pressing again.',
   'capture-too-small': 'The post is not on screen, so there was nothing to capture.',
+  'capture-invalid-clip': 'The post had no usable size on screen, so there was nothing to capture.',
+  'capture-node-detached': 'The post changed on the page before it could be captured. Try again.',
+  'capture-node-moved': 'The post moved on the page before it could be captured. Try again.',
   'empty-screenshot': 'Nothing could be captured from this post.',
   'no-default-channel': 'Choose a destination channel in the extension popup first.',
   'Failed to fetch': 'Lost contact with the controller. Check that it is running.',
@@ -156,5 +169,5 @@ function shotErrorHint(code) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { shotClip, shotContainer, SHOT_POST_SELECTOR, shotActionBar, shotContentRect, shotHideChrome, shotShowChrome, shotKey, shotCaption, shotErrorHint, SHOT_ERROR_HINTS };
+  module.exports = { shotClip, shotContainer, SHOT_POST_SELECTOR, shotActionBar, shotContentRect, shotHideChrome, shotShowChrome, shotKey, shotCaption, shotMarkerToken, shotErrorHint, SHOT_ERROR_HINTS };
 }

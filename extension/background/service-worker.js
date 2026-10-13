@@ -2,7 +2,11 @@
 // local controller at http://127.0.0.1:47825. Image source resolution is based on
 // article-scoped references gathered by the content script.
 // video-source.js holds the (testable) rule that names a post's video.
+// shared/clip.js holds the (testable) capture geometry: the page-zoom
+// conversion between the crop's CSS pixels and the capture command's DIP, and
+// the marker that lets a capture re-find the post it was measured from.
 importScripts('video-source.js');
+importScripts('../shared/clip.js');
 
 const CONTROLLER = 'http://127.0.0.1:47825';
 
@@ -99,15 +103,67 @@ function reply(sendResponse, obj) {
 const CAPTURE_FORMAT = 'jpeg';
 const CAPTURE_QUALITY = 88;
 
-async function captureClip(tabId, clip) {
+// Read the tagged post back through the debugger and return its box in
+// document CSS pixels - the same space the content script's rectangle was
+// converted into, so the two can be compared directly. A post that is no
+// longer in the document (X re-rendered it) reports an error instead of a box.
+async function inspectTarget(target, marker, metrics) {
+  const selector = markerSelector(marker);
+  if (!selector) return { error: 'capture-node-detached' };
+  try {
+    await chrome.debugger.sendCommand(target, 'DOM.enable');
+    const { root } = await chrome.debugger.sendCommand(target, 'DOM.getDocument', { depth: 0 });
+    const found = await chrome.debugger.sendCommand(target, 'DOM.querySelector', { nodeId: root.nodeId, selector });
+    if (!found || !found.nodeId) return { error: 'capture-node-detached' };
+    const raw = await chrome.debugger.sendCommand(target, 'DOM.getBoxModel', { nodeId: found.nodeId });
+    const model = raw && (raw.model || raw);
+    const q = model && model.border;
+    if (!q || q.length < 8) return { error: 'capture-invalid-clip' };
+    const left = Math.min(q[0], q[2], q[4], q[6]);
+    const top = Math.min(q[1], q[3], q[5], q[7]);
+    const width = Math.max(q[0], q[2], q[4], q[6]) - left;
+    const height = Math.max(q[1], q[3], q[5], q[7]) - top;
+    const vx = (metrics && metrics.cssVisualViewport && metrics.cssVisualViewport.pageX) || 0;
+    const vy = (metrics && metrics.cssVisualViewport && metrics.cssVisualViewport.pageY) || 0;
+    return { rect: { left: left + vx, top: top + vy, width, height } };
+  } catch (e) {
+    return { error: 'capture-node-detached' };
+  }
+}
+
+async function captureClip(tabId, clip, marker, measured) {
   const target = { tabId };
   await chrome.debugger.attach(target, '1.3');
   try {
+    // The page zoom is only visible here, through the debugger: the crop was
+    // measured in CSS pixels, but the capture command addresses DIP, which is
+    // CSS pixels scaled by this factor. Without it the crop is wrong at any
+    // browser zoom other than 100%.
+    const metrics = await chrome.debugger.sendCommand(target, 'Page.getLayoutMetrics');
+
+    // Re-check the post the click pointed at, when one was tagged. A post that
+    // has gone, or that no longer sits where it was measured, is refused here
+    // rather than photographed in the wrong place.
+    if (marker && measured && measured.rect) {
+      const seen = await inspectTarget(target, marker, metrics);
+      if (seen.error) return { error: seen.error };
+      const sx = (measured.scroll && measured.scroll.x) || 0;
+      const sy = (measured.scroll && measured.scroll.y) || 0;
+      const was = {
+        left: measured.rect.left + sx, top: measured.rect.top + sy,
+        width: measured.rect.width, height: measured.rect.height,
+      };
+      if (!rectsAgree(was, seen.rect, 4)) return { error: 'capture-node-moved' };
+    }
+
+    const dip = clipToDip(clip, pageZoom(metrics));
+    if (!dip) return { error: 'capture-invalid-clip' };
+
     const shot = await chrome.debugger.sendCommand(target, 'Page.captureScreenshot', {
       format: CAPTURE_FORMAT,
       quality: CAPTURE_QUALITY,
       captureBeyondViewport: true,
-      clip: { x: clip.x, y: clip.y, width: clip.width, height: clip.height, scale: 1 },
+      clip: dip,
     });
     if (!shot || !shot.data) return { error: 'capture-failed' };
     return { dataUrl: `data:image/${CAPTURE_FORMAT};base64,${shot.data}` };
@@ -178,7 +234,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
       let shot;
       try {
-        shot = await captureClip(tabId, clip);
+        shot = await captureClip(tabId, clip, msg.marker, { rect: msg.rect, scroll: msg.scroll });
       } catch (e) {
         // Chrome refuses this while Developer Tools is open on the tab, which
         // is the common cause and worth saying so plainly.
