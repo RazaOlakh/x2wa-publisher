@@ -568,18 +568,33 @@ function createPostButton(article, named) {
   return btn;
 }
 
+// A post that could not be read at all: report it, then let the button fall
+// back to its idle icon so the post can be tried again.
+function showReadError(btn, label, title, detail, requestId, error) {
+  btn.disabled = false;
+  renderButton(btn, 'error', label);
+  showSnackbar('error', title, detail);
+  try { xlog('error', 'extraction-failed', { requestId, error }); } catch {}
+  setTimeout(() => {
+    if (btn.isConnected && btn.dataset.state === 'error') renderButton(btn, 'idle', 'Post to WhatsApp');
+  }, 4000);
+}
+
 async function onPostClick(ev, btn, named) {
   ev.preventDefault();
   ev.stopPropagation();
   if (btn.disabled) return;
+  // Acknowledge the click at once: reading the post can take a moment - a long
+  // post is expanded, a video's streams are primed, a link is resolved - and
+  // the spinner must cover all of that, not just the send that follows.
+  btn.disabled = true;
+  renderButton(btn, 'working', 'Sending…');
   const requestId = 'req-' + Date.now();
   try { xlog('info', 'button-click', { requestId, named: !!named, articleUrl: location.href }); } catch {}
 
   const currentArticle = btn.closest('article');
   if (!currentArticle) {
-    renderButton(btn, 'error', 'Err');
-    showSnackbar('error', 'Could not post', 'The post could not be read from the page.');
-    xlog('error', 'extraction-failed', { requestId, error: 'no article' });
+    showReadError(btn, 'Err', 'Could not post', 'The post could not be read from the page.', requestId, 'no article');
     return;
   }
 
@@ -588,10 +603,7 @@ async function onPostClick(ev, btn, named) {
   try { xlog('info', 'extraction-succeeded', { requestId, tweetId: post && post.tweetId, textLength: post && post.text ? post.text.length : 0, mediaTypes: post ? [post.hasImage ? 'image' : null, post.hasVideo ? 'video' : null].filter(Boolean) : [], error: post ? post.error : 'missing' }); } catch {}
 
   if (post.error) {
-    renderButton(btn, 'error', 'Unsupported');
-    showSnackbar('error', 'Could not post this one', 'X did not expose the text, link or media of this post.');
-    xlog('error', 'extraction-failed', { requestId, error: post.error });
-    setTimeout(() => renderButton(btn, 'idle', 'Post to WhatsApp'), 4000);
+    showReadError(btn, 'Unsupported', 'Could not post this one', 'X did not expose the text, link or media of this post.', requestId, post.error);
     return;
   }
 
@@ -600,8 +612,6 @@ async function onPostClick(ev, btn, named) {
   // name. With no author found the text goes through untouched.
   if (named) post = { ...post, text: withAuthorHeader(post.text, post.author) };
 
-  btn.disabled = true;
-  renderButton(btn, 'working', 'Sending…');
   // Once it is sent the tick stays put; only a failure reverts, so the
   // post can be tried again.
   let sent = false;
