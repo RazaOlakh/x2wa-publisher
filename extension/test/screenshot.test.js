@@ -28,7 +28,7 @@ function eq(name, got, want) {
 const sandbox = { module: undefined, window: {} };
 vm.createContext(sandbox);
 vm.runInContext(shotSrc, sandbox);
-const { shotClip, shotContainer, shotKey, shotCaption, shotErrorHint } = sandbox;
+const { shotClip, shotContainer, shotActionBar, shotContentRect, shotKey, shotCaption, shotErrorHint } = sandbox;
 
 // ------------------------------------------------------- capture targeting
 console.log('captures this post alone, in page coordinates');
@@ -173,6 +173,80 @@ console.log('the crop is taken from the clicked button\'s own post');
   const bar = fakeEl('div', { role: 'group' }); roleOnly.append(bar);
   const btn = fakeEl('button', {}); bar.append(btn);
   check('an article without the testid is still a post', shotContainer(btn) === roleOnly);
+}
+
+// ------------------------------------------------ cropping out the controls
+//
+// A screenshot is of the post, not of the interface around it. X's action bar
+// (reply / repost / like / share) and the extension's own toolbar sit at the
+// bottom of the post, so the crop stops where the action bar begins.
+console.log('the crop stops above the action bar');
+{
+  // The action bar is found from its like button, which only the bar has.
+  const { article, bar } = fakePost();
+  bar.append(fakeEl('button', { 'data-testid': 'like' }));
+  bar.append(fakeEl('button', { 'data-testid': 'reply' }));
+  check('the bar is found from its like button', shotActionBar(article) === bar);
+}
+{
+  // A quoted post renders its own like row inside this post. That row is not
+  // this post's action bar and must not be mistaken for it.
+  const article = fakeEl('article', { 'data-testid': 'tweet', role: 'article' });
+  const quote = fakeEl('div', { 'data-testid': 'quoteTweet' });
+  const quoteBar = fakeEl('div', { role: 'group' });
+  quoteBar.append(fakeEl('button', { 'data-testid': 'like' }));
+  quote.append(quoteBar);
+  const realBar = fakeEl('div', { role: 'group' });
+  realBar.append(fakeEl('button', { 'data-testid': 'like' }));
+  article.append(quote);
+  article.append(realBar);
+  check('a quoted post\'s like row is skipped', shotActionBar(article) === realBar);
+  check('and the quoted row is not chosen', shotActionBar(article) !== quoteBar);
+}
+{
+  // No like button to key on: the first action-bar-like group is still better
+  // than cropping the whole post and including the controls.
+  const { article, bar } = fakePost();
+  check('a bar without a like button is still found', shotActionBar(article) === bar);
+}
+{
+  const noBar = fakeEl('article', { 'data-testid': 'tweet' });
+  check('a post with no action bar has no bar', shotActionBar(noBar) === null);
+  check('nothing at all has no bar', shotActionBar(null) === null);
+  check('something without querySelectorAll has no bar', shotActionBar({}) === null);
+}
+
+console.log('the post\'s content rectangle stops where the controls begin');
+{
+  // The bar's top is in viewport coordinates, the same space as the rect.
+  const rect = { left: 10, top: 100, width: 500, height: 600 };
+  eq('the crop ends at the action bar', shotContentRect(rect, 500), { left: 10, top: 100, width: 500, height: 400 });
+}
+{
+  const rect = { left: 10, top: -300, width: 500, height: 600 };
+  // Scrolled up: a negative top with a bar still below the top of the post.
+  eq('a post scrolled partly off the top still crops to its content', shotContentRect(rect, -40), { left: 10, top: -300, width: 500, height: 260 });
+}
+{
+  const rect = { left: 10, top: 100, width: 500, height: 600 };
+  eq('no bar leaves the whole post', shotContentRect(rect, undefined), rect);
+  eq('a non-numeric bar position leaves the whole post', shotContentRect(rect, NaN), rect);
+  eq('a bar above the top of the post leaves the whole post', shotContentRect(rect, 50), rect);
+  eq('a bar past the bottom is cut to the post', shotContentRect(rect, 9000), rect);
+  check('no rectangle yields nothing', shotContentRect(null, 500) === null);
+}
+
+console.log('the controls are absent from the clip that is actually sent');
+{
+  // End to end through the same two steps the button takes: measure the post,
+  // trim to the action bar, then convert to page coordinates.
+  const rect = { left: 20, top: -300, width: 560, height: 700 };
+  const barTop = -300 + 580; // content ends 580px below the post's top
+  const content = shotContentRect(rect, barTop);
+  const clip = shotClip(content, 0, 400, 1200, 9000);
+  eq('the clip keeps the post\'s width and position', { x: clip.x, y: clip.y, width: clip.width }, { x: 20, y: 100, width: 560 });
+  eq('and stops above the bar', clip.height, 580);
+  check('so the picture is shorter than the whole post', clip.height < rect.height, { clip: clip.height, post: rect.height });
 }
 
 // ------------------------------------------------------------- duplicate

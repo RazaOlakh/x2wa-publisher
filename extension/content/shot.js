@@ -1,8 +1,9 @@
 // Screenshot of a single post.
 //
 // Split out from button.js so the parts that decide *what* to capture and
-// *how* to describe the result can be tested without a browser: this file
-// holds no DOM work of its own beyond reading a rectangle.
+// *how* to describe the result can be tested without a browser: the only DOM
+// this file touches is finding the post and finding its action bar. The crop
+// is computed from rectangles.
 //
 // Only this post's own box is ever captured. The crop is computed in page
 // coordinates (scroll included) because that is the space the capture API
@@ -47,6 +48,47 @@ function shotContainer(start) {
   return el;
 }
 
+// --- what part of the post is the post ---
+//
+// The post's action bar - the reply / repost / like / share row - is a row of
+// controls, and the extension's own toolbar sits directly beneath it. Neither
+// is part of the post, so a screenshot stops above them: the picture is the
+// post's author, text and media, not the buttons around it.
+//
+// The bar is found from the like button, which only the bar has, and never
+// from a quoted post's own bar rendered inside this one.
+const SHOT_ACTION_BAR_SELECTOR = 'div[role="group"]';
+const SHOT_LIKE_SELECTOR = 'button[data-testid="like"]';
+const SHOT_QUOTE_SELECTOR = 'div[data-testid="quoteTweet"]';
+
+function shotActionBar(article) {
+  if (!article || typeof article.querySelectorAll !== 'function') return null;
+  const likes = article.querySelectorAll(SHOT_LIKE_SELECTOR);
+  for (const like of likes) {
+    // A quoted post carries its own like row inside this post; that is not
+    // this post's action bar, so skip it and keep looking.
+    if (typeof like.closest === 'function' && like.closest(SHOT_QUOTE_SELECTOR)) continue;
+    const bar = typeof like.closest === 'function' ? like.closest(SHOT_ACTION_BAR_SELECTOR) : null;
+    if (bar) return bar;
+  }
+  // No like button to key on (X rendered the bar differently, or the post has
+  // none): fall back to the first action-bar-like group so the post is still
+  // cropped above its controls.
+  const groups = article.querySelectorAll(SHOT_ACTION_BAR_SELECTOR);
+  return groups.length ? groups[0] : null;
+}
+
+// The post's own rectangle: the article's box up to where its action bar
+// begins. A bar that is missing, or that sits at or above the top of the post,
+// leaves the whole post captured rather than less than the post.
+function shotContentRect(rect, actionTop) {
+  if (!rect) return rect;
+  if (typeof actionTop !== 'number' || !isFinite(actionTop)) return rect;
+  const height = actionTop - rect.top;
+  if (!(height > 0)) return rect;
+  return { left: rect.left, top: rect.top, width: rect.width, height: Math.min(height, rect.height) };
+}
+
 // A screenshot is deduplicated against screenshots, not against posting the
 // same post: taking a picture of a post must not stop you from posting it,
 // and vice versa.
@@ -75,5 +117,5 @@ function shotErrorHint(code) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { shotClip, shotContainer, SHOT_POST_SELECTOR, shotKey, shotCaption, shotErrorHint, SHOT_ERROR_HINTS };
+  module.exports = { shotClip, shotContainer, SHOT_POST_SELECTOR, shotActionBar, shotContentRect, shotKey, shotCaption, shotErrorHint, SHOT_ERROR_HINTS };
 }

@@ -396,10 +396,19 @@ The capture is of that one post, not of the window or the page: the crop is
 computed from the post's own position on the page, and the post does not have
 to be fully on screen to be captured.
 
+What the picture contains is the post itself — the author, the text, and any
+images or quoted card. It stops above the post's action bar (reply / repost /
+like / share), which, together with this extension's own row beneath it, is a
+row of controls rather than part of the post. A screenshot is therefore of the
+post as written, with no interface around it.
+
 The box is found from the button itself — the post is the nearest post element
 above the clicked button. A container that holds more than one post (the
 timeline list, or a thread module) is refused rather than cropped, so a
-neighbouring post can never end up in the picture.
+neighbouring post can never end up in the picture. The action bar that the
+crop stops above is found from the post's **like** button, and a quoted post's
+own like row inside the post is skipped, so the wrong row is never used as the
+cut-off.
 
 Capturing needs the extension's **debugger** permission. It is attached for
 the length of one capture and detached immediately afterwards, and only ever
@@ -752,7 +761,7 @@ curl -s http://127.0.0.1:47825/channels
 node controller/test/dependency.test.js      # vendored library + patches intact
 node controller/test/controller.test.js      # session paths, single-instance lock, channel eligibility, liveness watchdog
 node controller/test/repo.test.js            # update checks and fast-forward, against throwaway repos (no network)
-node extension/test/screenshot.test.js       # screenshot crop targeting + inline-image transfer
+node extension/test/screenshot.test.js       # screenshot crop targeting (stops above the action bar) + inline-image transfer
 node extension/test/toolbar.test.js          # our icons get a row of their own beneath X's action bar
 node controller/test/screenshot-pipeline.test.js  # a captured image becomes a real, sniffed image file
 node extension/test/popup-states.test.js     # every popup state, incl. reconnecting and signed-out

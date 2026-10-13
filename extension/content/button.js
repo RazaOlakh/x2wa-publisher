@@ -305,12 +305,15 @@ function wireShotButton(btn) {
     btn.disabled = true;
     renderShotButton(btn, 'working');
 
-    // Bring the post into view before measuring: captureBeyondViewport can
-    // reach below the fold, but a post scrolled off entirely has nothing to
-    // anchor to, and this also means the user sees what was captured.
+    // The crop is the post's own box, stopping above its action bar: the
+    // action bar (reply / repost / like / share) and the extension's own row
+    // beneath it are controls, not content, so the picture is the post's
+    // author, text and media rather than the buttons around it.
     const rect = currentArticle.getBoundingClientRect();
+    const bar = shotActionBar(currentArticle);
+    const contentRect = shotContentRect(rect, bar ? bar.getBoundingClientRect().top : undefined);
     const clip = shotClip(
-      rect, window.scrollX, window.scrollY,
+      contentRect, window.scrollX, window.scrollY,
       document.documentElement.scrollWidth, document.documentElement.scrollHeight,
     );
     if (!clip) {
