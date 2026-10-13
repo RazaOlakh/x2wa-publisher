@@ -28,7 +28,7 @@ function eq(name, got, want) {
 const sandbox = { module: undefined, window: {} };
 vm.createContext(sandbox);
 vm.runInContext(shotSrc, sandbox);
-const { shotClip, shotContainer, shotActionBar, shotContentRect, shotKey, shotCaption, shotErrorHint } = sandbox;
+const { shotClip, shotContainer, shotActionBar, shotContentRect, shotHideChrome, shotShowChrome, shotKey, shotCaption, shotErrorHint } = sandbox;
 
 // ------------------------------------------------------- capture targeting
 console.log('captures this post alone, in page coordinates');
@@ -82,8 +82,15 @@ function fakeEl(tag, attrs) {
     attrs: attrs || {},
     parent: null,
     children: [],
+    // Mirror the DOM: reading a style property that was never set gives ''.
+    style: { visibility: '' },
     getAttribute(name) { return Object.prototype.hasOwnProperty.call(el.attrs, name) ? el.attrs[name] : null; },
     append(child) { child.parent = el; el.children.push(child); return child; },
+    contains(node) {
+      if (!node) return false;
+      if (el === node) return true;
+      return el.children.some((c) => c.contains && c.contains(node));
+    },
     matches(sel) { return sel.split(',').some((s) => matchSimple(el, s.trim())); },
     closest(sel) { let c = el; while (c) { if (c.matches && c.matches(sel)) return c; c = c.parent; } return null; },
     querySelectorAll(sel) {
@@ -247,6 +254,59 @@ console.log('the controls are absent from the clip that is actually sent');
   eq('the clip keeps the post\'s width and position', { x: clip.x, y: clip.y, width: clip.width }, { x: 20, y: 100, width: 560 });
   eq('and stops above the bar', clip.height, 580);
   check('so the picture is shorter than the whole post', clip.height < rect.height, { clip: clip.height, post: rect.height });
+}
+
+// ---------------------------------------------------- hiding the page chrome
+//
+// A capture may be taller than the window, and Chrome then paints the page's
+// fixed and sticky furniture into the shot, on top of the post. That chrome is
+// hidden for the capture and restored afterwards; the post is never touched.
+console.log('the page\'s own chrome is hidden for the capture, then put back');
+{
+  const root = fakeEl('div', {});
+  const topBar = fakeEl('div', {}); topBar._position = 'fixed';   // the app bar
+  const tabs = fakeEl('div', {}); tabs._position = 'sticky';      // For you / Following
+  const plain = fakeEl('div', {}); plain._position = 'static';    // ordinary content
+  const wrapper = fakeEl('div', {}); wrapper._position = 'fixed'; // a fixed ancestor
+  const article = fakeEl('article', { 'data-testid': 'tweet' });
+  const insideFixed = fakeEl('div', {}); insideFixed._position = 'fixed'; // fixed, but in the post
+  wrapper.append(article);
+  article.append(insideFixed);
+  for (const el of [topBar, tabs, plain, wrapper, article, insideFixed]) root.append(el);
+
+  const all = [root, topBar, tabs, plain, wrapper, article, insideFixed];
+  const doc = { querySelectorAll: () => all };
+  const styleOf = (el) => ({ position: el._position || 'static' });
+
+  const hidden = shotHideChrome(article, doc, styleOf);
+  check('the fixed app bar is hidden', topBar.style.visibility === 'hidden');
+  check('the sticky For you / Following strip is hidden', tabs.style.visibility === 'hidden');
+  check('an ordinary element is left alone', plain.style.visibility === '');
+  check('a fixed ancestor of the post is left visible', wrapper.style.visibility === '');
+  check('something fixed inside the post is left visible', insideFixed.style.visibility === '');
+  eq('only the page chrome was recorded', hidden.length, 2);
+
+  shotShowChrome(hidden);
+  check('the app bar is shown again', topBar.style.visibility === '');
+  check('the tab strip is shown again', tabs.style.visibility === '');
+}
+{
+  // Anything already hidden inline is put back exactly as it was found.
+  const root = fakeEl('div', {});
+  const bar = fakeEl('div', {}); bar._position = 'fixed'; bar.style.visibility = 'collapse';
+  root.append(bar);
+  const doc = { querySelectorAll: () => [root, bar] };
+  const styleOf = (el) => ({ position: el._position || 'static' });
+  const hidden = shotHideChrome(null, doc, styleOf);
+  check('with no post to protect, chrome is still hidden', bar.style.visibility === 'hidden');
+  shotShowChrome(hidden);
+  check('and its own prior value comes back', bar.style.visibility === 'collapse');
+}
+{
+  // Nothing to hide, and nothing to put back, must still be safe.
+  const doc = { querySelectorAll: () => [] };
+  eq('no chrome yields nothing to restore', shotHideChrome(null, doc, () => ({ position: 'static' })), []);
+  check('restoring nothing is harmless', (shotShowChrome([]), shotShowChrome(null), true));
 }
 
 // ------------------------------------------------------------- duplicate

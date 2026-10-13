@@ -333,7 +333,18 @@ function wireShotButton(btn) {
     } catch { /* no permalink */ }
 
     let result;
+    // A capture taller than the window makes Chrome paint the page's fixed and
+    // sticky furniture - the For you / Following tab strip, overlays - into the
+    // picture, on top of the post. Hide that chrome for the instant of the
+    // capture and put it back afterwards, whatever the outcome.
+    const hidden = shotHideChrome(currentArticle);
     try {
+      // Let the hidden state be painted before the debugger grabs the frame.
+      await new Promise((resolve) => {
+        const done = () => resolve();
+        requestAnimationFrame(() => requestAnimationFrame(done));
+        setTimeout(done, 100); // a background tab may not paint a frame
+      });
       result = await chrome.runtime.sendMessage({
         type: 'SEND_SCREENSHOT',
         requestId,
@@ -343,6 +354,8 @@ function wireShotButton(btn) {
       });
     } catch (e) {
       result = { ok: false, error: 'Failed to fetch' };
+    } finally {
+      shotShowChrome(hidden);
     }
 
     btn.disabled = false;

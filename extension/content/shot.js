@@ -1,9 +1,10 @@
 // Screenshot of a single post.
 //
 // Split out from button.js so the parts that decide *what* to capture and
-// *how* to describe the result can be tested without a browser: the only DOM
-// this file touches is finding the post and finding its action bar. The crop
-// is computed from rectangles.
+// *how* to describe the result can be tested without a browser: the DOM this
+// file touches is finding the post, finding its action bar, and the page's
+// fixed and sticky chrome to take out of the picture. The crop itself is
+// computed from rectangles.
 //
 // Only this post's own box is ever captured. The crop is computed in page
 // coordinates (scroll included) because that is the space the capture API
@@ -89,6 +90,44 @@ function shotContentRect(rect, actionTop) {
   return { left: rect.left, top: rect.top, width: rect.width, height: Math.min(height, rect.height) };
 }
 
+// --- the page's own chrome ---
+//
+// A capture may be taller than the window, and Chrome then paints the page's
+// fixed and sticky furniture - the top bar with its For you / Following tabs,
+// overlays, toasts - into the picture, at the place they occupy on screen. That
+// furniture is the site's, not the post's, and it lands on top of the post.
+//
+// So it is hidden for the length of the capture and put back afterwards. Only
+// elements the post is not inside (and that are not inside the post) are
+// touched, so the post itself is never hidden; and hiding (rather than
+// removing) keeps every element's space, so the post does not move.
+function shotHideChrome(keep, doc, styleOf) {
+  doc = doc || document;
+  styleOf = styleOf || getComputedStyle;
+  const hidden = [];
+  const all = doc.querySelectorAll('*');
+  for (const el of all) {
+    let position;
+    try { position = styleOf(el).position; } catch { continue; }
+    if (position !== 'fixed' && position !== 'sticky') continue;
+    // Never hide the post, something it is inside, or something inside it:
+    // only the page's own chrome.
+    if (keep && (el === keep || (el.contains && el.contains(keep)) || (keep.contains && keep.contains(el)))) continue;
+    if (!el.style) continue;
+    hidden.push([el, el.style.visibility]);
+    el.style.visibility = 'hidden';
+  }
+  return hidden;
+}
+
+// Put back exactly what was hidden, and nothing else.
+function shotShowChrome(hidden) {
+  if (!hidden) return;
+  for (const entry of hidden) {
+    if (entry && entry[0] && entry[0].style) entry[0].style.visibility = entry[1];
+  }
+}
+
 // A screenshot is deduplicated against screenshots, not against posting the
 // same post: taking a picture of a post must not stop you from posting it,
 // and vice versa.
@@ -117,5 +156,5 @@ function shotErrorHint(code) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { shotClip, shotContainer, SHOT_POST_SELECTOR, shotActionBar, shotContentRect, shotKey, shotCaption, shotErrorHint, SHOT_ERROR_HINTS };
+  module.exports = { shotClip, shotContainer, SHOT_POST_SELECTOR, shotActionBar, shotContentRect, shotHideChrome, shotShowChrome, shotKey, shotCaption, shotErrorHint, SHOT_ERROR_HINTS };
 }

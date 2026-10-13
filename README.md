@@ -402,6 +402,13 @@ like / share), which, together with this extension's own row beneath it, is a
 row of controls rather than part of the post. A screenshot is therefore of the
 post as written, with no interface around it.
 
+The page's own floating furniture — the top bar with its **For you / Following**
+tabs, and any overlay or toast — is fixed or sticky, and a capture taller than
+the window would paint it on top of the post. It is hidden for the length of the
+capture and shown again immediately afterwards, so the picture carries the post
+and not the bar floating over it. Nothing the post is inside, or that is inside
+the post, is ever hidden.
+
 The box is found from the button itself — the post is the nearest post element
 above the clicked button. A container that holds more than one post (the
 timeline list, or a thread module) is refused rather than cropped, so a
@@ -761,7 +768,7 @@ curl -s http://127.0.0.1:47825/channels
 node controller/test/dependency.test.js      # vendored library + patches intact
 node controller/test/controller.test.js      # session paths, single-instance lock, channel eligibility, liveness watchdog
 node controller/test/repo.test.js            # update checks and fast-forward, against throwaway repos (no network)
-node extension/test/screenshot.test.js       # screenshot crop targeting (stops above the action bar) + inline-image transfer
+node extension/test/screenshot.test.js       # screenshot crop targeting (stops above the action bar; hides the page chrome) + inline-image transfer
 node extension/test/toolbar.test.js          # our icons get a row of their own beneath X's action bar
 node controller/test/screenshot-pipeline.test.js  # a captured image becomes a real, sniffed image file
 node extension/test/popup-states.test.js     # every popup state, incl. reconnecting and signed-out
