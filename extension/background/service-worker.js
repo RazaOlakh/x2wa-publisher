@@ -143,6 +143,27 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     })();
     return true;
   }
+  // Translate a short string on its own - the author's name that heads an Urdu
+  // post. The post's own text is translated by the controller as part of the
+  // send; this is the small, separate request for the name.
+  if (msg && msg.type === 'TRANSLATE_TEXT' && typeof msg.text === 'string') {
+    (async () => {
+      try {
+        const res = await fetch(`${CONTROLLER}/translate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: msg.text, to: msg.to || 'ur' }),
+        });
+        const j = await res.json();
+        if (j && j.ok) return reply(sendResponse, { ok: true, text: j.text });
+        return reply(sendResponse, { ok: false, error: (j && j.error) || 'translate-failed' });
+      } catch (e) {
+        swLog('warn', 'translate-text-failed', { error: e.message });
+        reply(sendResponse, { ok: false, error: e.message });
+      }
+    })();
+    return true;
+  }
   if (msg && msg.type === 'SEND_SCREENSHOT') {
     swLog('info', 'screenshot-received', { requestId: msg.requestId, tweetId: msg.post && msg.post.tweetId });
     (async () => {

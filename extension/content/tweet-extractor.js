@@ -65,18 +65,55 @@ function findTweetAuthor(article) {
   return null;
 }
 
-// The line that goes above a post when it is sent in "name the author" mode:
-// "Imran Khan" -> "Imran Khan's Tweet". Empty when there is no name to show.
-function authorHeader(name) {
-  const n = normalizeAuthorName(name);
-  return n ? n + "'s Tweet" : '';
+// --- The post's language ---
+// Urdu is written in the Arabic script, and X hands us plain text with no
+// language tag. Counting the Arabic-script letters against the Latin ones tells
+// the two apart without a network call. Links are dropped first: an otherwise
+// Urdu post carrying a long t.co URL is full of Latin letters, and that link
+// must not decide the post is English.
+const ARABIC_SCRIPT_LETTER = /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]/;
+const LATIN_LETTER = /[A-Za-z]/;
+
+function withoutLinks(text) {
+  return String(text == null ? '' : text)
+    .replace(/\bhttps?:\/\/\S+/gi, ' ')
+    .replace(/\bwww\.\S+/gi, ' ')
+    .replace(/\bt\.co\/\S+/gi, ' ');
 }
 
-// Put the author's name above the post. The rest of the text is only trimmed at
-// its ends, so the link-first reorder and any blank lines inside it survive
-// untouched. With no name the text is returned exactly as it was.
-function withAuthorHeader(text, name) {
-  const header = authorHeader(name);
+// True when a post reads as Urdu: it has Arabic-script letters and more of them
+// than Latin ones. A single Urdu word inside an English post does not flip it,
+// and a post with no letters at all (emoji, numbers) reads as English.
+function isUrduText(text) {
+  let arabic = 0;
+  let latin = 0;
+  for (const ch of withoutLinks(text)) {
+    if (ARABIC_SCRIPT_LETTER.test(ch)) arabic++;
+    else if (LATIN_LETTER.test(ch)) latin++;
+  }
+  return arabic > latin;
+}
+
+// The line that goes above a post when it is sent in "name the author" mode.
+// The post's own language decides the language of that line, so an Urdu post is
+// headed in Urdu and an English one as before:
+//   "Imran Khan", 'en' -> "Imran Khan's Tweet"
+//   "عمران خان",  'ur' -> "عمران خان کی ٹویٹ"
+// Empty when there is no name to show.
+const AUTHOR_HEADER_SUFFIX = { en: "'s Tweet", ur: ' کی ٹویٹ' };
+
+function authorHeader(name, lang) {
+  const n = normalizeAuthorName(name);
+  if (!n) return '';
+  return n + (AUTHOR_HEADER_SUFFIX[lang] || AUTHOR_HEADER_SUFFIX.en);
+}
+
+// Put the author's name above the post, in the post's own language. The rest of
+// the text is only trimmed at its ends, so the link-first reorder and any blank
+// lines inside it survive untouched. With no name the text is returned exactly
+// as it was.
+function withAuthorHeader(text, name, lang) {
+  const header = authorHeader(name, lang);
   if (!header) return text || '';
   const body = String(text == null ? '' : text).replace(/^\s+|\s+$/g, '');
   return body ? header + '\n\n' + body : header;

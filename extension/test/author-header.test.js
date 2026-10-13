@@ -28,7 +28,7 @@ function eq(name, got, want) {
 const sandbox = { window: {}, console: { log() {} }, location: { origin: 'https://x.com' } };
 vm.createContext(sandbox);
 vm.runInContext(src, sandbox);
-const { pickAuthorName, authorHeader, withAuthorHeader, findTweetAuthor, extractPost } = sandbox;
+const { pickAuthorName, authorHeader, withAuthorHeader, isUrduText, findTweetAuthor, extractPost } = sandbox;
 
 // --- the rule, on its own ---
 console.log('the display name is the first real name in the User-Name block');
@@ -117,6 +117,36 @@ console.log('\nthe header line');
   eq('no name means no header', authorHeader(''), '');
   eq('a blank name means no header', authorHeader('   '), '');
   eq('a missing name means no header', authorHeader(null), '');
+}
+
+// --- the post's language, from its own letters ---
+console.log('\nthe post\'s language is read from its letters');
+{
+  eq('an Urdu post reads as Urdu', isUrduText('یہ بہت اچھی خبر ہے'), true);
+  eq('an English post reads as English', isUrduText('This is great news'), false);
+  eq('a long Latin link does not turn an Urdu post English',
+    isUrduText('یہ بہت اچھی خبر ہے https://t.co/AbCdEfGhIjKlMnOpQr'), true);
+  eq('a bare t.co link does not either',
+    isUrduText('خبر t.co/AbCdEfGhIjKlMnOpQr'), true);
+  eq('a stray Urdu word does not turn an English post Urdu',
+    isUrduText('Hello everyone یہ'), false);
+  eq('no letters at all reads as English', isUrduText('123 456 🎉'), false);
+  eq('empty reads as English', isUrduText(''), false);
+  eq('missing text reads as English', isUrduText(null), false);
+}
+
+// --- the header follows that language ---
+console.log('\nthe header is written in the post\'s language');
+{
+  eq('English keeps the familiar header', authorHeader('Imran Khan', 'en'), "Imran Khan's Tweet");
+  eq('no language still reads as English', authorHeader('Imran Khan'), "Imran Khan's Tweet");
+  eq('Urdu heads the post in Urdu', authorHeader('عمران خان', 'ur'), 'عمران خان کی ٹویٹ');
+  eq('a missing name has no header in either language', authorHeader('', 'ur'), '');
+  eq('the Urdu header goes above the post, link first untouched',
+    withAuthorHeader('example.com\nHello', 'عمران خان', 'ur'),
+    'عمران خان کی ٹویٹ\n\nexample.com\nHello');
+  eq('an English post keeps its English header through the same call',
+    withAuthorHeader('Hello there', 'Imran Khan', 'en'), "Imran Khan's Tweet\n\nHello there");
 }
 
 // --- putting it in front of the post ---

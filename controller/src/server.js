@@ -14,7 +14,7 @@ const { decodeInlineImage, isInlineImage, MAX_INLINE_BYTES } = require('./inline
 const videoPipeline = require('./video-pipeline');
 const hlsPrefetch = require('./hls-prefetch');
 const duplicate = require('./duplicate-guard');
-const { translateText } = require('./translate');
+const { translateText, readTranslateRequest } = require('./translate');
 
 const HOST = '127.0.0.1';
 const PORT = parseInt(process.env.CONTROLLER_PORT || '47825', 10);
@@ -757,6 +757,23 @@ const server = http.createServer(async (req, res) => {
         // means that page is unusable (common right after a resume).
         markConnectionStale('channel-list-failed');
         return json(res, 500, { error: 'channel-list-failed' });
+      }
+    }
+    // Translate a short standalone string - the author's name that heads an
+    // Urdu post. The post itself is translated through /send's translateTo;
+    // this is for the small pieces that are translated on their own. It does
+    // not touch WhatsApp, so it is available whenever the controller is.
+    if (req.method === 'POST' && url.pathname === '/translate') {
+      const body = JSON.parse(await readBody(req));
+      const request = readTranslateRequest(body);
+      if (!request.ok) { log('error','translate-rejected-bad-request',{}); return json(res, 400, { error: request.error }); }
+      try {
+        const out = await translateText(request.text, request.to);
+        log('info','translate-http',{to:request.to,charsIn:request.text.length,charsOut:out.length});
+        return json(res, 200, { ok: true, text: out, to: request.to });
+      } catch (e) {
+        log('warn','translate-http-failed',{to:request.to,error:errMsg(e)});
+        return json(res, 502, { ok: false, error: 'translate-failed' });
       }
     }
     if (req.method === 'POST' && url.pathname === '/send') {

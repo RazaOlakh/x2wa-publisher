@@ -626,6 +626,25 @@ function showReadError(btn, label, title, detail, requestId, error) {
   }, 4000);
 }
 
+// The author's name for an Urdu post. X gives the name in whatever script the
+// account uses, so an English-spelled name is translated to Urdu here while the
+// post itself is left as written. A name that already reads as Urdu is kept,
+// and a translation that fails falls back to the original name rather than
+// leaving the header without one.
+async function urduAuthorName(name, requestId) {
+  const original = String(name == null ? '' : name);
+  const trimmed = original.trim();
+  if (!trimmed || isUrduText(trimmed)) return original;
+  try {
+    const res = await chrome.runtime.sendMessage({ type: 'TRANSLATE_TEXT', text: trimmed, to: 'ur', requestId });
+    if (res && res.ok && typeof res.text === 'string' && res.text.trim()) return res.text.trim();
+    try { xlog('warn', 'author-name-translate-failed', { requestId, error: (res && res.error) || 'empty' }); } catch {}
+  } catch (e) {
+    try { xlog('warn', 'author-name-translate-failed', { requestId, error: e && e.message }); } catch {}
+  }
+  return original;
+}
+
 async function onPostClick(ev, btn, variant) {
   ev.preventDefault();
   ev.stopPropagation();
@@ -656,10 +675,16 @@ async function onPostClick(ev, btn, variant) {
 
   // Only the "name the author" variant changes the post, and it changes only
   // the front of it, so the link-first order arranged above stays beneath the
-  // name. With no author found the text goes through untouched. The Urdu
-  // variant leaves the text alone here: the controller translates it, after
-  // this reordering, so the link stays first in the message too.
-  if (v.nameTheAuthor) post = { ...post, text: withAuthorHeader(post.text, post.author) };
+  // name. The header is written in the post's own language: an Urdu post is
+  // headed in Urdu (the name translated), an English one as before. The post
+  // itself is left as written; the Urdu variant is the one that translates it,
+  // in the controller, after this reordering so the link stays first. With no
+  // author found the text goes through untouched.
+  if (v.nameTheAuthor) {
+    const lang = isUrduText(post.text) ? 'ur' : 'en';
+    const name = lang === 'ur' ? await urduAuthorName(post.author, requestId) : post.author;
+    post = { ...post, text: withAuthorHeader(post.text, name, lang) };
+  }
 
   // Once it is sent the tick stays put; only a failure reverts, so the
   // post can be tried again.
