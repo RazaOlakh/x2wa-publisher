@@ -3,8 +3,8 @@
 // The toolbar is our own row of icons, placed beneath X's action bar rather
 // than inside it, because an extra flex item in that bar gets squeezed. These
 // assert the placement decision without a browser: the row is created once,
-// lands directly after the action bar, and is a plain flex container the
-// buttons are added to.
+// lands directly after the action bar, holds its icons to the right edge, and
+// is a plain flex container the buttons are added to.
 //
 //   node extension/test/toolbar.test.js
 const fs = require('fs');
@@ -102,6 +102,8 @@ console.log('our icons get a row of their own beneath X\'s action bar');
   const toolbar = toolbarFor(bar);
   eq('the row is a flex row', toolbar.style.props.display, 'flex');
   eq('laying its icons out in a row', toolbar.style.props['flex-direction'], 'row');
+  eq('holding them to the right edge, clear of X\'s own icons',
+    toolbar.style.props['justify-content'], 'flex-end');
   eq('spacing them with a gap rather than margins', toolbar.style.props.gap, '8px');
   eq('and sizing itself with the important flag so the page cannot pull it apart',
     toolbar.style.props.width, '100%');

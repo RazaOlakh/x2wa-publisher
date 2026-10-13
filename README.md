@@ -298,8 +298,11 @@ duplicate **Post in Urdu** button (the globe icon), and the screenshot button.
 
 The toolbar is the extension's own row rather than extra buttons inside X's
 action bar, so X's layout cannot squeeze them and the two sets of controls stay
-visually separate. The icons are minimal line icons — outlined, with no
-background and no filled shape.
+visually separate. It is held to the **right edge** of the post, clear of X's
+own left-aligned icons, and reads left to right: the screenshot button, then
+**Post in Urdu**, then **Post with the author's name**, then **Post to
+WhatsApp** at the right edge. The icons are minimal line icons — outlined, with
+no background and no filled shape — each in its own colour.
 
 | The post contains | What is published |
 |---|---|
@@ -480,13 +483,13 @@ it.
 
 Each send button is a small, outlined icon — no background, no filled shape —
 that changes as the post is sent, so you can see the outcome without opening
-anything. The three send buttons share every state; only the idle glyph tells
-them apart (the WhatsApp bubble, the `@`, the globe). Their colour and glyph
-both change:
+anything. The three send buttons share every state; only the idle glyph and its
+colour tell them apart — the WhatsApp bubble in WhatsApp green, the `@` in
+blue, the globe in purple, and the camera in pink. Both change:
 
 | State | Icon | Colour | Meaning |
 |---|---|---|---|
-| Idle | WhatsApp / `@` / globe glyph | grey | ready — click to post |
+| Idle | WhatsApp / `@` / globe / camera glyph | the button's own colour | ready — click to post |
 | Working | spinner | blue | posting (the spinner keeps turning) |
 | Success | check mark | green | everything was published |
 | Partial | warning | amber | some items published, some could not be fetched |

@@ -5,6 +5,7 @@
 // extension's actions live in a row of their own, placed directly beneath
 // those icons. It is a plain flex row: every current and future action is one
 // child, spaced by the toolbar's gap rather than by margins on each button.
+// The row is held to the right edge, clear of X's own left-aligned icons.
 //
 // Split out from button.js so the placement decision can be checked without a
 // browser: this file has no DOM work of its own beyond building the row.
@@ -28,7 +29,9 @@ function toolbarFor(bar) {
   fixed('display', 'flex');
   fixed('flex-direction', 'row');
   fixed('align-items', 'center');
-  fixed('justify-content', 'flex-start');
+  // Right-aligned: our icons sit at the far edge, opposite X's own icons, so
+  // the two sets never crowd each other.
+  fixed('justify-content', 'flex-end');
   fixed('gap', '8px');
   fixed('margin-top', '6px');
   fixed('width', '100%');

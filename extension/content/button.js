@@ -168,10 +168,12 @@ function renderButton(btn, state, label) {
   fixed('align-self', 'center');
 
   // No background, no border, no filled shape: the icon is all there is, so
-  // the colour of the stroke is what shows the state.
+  // the colour of the stroke is what shows the state. Idle wears the variant's
+  // own colour (so each action reads apart at a glance); every other state is
+  // the one shared colour for that state.
   fixed('background', 'transparent');
   fixed('border', '0');
-  fixed('color', tone.fg);
+  fixed('color', state === 'idle' ? (variant.color || tone.fg) : tone.fg);
   fixed('display', 'inline-flex');
   fixed('align-items', 'center');
   fixed('justify-content', 'center');
@@ -210,7 +212,7 @@ function buttonAction(btn) {
 // tick on the WhatsApp button means "this was posted", which is not what a
 // screenshot does.
 const SHOT_STYLES = {
-  idle:    { fg: '#536471' },
+  idle:    { fg: '#f91880' },
   working: { fg: '#1d9bf0' },
   success: { fg: '#00a884' },
   error:   { fg: '#f4212e' },
@@ -747,18 +749,18 @@ function injectButton(article) {
   // have somewhere obvious to go.
   const toolbar = toolbarFor(bar);
 
-  // The plain post, then the same post with the author's name above it, then
-  // the same post translated to Urdu - three ways of sending this one post, in
-  // the order they were added.
-  toolbar.appendChild(createPostButton(article, 'plain'));
-  toolbar.appendChild(createPostButton(article, 'named'));
-  toolbar.appendChild(createPostButton(article, 'urdu'));
-
-  // The screenshot button sits beside them so the row reads as one group.
+  // The actions run in reverse of the order they were added, so the row reads,
+  // left to right: screenshot, Urdu, author-name, plain - ending at the right
+  // edge with the plain post. The reversal lives here, in the one place the
+  // row is built, rather than being undone in the toolbar's layout.
   const shotBtn = document.createElement('button');
   shotBtn.type = 'button';
   wireShotButton(shotBtn);
   toolbar.appendChild(shotBtn);
+
+  toolbar.appendChild(createPostButton(article, 'urdu'));
+  toolbar.appendChild(createPostButton(article, 'named'));
+  toolbar.appendChild(createPostButton(article, 'plain'));
 }
 
 function scan() {
