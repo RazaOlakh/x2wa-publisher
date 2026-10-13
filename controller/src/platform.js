@@ -1,4 +1,4 @@
-// Per-user data locations and single-instance protection.
+// Per-user data locations, the browser to run, and single-instance protection.
 //
 // The WhatsApp session must live in one stable, per-user directory: it is
 // what lets the controller reconnect after a restart or reboot without a
@@ -31,6 +31,45 @@ function tmpRoot() {
   return process.env.TMP_ROOT || path.join(userDataRoot(), 'tmp');
 }
 
+// The browser WhatsApp Web runs in.
+//
+// CHROME_PATH wins when it is set: the service and the Windows launcher always
+// set it, pinned to an absolute path resolved at install time. Otherwise the
+// platform's conventional location is used, and if none is found the choice is
+// left to puppeteer rather than handed a path that cannot exist.
+//
+// Falling back to a hard-coded Linux path is what broke Windows: on a machine
+// where Chrome was installed elsewhere (or not at all), the controller spent
+// forever trying to launch a file that was never there, so it never connected.
+// The decision is a pure function of platform, environment and "does it
+// exist", so it can be tested without the browser.
+function defaultExists(p) {
+  try { return fs.existsSync(p); } catch { return false; }
+}
+
+function chromePath(opts) {
+  opts = opts || {};
+  const platform = opts.platform || process.platform;
+  const env = opts.env || process.env;
+  const exists = opts.exists || defaultExists;
+  if (env.CHROME_PATH) return env.CHROME_PATH;
+  const candidates = [];
+  if (platform === 'win32') {
+    const programFiles = env.ProgramFiles || 'C:\\Program Files';
+    const programFilesX86 = env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)';
+    candidates.push(path.join(programFiles, 'Google', 'Chrome', 'Application', 'chrome.exe'));
+    candidates.push(path.join(programFilesX86, 'Google', 'Chrome', 'Application', 'chrome.exe'));
+    if (env.LOCALAPPDATA) candidates.push(path.join(env.LOCALAPPDATA, 'Google', 'Chrome', 'Application', 'chrome.exe'));
+  } else if (platform === 'darwin') {
+    candidates.push('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome');
+    candidates.push('/Applications/Chromium.app/Contents/MacOS/Chromium');
+  } else {
+    candidates.push('/usr/bin/google-chrome-stable', '/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser', '/snap/bin/chromium');
+  }
+  for (const c of candidates) if (c && exists(c)) return c;
+  return undefined;
+}
+
 // WhatsApp Web launches a browser against the session directory, so two
 // controllers sharing one directory corrupt it (the symptom is
 // "Attempted to use detached Frame" or a permanently stuck login). A lock
@@ -61,4 +100,4 @@ function isAlive(pid) {
   try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
 }
 
-module.exports = { userDataRoot, sessionDir, tmpRoot, acquireSessionLock, isAlive };
+module.exports = { userDataRoot, sessionDir, tmpRoot, acquireSessionLock, isAlive, chromePath };

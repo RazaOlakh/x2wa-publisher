@@ -175,12 +175,26 @@ The generated launcher:
 - resolves `node.exe` and Chrome to **absolute paths at install time** — a
   logon session does not reliably inherit a `PATH` that changed after you
   installed Node
+- runs `controller/src/supervisor.js`, which starts the controller and starts
+  it again whenever it stops — so a crash, a closed browser or a killed
+  process recovers on its own instead of staying down until the next logon
 - refuses to start a second controller (it checks whether port 47825 is
   already listening)
 - appends everything to `%LOCALAPPDATA%\x-whatsapp-poster\controller.log`
 - writes an explicit error line if `node.exe` is missing, and verifies the
   controller answered ~8 seconds after starting, so a failed launch is
   reported rather than silent
+
+**Windows and Linux keep it up in the same way.** There is no service manager
+on Windows, so the launcher runs a small supervisor that does what systemd's
+`Restart=on-failure` does on Linux: if the controller stops, it is started
+again after a short wait. A few quick failures in a row (a crash loop, not a
+transient fault) stop the supervisor with a clear log line rather than
+spinning forever — the same start-limit idea as the systemd unit.
+
+The supervisor is why you no longer have to notice that the controller did not
+come up, or bring it back by hand. If it *is* down, `status` and the log will
+say why.
 
 **Verify it works:**
 
@@ -515,6 +529,11 @@ the partial state is shown rather than quietly dropping the item.
 | Start it | `systemctl --user start x2wa-controller` | run the launcher in the Startup folder |
 | Remove it from login | `./scripts/install-startup.sh uninstall` | `… install-startup.ps1 uninstall` |
 
+**If it stops entirely:** both platforms start it again on their own. Linux
+uses the systemd unit (`Restart=on-failure`); Windows uses the supervisor the
+launcher runs. You do not have to bring it back by hand — `status` and the log
+are there if you want to know what happened.
+
 **After sleep or a dropped connection:** the controller notices that WhatsApp is
 no longer reachable, reports *Reconnecting…*, and rebuilds the connection from
 the saved session by itself — no button to press and no QR scan. The popup
@@ -547,7 +566,7 @@ reboot never needs a new scan.
 | Session (`LocalAuth`) | `~/.local/share/x-whatsapp-poster/whatsapp-session` | `%LOCALAPPDATA%\x-whatsapp-poster\whatsapp-session` |
 | Temporary media | `~/.local/share/x-whatsapp-poster/tmp/` | `%LOCALAPPDATA%\x-whatsapp-poster\tmp\` |
 | Logs | journal: `journalctl --user -u x2wa-controller` | `%LOCALAPPDATA%\x-whatsapp-poster\controller.log` |
-| Service/launcher | `~/.config/systemd/user/x2wa-controller.service` | Startup folder: `x2wa-controller.cmd` |
+| Service/launcher | `~/.config/systemd/user/x2wa-controller.service` | Startup folder: `x2wa-controller.cmd` → runs `controller/src/supervisor.js` |
 
 (`$XDG_DATA_HOME` is honoured on Linux if set; macOS uses
 `~/Library/Application Support/x-whatsapp-poster/`.)
@@ -573,7 +592,7 @@ the same WhatsApp session at once, which would corrupt it.
 
 | The popup says | Meaning and fix |
 |---|---|
-| **Controller not running** | The startup script should have started it. Linux: `./scripts/install-startup.sh status`, then `restart`. Windows: run `… install-startup.ps1 status`. If it is not installed at all, run `install`. |
+| **Controller not running** | It should keep itself up: the startup script on Linux, the supervisor the launcher runs on Windows, restart it if it stops. If it is still down, Linux: `./scripts/install-startup.sh status`, then `restart`. Windows: `… install-startup.ps1 status`. If it is not installed at all, run `install`. |
 | **Connecting to WhatsApp…** | Still starting up. It normally resolves on its own within ~30 seconds. |
 | **Reconnecting to WhatsApp…** | The connection dropped (common after sleep). It retries automatically; channels reappear by themselves. |
 | **Authentication required / QR** | This computer is not linked yet, or the session was invalidated. Press **Authenticate WhatsApp** and scan. |
@@ -616,6 +635,8 @@ next: only changes under `extension/` reload the extension, only changes under
 | `ffmpeg not found` (warning at install, videos will fail) | Install ffmpeg and re-open the terminal. |
 | `another controller (pid …) is already using …` | A previous controller is still running. Stop it, or use `restart`. |
 | `The controller did not report ready yet` | Read the log (table above) to see why, then `restart`. |
+| `"event":"give-up"` in the log (Windows) | The controller exited several times in a row, so the supervisor stopped restarting it. Fix what the lines above it report — usually Chrome not found, or the session in use — then `… install-startup.ps1 restart`. |
+| Chrome not found on Windows | The controller looks in the usual install locations; if Chrome is somewhere else, set `CHROME_PATH` to `chrome.exe` and restart. Any Chromium build works. |
 
 ## Posting problems
 
@@ -766,7 +787,7 @@ curl -s http://127.0.0.1:47825/channels
 
 ```bash
 node controller/test/dependency.test.js      # vendored library + patches intact
-node controller/test/controller.test.js      # session paths, single-instance lock, channel eligibility, liveness watchdog
+node controller/test/controller.test.js      # session paths, browser choice, single-instance lock, channel eligibility, liveness watchdog
 node controller/test/repo.test.js            # update checks and fast-forward, against throwaway repos (no network)
 node extension/test/screenshot.test.js       # screenshot crop targeting (stops above the action bar; hides the page chrome) + inline-image transfer
 node extension/test/toolbar.test.js          # our icons get a row of their own beneath X's action bar

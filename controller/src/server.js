@@ -6,7 +6,7 @@ const crypto = require('crypto');
 const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 const QRCode = require('qrcode-generator');
-const { sessionDir, tmpRoot, acquireSessionLock } = require('./platform');
+const { sessionDir, tmpRoot, acquireSessionLock, chromePath } = require('./platform');
 const { listPostableChannels, canPostToChannel } = require('./channels');
 const { createHeartbeat } = require('./heartbeat');
 const repo = require('./repo');
@@ -57,9 +57,15 @@ function log(level,event,data){ const rec={ts:new Date().toISOString(),level,com
 // The dedicated WhatsApp account. LocalAuth keeps the session in
 // SESSION_DIR so the next start reconnects without another QR scan.
 function makeClient() {
+  // The browser is chosen per platform (CHROME_PATH first, then the platform's
+  // usual location). If nothing is found the path is left to puppeteer, which
+  // reports a missing browser far more clearly than a path that never existed.
+  const launch = { headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] };
+  const exe = chromePath();
+  if (exe) launch.executablePath = exe;
   return new Client({
     authStrategy: new LocalAuth({ dataPath: SESSION_DIR }),
-    puppeteer: { headless: true, executablePath: process.env.CHROME_PATH || '/usr/bin/google-chrome-stable', args: ['--no-sandbox', '--disable-setuid-sandbox'] },
+    puppeteer: launch,
   });
 }
 
