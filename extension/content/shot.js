@@ -62,6 +62,47 @@ const SHOT_ACTION_BAR_SELECTOR = 'div[role="group"]';
 const SHOT_LIKE_SELECTOR = 'button[data-testid="like"]';
 const SHOT_QUOTE_SELECTOR = 'div[data-testid="quoteTweet"]';
 
+// --- quote-tweets --------------------------------------------------------
+//
+// A quote-tweet is one post carrying another inside it: the outer post's own
+// words, and the post it quotes drawn as a card. X marks that card with
+// `data-testid="quoteTweet"`. It is not a nested <article>, so without this
+// the quoted post's media would read as the outer post's own.
+//
+// What a quote-tweet sends is a picture of the post it quotes, captioned with
+// the outer post's words (see button.js). This finds that quoted post; the
+// send entry points consult it through shotPlan() below, so a quote is handled
+// the same way whichever button was pressed.
+//
+// The quoted post can itself quote a third: its card is then nested inside the
+// first, and the post this one quotes is always the outermost card. Two
+// separate cards would be two different posts with no way to tell which was
+// meant, and that is refused rather than guessed.
+function shotQuoteCard(article) {
+  if (!article || typeof article.querySelectorAll !== 'function') return null;
+  const cards = [];
+  for (const card of article.querySelectorAll(SHOT_QUOTE_SELECTOR)) {
+    // Only a card belonging to this post, never one inside a nested article.
+    if (typeof card.closest === 'function' && card.closest('article') !== article) continue;
+    cards.push(card);
+  }
+  if (cards.length === 0) return null;
+  const outermost = cards.filter((card) =>
+    !cards.some((other) => other !== card && typeof other.contains === 'function' && other.contains(card)));
+  if (outermost.length !== 1) return { error: 'quote-ambiguous' };
+  return outermost[0];
+}
+
+// What one send will photograph: the post quoted inside a quote-tweet, or the
+// post as it stands. A quoted post that cannot be told apart yields an error,
+// and the send refuses rather than publishing the wrong picture.
+function shotPlan(article) {
+  const quote = shotQuoteCard(article);
+  if (quote && quote.error) return { mode: 'error', error: quote.error };
+  if (quote) return { mode: 'quote', element: quote };
+  return { mode: 'post', element: article };
+}
+
 function shotActionBar(article) {
   if (!article || typeof article.querySelectorAll !== 'function') return null;
   const likes = article.querySelectorAll(SHOT_LIKE_SELECTOR);
@@ -159,6 +200,7 @@ const SHOT_ERROR_HINTS = {
   'capture-invalid-clip': 'The post had no usable size on screen, so there was nothing to capture.',
   'capture-node-detached': 'The post changed on the page before it could be captured. Try again.',
   'capture-node-moved': 'The post moved on the page before it could be captured. Try again.',
+  'quote-ambiguous': 'This post quotes more than one post, so the quoted post could not be told apart. Try again in a moment.',
   'empty-screenshot': 'Nothing could be captured from this post.',
   'no-default-channel': 'Choose a destination channel in the extension popup first.',
   'Failed to fetch': 'Lost contact with the controller. Check that it is running.',
@@ -169,5 +211,5 @@ function shotErrorHint(code) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { shotClip, shotContainer, SHOT_POST_SELECTOR, shotActionBar, shotContentRect, shotHideChrome, shotShowChrome, shotKey, shotCaption, shotMarkerToken, shotErrorHint, SHOT_ERROR_HINTS };
+  module.exports = { shotClip, shotContainer, SHOT_POST_SELECTOR, shotActionBar, shotContentRect, shotHideChrome, shotShowChrome, shotKey, shotCaption, shotMarkerToken, shotErrorHint, SHOT_ERROR_HINTS, SHOT_QUOTE_SELECTOR, shotQuoteCard, shotPlan };
 }

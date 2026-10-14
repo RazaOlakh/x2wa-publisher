@@ -4,6 +4,11 @@ function findTweetText(article) {
   // nested tweet/quote text from deeper <article> elements.
   const searchRoot = article.querySelector('[data-testid="tweetText"]');
   if (!searchRoot) return '';
+  // The first text in the post belongs to the post itself. Text inside a
+  // quoted post's card belongs to that inner post, so a quote-tweet with no
+  // words of its own has an empty text rather than the quoted post's words.
+  if (searchRoot.closest && searchRoot.closest('[data-testid="quoteTweet"]')) return '';
+  if (searchRoot.closest && searchRoot.closest('article') !== article) return '';
   // `tweetText` itself can contain paragraphs; innerText preserves them.
   return searchRoot.innerText;
 }
@@ -510,6 +515,18 @@ function extractPost(article) {
     // turns each video id into its own captured HLS manifest.
     mediaItems,
   };
+}
+
+// A quote-tweet is published as a picture of the post it quotes, captioned with
+// the outer post's own words (see button.js/shot.js). Only those words are
+// needed: the quoted post's media is never primed, fetched or attached, and its
+// words are not read either (findTweetText stops at the quote card). Link
+// recovery runs exactly as it does for an ordinary post, on this post's own
+// links.
+async function extractQuotePost(article) {
+  const post = extractPost(article);
+  if (post.error) return post;
+  return recoverPostLinks(article, post);
 }
 
 // X renders <video preload="none">, so a post's stream is only requested

@@ -435,7 +435,8 @@ What the picture contains is the post itself — the author, the text, and any
 images or quoted card. It stops above the post's action bar (reply / repost /
 like / share), which, together with this extension's own row beneath it, is a
 row of controls rather than part of the post. A screenshot is therefore of the
-post as written, with no interface around it.
+post as written, with no interface around it. (A post that *quotes* another is
+the one exception — see [Quoting another post](#quoting-another-post) below.)
 
 The page's own floating furniture — the top bar with its **For you / Following**
 tabs, and any overlay or toast — is fixed or sticky, and a capture taller than
@@ -490,6 +491,34 @@ What a screenshot **cannot** include:
 Screenshots are deduplicated separately from posts, so photographing a post
 does not stop you posting it, and posting it does not stop you photographing
 it.
+
+### Quoting another post
+
+A **quote-tweet** is one post carrying another inside it: your own words, and
+the post you quoted drawn as a card beneath them. Every send button — the post
+buttons and the camera alike — treats it the same way:
+
+- the **picture** sent to the Channel is the post being quoted, alone;
+- the **caption** is the outer post's own words.
+
+So quoting someone shares *their* post as an image, with your comment on it,
+rather than re-publishing your comment beside their picture or video. The
+quoted post's own media is never attached separately — it is already in the
+picture — and the outer post's own media is not sent either: the picture is the
+one thing sent. This is the behavior for every button, because the difference
+between the buttons is only how a post's text is presented (as written, named,
+or translated), and a quote's caption follows the button you pressed exactly as
+an ordinary post's text would.
+
+The picture is the quoted post's card, found by its `quoteTweet` marker, so the
+outer post's text and action bar never appear in it. A quoted post that itself
+quotes a third is still handled: the post being quoted is the outermost card.
+If a post somehow carries more than one quoted card, there is no way to know
+which was meant, and the send is refused (the popup says *This post quotes more
+than one post…*) rather than sending the wrong picture.
+
+The camera button behaves this way on a quote-tweet too. On an ordinary post it
+still sends a picture of the whole post, exactly as described above.
 
 ### What the buttons show
 
@@ -836,6 +865,7 @@ node extension/test/link-first.test.js       # a text-only post's link moves to 
 node extension/test/author-header.test.js    # the author's name is read cleanly, written in the post's language, and put above the post
 node controller/test/translate.test.js       # the Urdu button: the split, the endpoint's shapes, the request, standalone name requests
 node extension/test/post-variant.test.js     # each send button's variant: name, glyph, author, translate
+node extension/test/quote-tweet.test.js       # a quote-tweet sends a picture of the quoted post, captioned with the outer words; ordinary posts unchanged
 node scripts/windows/startup.test.js         # Windows launcher contract (static)
 node controller/test/supervisor.test.js      # keeps the controller running: restart, give-up, signal stop
 ```

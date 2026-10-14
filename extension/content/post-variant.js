@@ -29,6 +29,18 @@ function postVariant(name) {
   return POST_VARIANTS[name] || POST_VARIANTS.plain;
 }
 
+// The caption that travels with a quote-tweet's picture. The words are always
+// the outer post's own (the picture is the post it quotes), presented the way
+// the pressed button presents a post: the plain button keeps them as written,
+// the author-name button puts the name above them, and the Urdu button leaves
+// them for the controller to translate - the `translateTo` it already carries.
+// With no name to head it (or an empty post) the words go through as they are.
+function quoteCaption(text, variant, name) {
+  const v = postVariant(variant);
+  if (v.nameTheAuthor) return withAuthorHeader(text, name);
+  return text == null ? '' : String(text);
+}
+
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { POST_VARIANTS, postVariant };
+  module.exports = { POST_VARIANTS, postVariant, quoteCaption };
 }

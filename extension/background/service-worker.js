@@ -267,6 +267,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         channelId,
         kind: 'screenshot',
       };
+      // The "post in Urdu" button asks the controller to translate the text
+      // before sending it - including the caption that travels with a
+      // quote-tweet's picture. Forwarded as-is; the controller validates it.
+      if (msg.translateTo) payload.translateTo = msg.translateTo;
       swLog('info', 'screenshot-controller-request', { requestId: msg.requestId, bytes: shot.dataUrl.length });
       try {
         const res = await fetch(`${CONTROLLER}/send`, {
