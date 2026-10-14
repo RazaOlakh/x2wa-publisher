@@ -386,21 +386,30 @@ function wireShotButton(btn) {
     let caption = '';
     if (plan.mode === 'quote') {
       // The post being quoted, whole: it has no action bar of its own to stop
-      // above. The caption is this post's own words, so the image already
-      // carries the quoted post's.
+      // above. The caption is this post's own words, presented the way the
+      // plain button presents a post (see quoteCaption), so the image carries
+      // the quoted post's words and the caption carries this post's.
       target = plan.element;
-      clipRect = target.getBoundingClientRect();
       try {
         const post = await extractQuotePost(currentArticle);
-        if (post && !post.error && post.text) caption = post.text;
+        if (post && !post.error) caption = quoteCaption(post.text, 'plain', post.author);
       } catch { /* an empty caption is still a valid picture */ }
     } else {
       target = currentArticle;
-      // The crop is the post's own box, stopping above its action bar: the
-      // action bar (reply / repost / like / share) and the extension's own row
-      // beneath it are controls, not content, so the picture is the post's
-      // author, text and media rather than the buttons around it.
-      const rect = target.getBoundingClientRect();
+    }
+
+    // The crop is read only once the post is known to be sendable, never
+    // before: reading a quoted post's words can wait on a link resolution, and
+    // the page may have moved on by then. Reading the box here keeps the
+    // picture where the post is now, exactly as the send buttons do. For an
+    // ordinary post the box stops above the action bar - the reply / repost /
+    // like / share row and the extension's own row beneath it are controls,
+    // not content, so the picture is the post's author, text and media rather
+    // than the buttons around it.
+    const rect = target.getBoundingClientRect();
+    if (plan.mode === 'quote') {
+      clipRect = rect;
+    } else {
       const bar = shotActionBar(currentArticle);
       clipRect = shotContentRect(rect, bar ? bar.getBoundingClientRect().top : undefined);
     }

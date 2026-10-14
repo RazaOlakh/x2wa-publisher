@@ -866,6 +866,7 @@ node extension/test/author-header.test.js    # the author's name is read cleanly
 node controller/test/translate.test.js       # the Urdu button: the split, the endpoint's shapes, the request, standalone name requests
 node extension/test/post-variant.test.js     # each send button's variant: name, glyph, author, translate
 node extension/test/quote-tweet.test.js       # a quote-tweet sends a picture of the quoted post, captioned with the outer words; ordinary posts unchanged
+node extension/test/quote-button.test.js       # the same, driven through the real click handlers: the camera button and the three send buttons agree
 node scripts/windows/startup.test.js         # Windows launcher contract (static)
 node controller/test/supervisor.test.js      # keeps the controller running: restart, give-up, signal stop
 ```
