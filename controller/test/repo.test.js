@@ -27,8 +27,24 @@ function inRepo(dir, script) {
   return JSON.parse(out.trim().split('\n').pop());
 }
 
-function git(dir, args) {
-  return execFileSync('git', args, { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+function git(dir, args, env) {
+  return execFileSync('git', args, {
+    cwd: dir,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    // Every commit in these throwaway repositories is dated explicitly. A
+    // commit's hash includes its timestamp, so the checkout's first commit and
+    // its origin's - the same tree and message - would be the same commit only
+    // when they happened to land in the same second, and a second boundary
+    // falling between them would read as two diverged histories. Fixing the
+    // date makes the shared commit identical whatever the wall clock says.
+    env: {
+      ...process.env,
+      GIT_AUTHOR_DATE: '2020-01-01T00:00:00Z',
+      GIT_COMMITTER_DATE: '2020-01-01T00:00:00Z',
+      ...(env || {}),
+    },
+  });
 }
 
 function makeRepo() {
