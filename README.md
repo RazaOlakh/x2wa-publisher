@@ -175,12 +175,26 @@ The generated launcher:
 - resolves `node.exe` and Chrome to **absolute paths at install time** — a
   logon session does not reliably inherit a `PATH` that changed after you
   installed Node
+- runs `controller/src/supervisor.js`, which starts the controller and starts
+  it again whenever it stops — so a crash, a closed browser or a killed
+  process recovers on its own instead of staying down until the next logon
 - refuses to start a second controller (it checks whether port 47825 is
   already listening)
 - appends everything to `%LOCALAPPDATA%\x-whatsapp-poster\controller.log`
 - writes an explicit error line if `node.exe` is missing, and verifies the
   controller answered ~8 seconds after starting, so a failed launch is
   reported rather than silent
+
+**Windows and Linux keep it up in the same way.** There is no service manager
+on Windows, so the launcher runs a small supervisor that does what systemd's
+`Restart=on-failure` does on Linux: if the controller stops, it is started
+again after a short wait. A few quick failures in a row (a crash loop, not a
+transient fault) stop the supervisor with a clear log line rather than
+spinning forever — the same start-limit idea as the systemd unit.
+
+The supervisor is why you no longer have to notice that the controller did not
+come up, or bring it back by hand. If it *is* down, `status` and the log will
+say why.
 
 **Verify it works:**
 
@@ -284,8 +298,11 @@ duplicate **Post in Urdu** button (the globe icon), and the screenshot button.
 
 The toolbar is the extension's own row rather than extra buttons inside X's
 action bar, so X's layout cannot squeeze them and the two sets of controls stay
-visually separate. The icons are minimal line icons — outlined, with no
-background and no filled shape.
+visually separate. It is held to the **right edge** of the post, clear of X's
+own left-aligned icons, and reads left to right: the screenshot button, then
+**Post in Urdu**, then **Post with the author's name**, then **Post to
+WhatsApp** at the right edge. The icons are minimal line icons — outlined, with
+no background and no filled shape — each in its own colour.
 
 | The post contains | What is published |
 |---|---|
@@ -345,18 +362,36 @@ instead of the WhatsApp bubble — that puts the **author's name on top of the
 post**. A post by Imran Khan is sent as
 
 ```
-Imran Khan's Tweet
+Imran Khan
 
 <the post>
 ```
 
 The name is read from the post's own byline — the display name only, never the
 `@handle`, the timestamp, or the author of a quoted post nested inside it. If
-the name cannot be read, the post is still sent, just without the header.
+the name cannot be read, the post is still sent, just without the name above it.
 
-The header goes above whatever the post's text already is, so a text post's
-link-first order (above) is kept beneath the name. Both send buttons publish the
-same post; the only difference is that one names the author.
+The name is written in the **post's own language**. An English post gets the
+name as it stands; an Urdu post gets the name in Urdu:
+
+```
+عمران خان
+
+<the post>
+```
+
+The language is decided from the post's own letters (Urdu is written in the
+Arabic script), so it needs no network call, and a long link inside an Urdu post
+cannot make it read as English. When the post is Urdu and the author's name is
+spelled in English, the **controller translates the name** so it matches the
+post; the post itself is left exactly as written. A name that is already Urdu is
+used as it is, and if the name cannot be translated the original name is kept
+rather than dropped. This is the only thing the `@` button translates — it is
+the one that names the author, not the one that translates the post.
+
+The name goes above whatever the post's text already is, so a text post's
+link-first order (above) is kept beneath it. Both send buttons publish the same
+post; the only difference is that one names the author.
 
 ### Posting in Urdu
 
@@ -396,10 +431,36 @@ The capture is of that one post, not of the window or the page: the crop is
 computed from the post's own position on the page, and the post does not have
 to be fully on screen to be captured.
 
+What the picture contains is the post itself — the author, the text, and any
+images or quoted card. It stops above the post's action bar (reply / repost /
+like / share), which, together with this extension's own row beneath it, is a
+row of controls rather than part of the post. A screenshot is therefore of the
+post as written, with no interface around it.
+
+The page's own floating furniture — the top bar with its **For you / Following**
+tabs, and any overlay or toast — is fixed or sticky, and a capture taller than
+the window would paint it on top of the post. It is hidden for the length of the
+capture and shown again immediately afterwards, so the picture carries the post
+and not the bar floating over it. Nothing the post is inside, or that is inside
+the post, is ever hidden.
+
 The box is found from the button itself — the post is the nearest post element
 above the clicked button. A container that holds more than one post (the
 timeline list, or a thread module) is refused rather than cropped, so a
-neighbouring post can never end up in the picture.
+neighbouring post can never end up in the picture. The action bar that the
+crop stops above is found from the post's **like** button, and a quoted post's
+own like row inside the post is skipped, so the wrong row is never used as the
+cut-off.
+
+The crop is measured in the page's own CSS pixels, but the capture command
+addresses the page's pixels scaled by the browser's **page zoom**. At 100% zoom
+the two are the same; at any other zoom (`Ctrl` + `+` / `-`, or a zoom
+remembered per site) they are not, so the crop is scaled by that factor before
+it is captured — otherwise a zoomed page is photographed at an offset and the
+wrong size. Right before the capture the post is tagged, and found again through
+the debugger by that tag: if X has re-rendered or moved it in that instant, the
+capture is refused and nothing is sent, rather than a picture of the wrong
+place.
 
 Capturing needs the extension's **debugger** permission. It is attached for
 the length of one capture and detached immediately afterwards, and only ever
@@ -412,6 +473,8 @@ larger permission than this needs, so it is not used.
 |---|---|
 | **Could not capture** | The capture did not happen. The usual cause is Developer Tools being open on that tab — close it and try again. |
 | **Nothing could be captured from this post** | The post was not on screen, so there was no box to capture. |
+| **The post changed on the page before it could be captured** | X re-rendered the post between the click and the capture, so the wrong thing would have been photographed. Try again. |
+| **The post moved on the page before it could be captured** | The post shifted between the click and the capture. Try again. |
 
 What a screenshot **cannot** include:
 
@@ -432,13 +495,13 @@ it.
 
 Each send button is a small, outlined icon — no background, no filled shape —
 that changes as the post is sent, so you can see the outcome without opening
-anything. The three send buttons share every state; only the idle glyph tells
-them apart (the WhatsApp bubble, the `@`, the globe). Their colour and glyph
-both change:
+anything. The three send buttons share every state; only the idle glyph and its
+colour tell them apart — the WhatsApp bubble in WhatsApp green, the `@` in
+blue, the globe in purple, and the camera in pink. Both change:
 
 | State | Icon | Colour | Meaning |
 |---|---|---|---|
-| Idle | WhatsApp / `@` / globe glyph | grey | ready — click to post |
+| Idle | WhatsApp / `@` / globe / camera glyph | the button's own colour | ready — click to post |
 | Working | spinner | blue | posting (the spinner keeps turning) |
 | Success | check mark | green | everything was published |
 | Partial | warning | amber | some items published, some could not be fetched |
@@ -499,6 +562,11 @@ the partial state is shown rather than quietly dropping the item.
 | Start it | `systemctl --user start x2wa-controller` | run the launcher in the Startup folder |
 | Remove it from login | `./scripts/install-startup.sh uninstall` | `… install-startup.ps1 uninstall` |
 
+**If it stops entirely:** both platforms start it again on their own. Linux
+uses the systemd unit (`Restart=on-failure`); Windows uses the supervisor the
+launcher runs. You do not have to bring it back by hand — `status` and the log
+are there if you want to know what happened.
+
 **After sleep or a dropped connection:** the controller notices that WhatsApp is
 no longer reachable, reports *Reconnecting…*, and rebuilds the connection from
 the saved session by itself — no button to press and no QR scan. The popup
@@ -531,7 +599,7 @@ reboot never needs a new scan.
 | Session (`LocalAuth`) | `~/.local/share/x-whatsapp-poster/whatsapp-session` | `%LOCALAPPDATA%\x-whatsapp-poster\whatsapp-session` |
 | Temporary media | `~/.local/share/x-whatsapp-poster/tmp/` | `%LOCALAPPDATA%\x-whatsapp-poster\tmp\` |
 | Logs | journal: `journalctl --user -u x2wa-controller` | `%LOCALAPPDATA%\x-whatsapp-poster\controller.log` |
-| Service/launcher | `~/.config/systemd/user/x2wa-controller.service` | Startup folder: `x2wa-controller.cmd` |
+| Service/launcher | `~/.config/systemd/user/x2wa-controller.service` | Startup folder: `x2wa-controller.cmd` → runs `controller/src/supervisor.js` |
 
 (`$XDG_DATA_HOME` is honoured on Linux if set; macOS uses
 `~/Library/Application Support/x-whatsapp-poster/`.)
@@ -557,7 +625,7 @@ the same WhatsApp session at once, which would corrupt it.
 
 | The popup says | Meaning and fix |
 |---|---|
-| **Controller not running** | The startup script should have started it. Linux: `./scripts/install-startup.sh status`, then `restart`. Windows: run `… install-startup.ps1 status`. If it is not installed at all, run `install`. |
+| **Controller not running** | It should keep itself up: the startup script on Linux, the supervisor the launcher runs on Windows, restart it if it stops. If it is still down, Linux: `./scripts/install-startup.sh status`, then `restart`. Windows: `… install-startup.ps1 status`. If it is not installed at all, run `install`. |
 | **Connecting to WhatsApp…** | Still starting up. It normally resolves on its own within ~30 seconds. |
 | **Reconnecting to WhatsApp…** | The connection dropped (common after sleep). It retries automatically; channels reappear by themselves. |
 | **Authentication required / QR** | This computer is not linked yet, or the session was invalidated. Press **Authenticate WhatsApp** and scan. |
@@ -600,6 +668,8 @@ next: only changes under `extension/` reload the extension, only changes under
 | `ffmpeg not found` (warning at install, videos will fail) | Install ffmpeg and re-open the terminal. |
 | `another controller (pid …) is already using …` | A previous controller is still running. Stop it, or use `restart`. |
 | `The controller did not report ready yet` | Read the log (table above) to see why, then `restart`. |
+| `"event":"give-up"` in the log (Windows) | The controller exited several times in a row, so the supervisor stopped restarting it. Fix what the lines above it report — usually Chrome not found, or the session in use — then `… install-startup.ps1 restart`. |
+| Chrome not found on Windows | The controller looks in the usual install locations; if Chrome is somewhere else, set `CHROME_PATH` to `chrome.exe` and restart. Any Chromium build works. |
 
 ## Posting problems
 
@@ -640,6 +710,7 @@ Extension service worker
   ↓ POST http://127.0.0.1:47825/send
 Controller (Node, loopback only)
   ↓ "Post in Urdu": the text is translated first; links are left intact
+  ↓ "name the author": an Urdu post's name is translated; the post is not
   ↓ whatsapp-web.js + LocalAuth session
 WhatsApp Channel
 ```
@@ -697,11 +768,13 @@ which matters for that upload.
 - Temporary media is deleted as soon as a job finishes or fails.
 - ffmpeg produces WhatsApp-safe H.264/AAC MP4; media over 64 MB is rejected.
 - The same post cannot be sent to the same channel twice within 120 seconds.
-- The one time post content leaves the machine for anything other than WhatsApp
-  is the **Post in Urdu** button, which sends the post's text (never its media)
-  to Google's public translate endpoint. No other button, and no other part of
-  the tool, makes an outside request with post content. See
-  [Posting in Urdu](#posting-in-urdu).
+- The only times anything leaves the machine for something other than WhatsApp
+  are translation: the **Post in Urdu** button sends the post's text (never its
+  media) to Google's public translate endpoint, and the **name the author**
+  button sends the author's name — not the post — when the post is Urdu. No
+  other button, and no other part of the tool, makes an outside request with
+  post content. See [Posting in Urdu](#posting-in-urdu) and
+  [Naming the author](#naming-the-author).
 
 ## Dependency pin
 
@@ -750,9 +823,9 @@ curl -s http://127.0.0.1:47825/channels
 
 ```bash
 node controller/test/dependency.test.js      # vendored library + patches intact
-node controller/test/controller.test.js      # session paths, single-instance lock, channel eligibility, liveness watchdog
+node controller/test/controller.test.js      # session paths, browser choice, single-instance lock, channel eligibility, liveness watchdog
 node controller/test/repo.test.js            # update checks and fast-forward, against throwaway repos (no network)
-node extension/test/screenshot.test.js       # screenshot crop targeting + inline-image transfer
+node extension/test/screenshot.test.js       # screenshot crop targeting (stops above the action bar; hides the page chrome), the page-zoom -> DIP conversion, and the capture-time re-check + inline-image transfer
 node extension/test/toolbar.test.js          # our icons get a row of their own beneath X's action bar
 node controller/test/screenshot-pipeline.test.js  # a captured image becomes a real, sniffed image file
 node extension/test/popup-states.test.js     # every popup state, incl. reconnecting and signed-out
@@ -760,10 +833,11 @@ node controller/test/hls-prefetch.test.js    # HLS parsing, ordered parallel fet
 node controller/test/duplicate-guard.test.js # a post cannot be sent twice while one is running or just after
 node extension/test/video-source.test.js     # an ambiguous video mapping is refused, never guessed
 node extension/test/link-first.test.js       # a text-only post's link moves to the top, media posts untouched
-node extension/test/author-header.test.js    # the author's name is read cleanly and put above the post
-node controller/test/translate.test.js       # the Urdu button: the split, the endpoint's shapes, the request
+node extension/test/author-header.test.js    # the author's name is read cleanly, written in the post's language, and put above the post
+node controller/test/translate.test.js       # the Urdu button: the split, the endpoint's shapes, the request, standalone name requests
 node extension/test/post-variant.test.js     # each send button's variant: name, glyph, author, translate
 node scripts/windows/startup.test.js         # Windows launcher contract (static)
+node controller/test/supervisor.test.js      # keeps the controller running: restart, give-up, signal stop
 ```
 
 ---

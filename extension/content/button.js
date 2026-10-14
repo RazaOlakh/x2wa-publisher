@@ -168,10 +168,12 @@ function renderButton(btn, state, label) {
   fixed('align-self', 'center');
 
   // No background, no border, no filled shape: the icon is all there is, so
-  // the colour of the stroke is what shows the state.
+  // the colour of the stroke is what shows the state. Idle wears the variant's
+  // own colour (so each action reads apart at a glance); every other state is
+  // the one shared colour for that state.
   fixed('background', 'transparent');
   fixed('border', '0');
-  fixed('color', tone.fg);
+  fixed('color', state === 'idle' ? (variant.color || tone.fg) : tone.fg);
   fixed('display', 'inline-flex');
   fixed('align-items', 'center');
   fixed('justify-content', 'center');
@@ -210,7 +212,7 @@ function buttonAction(btn) {
 // tick on the WhatsApp button means "this was posted", which is not what a
 // screenshot does.
 const SHOT_STYLES = {
-  idle:    { fg: '#536471' },
+  idle:    { fg: '#f91880' },
   working: { fg: '#1d9bf0' },
   success: { fg: '#00a884' },
   error:   { fg: '#f4212e' },
@@ -305,12 +307,15 @@ function wireShotButton(btn) {
     btn.disabled = true;
     renderShotButton(btn, 'working');
 
-    // Bring the post into view before measuring: captureBeyondViewport can
-    // reach below the fold, but a post scrolled off entirely has nothing to
-    // anchor to, and this also means the user sees what was captured.
+    // The crop is the post's own box, stopping above its action bar: the
+    // action bar (reply / repost / like / share) and the extension's own row
+    // beneath it are controls, not content, so the picture is the post's
+    // author, text and media rather than the buttons around it.
     const rect = currentArticle.getBoundingClientRect();
+    const bar = shotActionBar(currentArticle);
+    const contentRect = shotContentRect(rect, bar ? bar.getBoundingClientRect().top : undefined);
     const clip = shotClip(
-      rect, window.scrollX, window.scrollY,
+      contentRect, window.scrollX, window.scrollY,
       document.documentElement.scrollWidth, document.documentElement.scrollHeight,
     );
     if (!clip) {
@@ -321,6 +326,17 @@ function wireShotButton(btn) {
       return;
     }
 
+    // Tag this exact post with a token the worker can find again through the
+    // debugger, and hand it the box that was just measured. If the post has
+    // been replaced (the tag is gone) or has moved by the time of the capture,
+    // the worker refuses rather than sending a picture of the wrong place.
+    const marker = shotMarkerToken();
+    try { currentArticle.setAttribute(SHOT_MARKER_ATTR, marker); } catch { /* no marker, no re-check */ }
+    const measured = {
+      rect: { left: rect.left, top: rect.top, width: rect.width, height: rect.height },
+      scroll: { x: window.scrollX, y: window.scrollY },
+    };
+
     let tweetId = null;
     let tweetUrl = null;
     try { tweetId = tweetIdFromArticle(currentArticle); } catch { /* no id */ }
@@ -330,16 +346,33 @@ function wireShotButton(btn) {
     } catch { /* no permalink */ }
 
     let result;
+    // A capture taller than the window makes Chrome paint the page's fixed and
+    // sticky furniture - the For you / Following tab strip, overlays - into the
+    // picture, on top of the post. Hide that chrome for the instant of the
+    // capture and put it back afterwards, whatever the outcome.
+    const hidden = shotHideChrome(currentArticle);
     try {
+      // Let the hidden state be painted before the debugger grabs the frame.
+      await new Promise((resolve) => {
+        const done = () => resolve();
+        requestAnimationFrame(() => requestAnimationFrame(done));
+        setTimeout(done, 100); // a background tab may not paint a frame
+      });
       result = await chrome.runtime.sendMessage({
         type: 'SEND_SCREENSHOT',
         requestId,
         clip,
+        marker,
+        rect: measured.rect,
+        scroll: measured.scroll,
         dedupeKey: shotKey(tweetId) || `shot:${requestId}`,
         post: { tweetId, tweetUrl },
       });
     } catch (e) {
       result = { ok: false, error: 'Failed to fetch' };
+    } finally {
+      try { currentArticle.removeAttribute(SHOT_MARKER_ATTR); } catch { /* already gone */ }
+      shotShowChrome(hidden);
     }
 
     btn.disabled = false;
@@ -610,6 +643,25 @@ function showReadError(btn, label, title, detail, requestId, error) {
   }, 4000);
 }
 
+// The author's name for an Urdu post. X gives the name in whatever script the
+// account uses, so an English-spelled name is translated to Urdu here while the
+// post itself is left as written. A name that already reads as Urdu is kept,
+// and a translation that fails falls back to the original name rather than
+// leaving the header without one.
+async function urduAuthorName(name, requestId) {
+  const original = String(name == null ? '' : name);
+  const trimmed = original.trim();
+  if (!trimmed || isUrduText(trimmed)) return original;
+  try {
+    const res = await chrome.runtime.sendMessage({ type: 'TRANSLATE_TEXT', text: trimmed, to: 'ur', requestId });
+    if (res && res.ok && typeof res.text === 'string' && res.text.trim()) return res.text.trim();
+    try { xlog('warn', 'author-name-translate-failed', { requestId, error: (res && res.error) || 'empty' }); } catch {}
+  } catch (e) {
+    try { xlog('warn', 'author-name-translate-failed', { requestId, error: e && e.message }); } catch {}
+  }
+  return original;
+}
+
 async function onPostClick(ev, btn, variant) {
   ev.preventDefault();
   ev.stopPropagation();
@@ -640,10 +692,15 @@ async function onPostClick(ev, btn, variant) {
 
   // Only the "name the author" variant changes the post, and it changes only
   // the front of it, so the link-first order arranged above stays beneath the
-  // name. With no author found the text goes through untouched. The Urdu
-  // variant leaves the text alone here: the controller translates it, after
-  // this reordering, so the link stays first in the message too.
-  if (v.nameTheAuthor) post = { ...post, text: withAuthorHeader(post.text, post.author) };
+  // name. The name is written in the post's own language: an Urdu post is headed
+  // with the name in Urdu (translated), an English one with the name as it
+  // stands. The post itself is left as written; the Urdu variant is the one that
+  // translates it, in the controller, after this reordering so the link stays
+  // first. With no author found the text goes through untouched.
+  if (v.nameTheAuthor) {
+    const name = isUrduText(post.text) ? await urduAuthorName(post.author, requestId) : post.author;
+    post = { ...post, text: withAuthorHeader(post.text, name) };
+  }
 
   // Once it is sent the tick stays put; only a failure reverts, so the
   // post can be tried again.
@@ -707,18 +764,18 @@ function injectButton(article) {
   // have somewhere obvious to go.
   const toolbar = toolbarFor(bar);
 
-  // The plain post, then the same post with the author's name above it
-  // ("Imran Khan's Tweet"), then the same post translated to Urdu - three ways
-  // of sending this one post, in the order they were added.
-  toolbar.appendChild(createPostButton(article, 'plain'));
-  toolbar.appendChild(createPostButton(article, 'named'));
-  toolbar.appendChild(createPostButton(article, 'urdu'));
-
-  // The screenshot button sits beside them so the row reads as one group.
+  // The actions run in reverse of the order they were added, so the row reads,
+  // left to right: screenshot, Urdu, author-name, plain - ending at the right
+  // edge with the plain post. The reversal lives here, in the one place the
+  // row is built, rather than being undone in the toolbar's layout.
   const shotBtn = document.createElement('button');
   shotBtn.type = 'button';
   wireShotButton(shotBtn);
   toolbar.appendChild(shotBtn);
+
+  toolbar.appendChild(createPostButton(article, 'urdu'));
+  toolbar.appendChild(createPostButton(article, 'named'));
+  toolbar.appendChild(createPostButton(article, 'plain'));
 }
 
 function scan() {

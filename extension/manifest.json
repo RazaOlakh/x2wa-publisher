@@ -15,7 +15,7 @@
   "content_scripts": [
     {
       "matches": ["https://x.com/*", "https://twitter.com/*"],
-      "js": ["content/tweet-extractor.js", "content/shot.js", "content/toolbar.js", "content/post-variant.js", "content/button.js"],
+      "js": ["shared/clip.js", "content/tweet-extractor.js", "content/shot.js", "content/toolbar.js", "content/post-variant.js", "content/button.js"],
       "run_at": "document_idle"
     }
   ],

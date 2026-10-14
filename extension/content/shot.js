@@ -1,8 +1,10 @@
 // Screenshot of a single post.
 //
 // Split out from button.js so the parts that decide *what* to capture and
-// *how* to describe the result can be tested without a browser: this file
-// holds no DOM work of its own beyond reading a rectangle.
+// *how* to describe the result can be tested without a browser: the DOM this
+// file touches is finding the post, finding its action bar, and the page's
+// fixed and sticky chrome to take out of the picture. The crop itself is
+// computed from rectangles.
 //
 // Only this post's own box is ever captured. The crop is computed in page
 // coordinates (scroll included) because that is the space the capture API
@@ -47,6 +49,85 @@ function shotContainer(start) {
   return el;
 }
 
+// --- what part of the post is the post ---
+//
+// The post's action bar - the reply / repost / like / share row - is a row of
+// controls, and the extension's own toolbar sits directly beneath it. Neither
+// is part of the post, so a screenshot stops above them: the picture is the
+// post's author, text and media, not the buttons around it.
+//
+// The bar is found from the like button, which only the bar has, and never
+// from a quoted post's own bar rendered inside this one.
+const SHOT_ACTION_BAR_SELECTOR = 'div[role="group"]';
+const SHOT_LIKE_SELECTOR = 'button[data-testid="like"]';
+const SHOT_QUOTE_SELECTOR = 'div[data-testid="quoteTweet"]';
+
+function shotActionBar(article) {
+  if (!article || typeof article.querySelectorAll !== 'function') return null;
+  const likes = article.querySelectorAll(SHOT_LIKE_SELECTOR);
+  for (const like of likes) {
+    // A quoted post carries its own like row inside this post; that is not
+    // this post's action bar, so skip it and keep looking.
+    if (typeof like.closest === 'function' && like.closest(SHOT_QUOTE_SELECTOR)) continue;
+    const bar = typeof like.closest === 'function' ? like.closest(SHOT_ACTION_BAR_SELECTOR) : null;
+    if (bar) return bar;
+  }
+  // No like button to key on (X rendered the bar differently, or the post has
+  // none): fall back to the first action-bar-like group so the post is still
+  // cropped above its controls.
+  const groups = article.querySelectorAll(SHOT_ACTION_BAR_SELECTOR);
+  return groups.length ? groups[0] : null;
+}
+
+// The post's own rectangle: the article's box up to where its action bar
+// begins. A bar that is missing, or that sits at or above the top of the post,
+// leaves the whole post captured rather than less than the post.
+function shotContentRect(rect, actionTop) {
+  if (!rect) return rect;
+  if (typeof actionTop !== 'number' || !isFinite(actionTop)) return rect;
+  const height = actionTop - rect.top;
+  if (!(height > 0)) return rect;
+  return { left: rect.left, top: rect.top, width: rect.width, height: Math.min(height, rect.height) };
+}
+
+// --- the page's own chrome ---
+//
+// A capture may be taller than the window, and Chrome then paints the page's
+// fixed and sticky furniture - the top bar with its For you / Following tabs,
+// overlays, toasts - into the picture, at the place they occupy on screen. That
+// furniture is the site's, not the post's, and it lands on top of the post.
+//
+// So it is hidden for the length of the capture and put back afterwards. Only
+// elements the post is not inside (and that are not inside the post) are
+// touched, so the post itself is never hidden; and hiding (rather than
+// removing) keeps every element's space, so the post does not move.
+function shotHideChrome(keep, doc, styleOf) {
+  doc = doc || document;
+  styleOf = styleOf || getComputedStyle;
+  const hidden = [];
+  const all = doc.querySelectorAll('*');
+  for (const el of all) {
+    let position;
+    try { position = styleOf(el).position; } catch { continue; }
+    if (position !== 'fixed' && position !== 'sticky') continue;
+    // Never hide the post, something it is inside, or something inside it:
+    // only the page's own chrome.
+    if (keep && (el === keep || (el.contains && el.contains(keep)) || (keep.contains && keep.contains(el)))) continue;
+    if (!el.style) continue;
+    hidden.push([el, el.style.visibility]);
+    el.style.visibility = 'hidden';
+  }
+  return hidden;
+}
+
+// Put back exactly what was hidden, and nothing else.
+function shotShowChrome(hidden) {
+  if (!hidden) return;
+  for (const entry of hidden) {
+    if (entry && entry[0] && entry[0].style) entry[0].style.visibility = entry[1];
+  }
+}
+
 // A screenshot is deduplicated against screenshots, not against posting the
 // same post: taking a picture of a post must not stop you from posting it,
 // and vice versa.
@@ -60,11 +141,24 @@ function shotCaption(tweetUrl) {
   return tweetUrl || '';
 }
 
+// A token naming this one capture. It is put on the post element and sent
+// with the request, so the worker can find that exact node again through the
+// debugger and confirm it is still where it was measured - a post X has
+// re-rendered or moved in between is refused instead of photographed in the
+// wrong place. The value is ours: a short, safe token, never read from the
+// page, so it can only ever address this attribute.
+function shotMarkerToken() {
+  return 's' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+}
+
 const SHOT_ERROR_HINTS = {
   'no-article': 'The post could not be read from the page.',
   'capture-unavailable': 'Chrome would not let the extension capture this tab. Close any Developer Tools window for this tab and try again.',
   'capture-failed': 'The screenshot came back empty. Try scrolling the post into view and pressing again.',
   'capture-too-small': 'The post is not on screen, so there was nothing to capture.',
+  'capture-invalid-clip': 'The post had no usable size on screen, so there was nothing to capture.',
+  'capture-node-detached': 'The post changed on the page before it could be captured. Try again.',
+  'capture-node-moved': 'The post moved on the page before it could be captured. Try again.',
   'empty-screenshot': 'Nothing could be captured from this post.',
   'no-default-channel': 'Choose a destination channel in the extension popup first.',
   'Failed to fetch': 'Lost contact with the controller. Check that it is running.',
@@ -75,5 +169,5 @@ function shotErrorHint(code) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { shotClip, shotContainer, SHOT_POST_SELECTOR, shotKey, shotCaption, shotErrorHint, SHOT_ERROR_HINTS };
+  module.exports = { shotClip, shotContainer, SHOT_POST_SELECTOR, shotActionBar, shotContentRect, shotHideChrome, shotShowChrome, shotKey, shotCaption, shotMarkerToken, shotErrorHint, SHOT_ERROR_HINTS };
 }

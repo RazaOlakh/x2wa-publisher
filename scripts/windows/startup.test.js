@@ -36,6 +36,8 @@ console.log('install-startup.ps1 structure');
   check('no credentials stored', !/-Credential|Get-Credential/i.test(src));
 
   check('checks for node on PATH at install', /Get-Command node/.test(src));
+  check('resolves the supervisor next to the controller', /\$SupervisorJs\s*=\s*Join-Path\s+\$ControllerDir\s+'src\\supervisor\.js'/.test(src));
+  check('status/restart/uninstall find the supervisor too', /-like\s+"\*\$SupervisorJs\*"/.test(src));
   check('reports missing node with a clear error', /Node\.js 18\+ not found/.test(src));
   check('checks dependencies are installed', /node_modules\\whatsapp-web\.js/.test(src));
   check('checks ffmpeg presence', /ffmpeg/.test(src));
@@ -67,6 +69,7 @@ console.log('generated launcher contract');
     $TmpRoot: 'C:\\Users\\t\\AppData\\Local\\x-whatsapp-poster\\tmp',
     // Expanded at install time so the launcher carries absolute paths.
     $ControllerJs: 'C:\\Users\\t\\Documents\\My Projects\\x2wa\\controller\\src\\server.js',
+    $SupervisorJs: 'C:\\Users\\t\\Documents\\My Projects\\x2wa\\controller\\src\\supervisor.js',
   };
   let gen = body;
   for (const [k, v] of Object.entries(subs)) gen = gen.split(k).join(v);
@@ -74,7 +77,9 @@ console.log('generated launcher contract');
   check('no unexpanded PowerShell variables', !/\$\w/.test(gen), (gen.match(/\$\w/g) || []).join(','));
   check('quotes balanced (paths with spaces stay quoted)', (gen.match(/"/g) || []).length % 2 === 0, (gen.match(/"/g) || []).length);
   check('node path is absolute and quoted', gen.includes('"C:\\Program Files\\nodejs\\node.exe"'));
-  check('controller path is quoted for spaces', gen.includes('"C:\\Users\\t\\Documents\\My Projects\\x2wa\\controller\\src\\server.js"'), gen.match(/start .*/)[0]);
+  check('supervisor path is quoted for spaces', gen.includes('"C:\\Users\\t\\Documents\\My Projects\\x2wa\\controller\\src\\supervisor.js"'), (gen.match(/start .*/) || [''])[0]);
+  check('starts the supervisor so a stopped controller is restarted', /start "x2wa-controller" \/min "[^"]*node\.exe" "[^"]*supervisor\.js"/.test(gen), (gen.match(/start .*/) || [''])[0]);
+  check('does not start the controller directly (no supervision then)', !gen.includes('"C:\\Users\\t\\Documents\\My Projects\\x2wa\\controller\\src\\server.js"'));
   check('chrome path is passed through', /set "CHROME_PATH=C:/.test(gen));
 
   check('session dir is the documented LOCALAPPDATA path', gen.includes('SESSION_DIR=C:\\Users\\t\\AppData\\Local\\x-whatsapp-poster\\whatsapp-session'));

@@ -9,7 +9,7 @@
 //
 //   node controller/test/translate.test.js
 const {
-  translateText, chunkText, readTranslation, isTranslatable, MAX_CHUNK, ENDPOINT,
+  translateText, chunkText, readTranslation, isTranslatable, readTranslateRequest, MAX_CHUNK, ENDPOINT,
 } = require('../src/translate');
 
 let failures = 0;
@@ -181,6 +181,21 @@ console.log('the translation request');
     const fetchImpl = fakeFetch([{ json: [['ہاں', 'en']] }]);
     await translateText('yes', undefined, { fetchImpl, retryDelayMs: 0 });
     check('urdue by default', /[?&]tl=ur(?:&|$)/.test(fetchImpl.calls[0].url), fetchImpl.calls[0].url);
+  }
+
+  // The standalone request (a short string, e.g. the author's name that heads
+  // an Urdu post) is validated before it ever reaches the endpoint.
+  console.log('a standalone translate request is validated');
+  {
+    eq('a plain request passes, Urdu by default', readTranslateRequest({ text: 'Imran Khan' }), { ok: true, text: 'Imran Khan', to: 'ur' });
+    eq('a chosen language is kept', readTranslateRequest({ text: 'x', to: 'ar' }), { ok: true, text: 'x', to: 'ar' });
+    eq('missing text is refused', readTranslateRequest({}), { ok: false, error: 'bad-request' });
+    eq('a non-string text is refused', readTranslateRequest({ text: 5 }), { ok: false, error: 'bad-request' });
+    eq('an empty text is refused', readTranslateRequest({ text: '' }), { ok: false, error: 'bad-request' });
+    eq('an over-long text is refused', readTranslateRequest({ text: 'x'.repeat(5000) }).ok, false);
+    eq('a long language code is refused', readTranslateRequest({ text: 'x', to: 'not-a-lang' }), { ok: false, error: 'bad-request' });
+    eq('a non-string language is refused', readTranslateRequest({ text: 'x', to: 7 }), { ok: false, error: 'bad-request' });
+    eq('a non-object body is refused', readTranslateRequest(null), { ok: false, error: 'bad-request' });
   }
 
   console.log(failures ? `\n${failures} FAILURE(S)` : '\nALL TRANSLATE TESTS PASSED');

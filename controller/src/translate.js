@@ -165,11 +165,27 @@ async function translateText(text, target, deps) {
   return out;
 }
 
+// The standalone translation request (a short string, e.g. an author's name
+// that heads an Urdu post). Validate it here so a stray value can never reshape
+// the translate call, whatever the caller sent.
+const MAX_REQUEST_CHARS = 400;
+
+function readTranslateRequest(body) {
+  if (!body || typeof body !== 'object') return { ok: false, error: 'bad-request' };
+  const text = body.text;
+  if (typeof text !== 'string' || text.length === 0 || text.length > MAX_REQUEST_CHARS) return { ok: false, error: 'bad-request' };
+  const to = body.to == null ? 'ur' : body.to;
+  if (typeof to !== 'string' || to.length === 0 || to.length > 8) return { ok: false, error: 'bad-request' };
+  return { ok: true, text, to };
+}
+
 module.exports = {
   translateText,
   chunkText,
   readTranslation,
   isTranslatable,
+  readTranslateRequest,
   MAX_CHUNK,
+  MAX_REQUEST_CHARS,
   ENDPOINT,
 };

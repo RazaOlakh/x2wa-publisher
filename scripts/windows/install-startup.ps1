@@ -30,6 +30,7 @@ $ServiceName     = 'x2wa-controller'
 $Port            = 47825
 $ControllerDir   = (Resolve-Path (Join-Path $PSScriptRoot '..\..\controller')).Path
 $ControllerJs    = Join-Path $ControllerDir 'src\server.js'
+$SupervisorJs    = Join-Path $ControllerDir 'src\supervisor.js'
 $StartupDir      = [Environment]::GetFolderPath('Startup')
 $DataRoot        = Join-Path $env:LOCALAPPDATA 'x-whatsapp-poster'
 $SessionDir      = Join-Path $DataRoot 'whatsapp-session'
@@ -52,8 +53,11 @@ function Find-Chrome {
 }
 
 function Get-ControllerProcess {
+  # The supervisor runs the controller, so a running controller is either the
+  # supervisor (node supervisor.js) or the controller it is supervising
+  # (node server.js). Match both.
   Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue |
-    Where-Object { $_.CommandLine -and $_.CommandLine -like "*$ControllerJs*" }
+    Where-Object { $_.CommandLine -and ($_.CommandLine -like "*$SupervisorJs*" -or $_.CommandLine -like "*$ControllerJs*") }
 }
 
 function Get-SessionChromeProcesses {
@@ -63,6 +67,7 @@ function Get-SessionChromeProcesses {
 
 function Test-Prerequisites {
   if (-not (Test-Path -LiteralPath $ControllerJs)) { throw "controller not found at $ControllerJs" }
+  if (-not (Test-Path -LiteralPath $SupervisorJs)) { throw "supervisor not found at $SupervisorJs" }
   if (-not (Test-Path -LiteralPath (Join-Path $ControllerDir 'node_modules\whatsapp-web.js'))) {
     throw "controller dependencies missing - run: (cd '$ControllerDir'; npm install)"
   }
@@ -106,7 +111,11 @@ set "SESSION_DIR=$SessionDir"
 set "TMP_ROOT=$TmpRoot"
 set "CHROME_PATH=$chromeExe"
 
-start "x2wa-controller" /min "$nodeExe" "$ControllerJs" >> "%X2WA_LOG%" 2>&1
+rem Run the supervisor, not the controller directly. If the controller stops -
+rem a crash, a closed browser, a killed process - the supervisor starts it
+rem again, the way systemd's Restart=on-failure does on Linux. Without it a
+rem stopped controller stayed stopped until the next logon.
+start "x2wa-controller" /min "$nodeExe" "$SupervisorJs" >> "%X2WA_LOG%" 2>&1
 
 rem Give it a moment, then record whether it actually came up.
 ping 127.0.0.1 -n 9 >nul

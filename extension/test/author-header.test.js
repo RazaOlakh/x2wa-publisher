@@ -1,10 +1,10 @@
 // Author-name tests - zero dependencies.
 //
 // The second send button is the same post, sent with the author's name above
-// it ("Imran Khan's Tweet"). These assert how the name is read out of X's
-// User-Name block - without mistaking the @handle, the timestamp, or a quoted
-// post's author for it - and how the header is put in front of the text,
-// leaving the link-first order beneath intact.
+// it. These assert how the name is read out of X's User-Name block - without
+// mistaking the @handle, the timestamp, or a quoted post's author for it - that
+// the name is written in the post's own language, and how it is put in front of
+// the text, leaving the link-first order beneath intact.
 //
 //   node extension/test/author-header.test.js
 const fs = require('fs');
@@ -28,7 +28,7 @@ function eq(name, got, want) {
 const sandbox = { window: {}, console: { log() {} }, location: { origin: 'https://x.com' } };
 vm.createContext(sandbox);
 vm.runInContext(src, sandbox);
-const { pickAuthorName, authorHeader, withAuthorHeader, findTweetAuthor, extractPost } = sandbox;
+const { pickAuthorName, authorHeader, withAuthorHeader, isUrduText, findTweetAuthor, extractPost } = sandbox;
 
 // --- the rule, on its own ---
 console.log('the display name is the first real name in the User-Name block');
@@ -110,24 +110,54 @@ console.log('\nthe post\'s own author is read, not a quoted post\'s');
 }
 
 // --- the header line ---
-console.log('\nthe header line');
+console.log('\nthe header line is just the name');
 {
-  eq('the author\'s name becomes a title', authorHeader('Imran Khan'), "Imran Khan's Tweet");
-  eq('surrounding space is trimmed', authorHeader('  Imran Khan  '), "Imran Khan's Tweet");
+  eq('the author\'s name is the header', authorHeader('Imran Khan'), 'Imran Khan');
+  eq('surrounding space is trimmed', authorHeader('  Imran Khan  '), 'Imran Khan');
+  eq('an Urdu name is kept as it is', authorHeader('عمران خان'), 'عمران خان');
   eq('no name means no header', authorHeader(''), '');
   eq('a blank name means no header', authorHeader('   '), '');
   eq('a missing name means no header', authorHeader(null), '');
+}
+
+// --- the post's language, from its own letters ---
+console.log('\nthe post\'s language is read from its letters');
+{
+  eq('an Urdu post reads as Urdu', isUrduText('یہ بہت اچھی خبر ہے'), true);
+  eq('an English post reads as English', isUrduText('This is great news'), false);
+  eq('a long Latin link does not turn an Urdu post English',
+    isUrduText('یہ بہت اچھی خبر ہے https://t.co/AbCdEfGhIjKlMnOpQr'), true);
+  eq('a bare t.co link does not either',
+    isUrduText('خبر t.co/AbCdEfGhIjKlMnOpQr'), true);
+  eq('a stray Urdu word does not turn an English post Urdu',
+    isUrduText('Hello everyone یہ'), false);
+  eq('no letters at all reads as English', isUrduText('123 456 🎉'), false);
+  eq('empty reads as English', isUrduText(''), false);
+  eq('missing text reads as English', isUrduText(null), false);
+}
+
+// --- the name follows that language ---
+console.log('\nthe name is written in the post\'s language');
+{
+  eq('an English post is headed by the English name',
+    withAuthorHeader('Hello there', 'Imran Khan'), 'Imran Khan\n\nHello there');
+  eq('an Urdu post is headed by the Urdu name',
+    withAuthorHeader('یہ بہت اچھی خبر ہے', 'عمران خان'), 'عمران خان\n\nیہ بہت اچھی خبر ہے');
+  eq('a missing name means no header in either language', withAuthorHeader('یہ خبر ہے', ''), 'یہ خبر ہے');
+  eq('the Urdu name goes above the post, link first untouched',
+    withAuthorHeader('example.com\nHello', 'عمران خان'),
+    'عمران خان\n\nexample.com\nHello');
 }
 
 // --- putting it in front of the post ---
 console.log('\nthe name goes above the post');
 {
   eq('the name sits above the text',
-    withAuthorHeader('Hello there', 'Imran Khan'), "Imran Khan's Tweet\n\nHello there");
+    withAuthorHeader('Hello there', 'Imran Khan'), 'Imran Khan\n\nHello there');
   eq('a post with no text is just the header',
-    withAuthorHeader('', 'Imran Khan'), "Imran Khan's Tweet");
+    withAuthorHeader('', 'Imran Khan'), 'Imran Khan');
   eq('the text is trimmed at the seam only',
-    withAuthorHeader('  Hello there  ', 'Imran Khan'), "Imran Khan's Tweet\n\nHello there");
+    withAuthorHeader('  Hello there  ', 'Imran Khan'), 'Imran Khan\n\nHello there');
   eq('with no author the text is untouched',
     withAuthorHeader('Hello there', null), 'Hello there');
   eq('a missing text and missing author stays empty', withAuthorHeader('', null), '');
@@ -135,7 +165,7 @@ console.log('\nthe name goes above the post');
   // top of the link, not between it and the words.
   eq('the link stays first, under the name',
     withAuthorHeader('example.com\nHelllo\nhow are your?', 'Imran Khan'),
-    "Imran Khan's Tweet\n\nexample.com\nHelllo\nhow are your?");
+    'Imran Khan\n\nexample.com\nHelllo\nhow are your?');
 }
 
 // --- wired into extraction ---

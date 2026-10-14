@@ -7,18 +7,20 @@
 // the button's rendering and its click handling.
 //
 //   plain  the post as written
-//   named  the same post with the author's name above it ("…'s Tweet")
+//   named  the same post with the author's name above it
 //   urdu   the same post with its text translated to Urdu
 //
-// `icon` names the idle glyph in button.js, `action` is what assistive tech and
-// hover read, `nameTheAuthor` asks the content script to put the author's name
-// on top, and `translateTo` asks the controller to translate the text first.
+// `icon` names the idle glyph in button.js, `color` is its idle colour,
+// `action` is what assistive tech and hover read, `nameTheAuthor` asks the
+// content script to put the author's name on top, and `translateTo` asks the
+// controller to translate the text first. The colour is only the idle state:
+// once a post is being sent the shared state colours (below) take over.
 //
 // Pure, so the differences can be tested without a browser.
 const POST_VARIANTS = {
-  plain: { action: 'Post to WhatsApp',      icon: 'whatsapp', nameTheAuthor: false, translateTo: null },
-  named: { action: 'Post with author name', icon: 'at',       nameTheAuthor: true,  translateTo: null },
-  urdu:  { action: 'Post in Urdu',          icon: 'globe',    nameTheAuthor: false, translateTo: 'ur' },
+  plain: { action: 'Post to WhatsApp',      icon: 'whatsapp', color: '#25d366', nameTheAuthor: false, translateTo: null },
+  named: { action: 'Post with author name', icon: 'at',       color: '#1d9bf0', nameTheAuthor: true,  translateTo: null },
+  urdu:  { action: 'Post in Urdu',          icon: 'globe',    color: '#7856ff', nameTheAuthor: false, translateTo: 'ur' },
 };
 
 // Look a variant up, falling back to the plain one so a name that is ever

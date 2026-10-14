@@ -50,6 +50,34 @@ console.log('session directory is stable and per-user');
   if (savedEnv.XDG_DATA_HOME === undefined) delete process.env.XDG_DATA_HOME; else process.env.XDG_DATA_HOME = savedEnv.XDG_DATA_HOME;
 }
 
+// ----------------------------------------------------------- the browser
+console.log('the browser is chosen per platform, and never guessed wrong');
+{
+  const { chromePath } = require('../src/platform');
+  const all = () => true;
+  const none = () => false;
+  const endsChrome = (p) => typeof p === 'string' && p.endsWith('chrome.exe');
+
+  eq('an explicit CHROME_PATH wins', chromePath({ platform: 'linux', env: { CHROME_PATH: '/opt/chrome' }, exists: all }), '/opt/chrome');
+
+  // Windows: the three conventional installs, in order. Distinct directory
+  // names let each candidate be singled out without depending on separators.
+  const winEnv = { ProgramFiles: 'PF_dir', 'ProgramFiles(x86)': 'PF86_dir', LOCALAPPDATA: 'LA_dir' };
+  const standard = chromePath({ platform: 'win32', env: winEnv, exists: (p) => p.includes('PF_dir') });
+  check('windows uses the standard install when it exists', endsChrome(standard) && standard.includes('PF_dir'), standard);
+  const perUser = chromePath({ platform: 'win32', env: winEnv, exists: (p) => p.includes('LA_dir') });
+  check('windows falls back to the per-user install', endsChrome(perUser) && perUser.includes('LA_dir'), perUser);
+  eq('windows with no Chrome hands the choice to puppeteer', chromePath({ platform: 'win32', env: winEnv, exists: none }), undefined);
+  eq('windows without LOCALAPPDATA still tries the machine-wide installs', chromePath({ platform: 'win32', env: { ProgramFiles: 'PF_dir' }, exists: none }), undefined);
+
+  // Linux / macOS: the usual locations, else puppeteer.
+  eq('linux prefers google-chrome-stable', chromePath({ platform: 'linux', env: {}, exists: all }), '/usr/bin/google-chrome-stable');
+  eq('linux can fall through to another browser', chromePath({ platform: 'linux', env: {}, exists: (p) => p === '/usr/bin/chromium' }), '/usr/bin/chromium');
+  eq('linux with none found hands the choice to puppeteer', chromePath({ platform: 'linux', env: {}, exists: none }), undefined);
+  const mac = chromePath({ platform: 'darwin', env: {}, exists: all });
+  check('macos uses the app bundle', typeof mac === 'string' && mac.includes('Google Chrome.app'), mac);
+}
+
 // ------------------------------------------------------ single instance
 console.log('second controller cannot share a session directory');
 {
