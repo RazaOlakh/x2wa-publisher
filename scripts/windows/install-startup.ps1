@@ -20,7 +20,7 @@
 #>
 [CmdletBinding()]
 param(
-  [ValidateSet('install', 'uninstall', 'status', 'restart')]
+  [ValidateSet('install', 'uninstall', 'status', 'restart', 'start')]
   [string]$Action = 'install'
 )
 
@@ -184,6 +184,23 @@ switch ($Action) {
       Start-Sleep -Seconds 1
     }
     Start-Sleep -Seconds 2
+    if (-not (Test-Path -LiteralPath $VbsLauncherPath) -and -not (Test-Path -LiteralPath $LegacyCmdPath)) { throw "not installed - run: $PSCommandPath install" }
+    $toStart = if (Test-Path -LiteralPath $VbsLauncherPath) { $VbsLauncherPath } else { $LegacyCmdPath }
+    try {
+      $cmdLine = if ($toStart -like '*.vbs') { "wscript.exe `"$toStart`"" } else { "cmd.exe /c `"$toStart`"" }
+      Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $cmdLine } -ErrorAction Stop | Out-Null
+    } catch {
+      Start-Process -FilePath $toStart | Out-Null
+    }
+    Start-Sleep -Seconds 12
+    & $PSCommandPath status
+  }
+  'start' {
+    if (Get-ControllerProcess) {
+      Write-Host "already running" -ForegroundColor Yellow
+      & $PSCommandPath status
+      return
+    }
     if (-not (Test-Path -LiteralPath $VbsLauncherPath) -and -not (Test-Path -LiteralPath $LegacyCmdPath)) { throw "not installed - run: $PSCommandPath install" }
     $toStart = if (Test-Path -LiteralPath $VbsLauncherPath) { $VbsLauncherPath } else { $LegacyCmdPath }
     try {
