@@ -179,11 +179,20 @@ switch ($Action) {
   'restart' {
     foreach ($p in (Get-ControllerProcess)) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }
     foreach ($p in (Get-SessionChromeProcesses)) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }
+    for ($i = 0; $i -lt 10; $i++) {
+      if (-not (Get-ControllerProcess)) { break }
+      Start-Sleep -Seconds 1
+    }
     Start-Sleep -Seconds 2
     if (-not (Test-Path -LiteralPath $VbsLauncherPath) -and -not (Test-Path -LiteralPath $LegacyCmdPath)) { throw "not installed - run: $PSCommandPath install" }
     $toStart = if (Test-Path -LiteralPath $VbsLauncherPath) { $VbsLauncherPath } else { $LegacyCmdPath }
-    Start-Process -FilePath $toStart | Out-Null
-    Start-Sleep -Seconds 10
+    try {
+      $cmdLine = if ($toStart -like '*.vbs') { "wscript.exe `"$toStart`"" } else { "cmd.exe /c `"$toStart`"" }
+      Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $cmdLine } -ErrorAction Stop | Out-Null
+    } catch {
+      Start-Process -FilePath $toStart | Out-Null
+    }
+    Start-Sleep -Seconds 12
     & $PSCommandPath status
   }
 }
