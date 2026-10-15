@@ -135,6 +135,11 @@ WshShell.Run """$CmdLauncherPath""", 0, False
 "@
   Set-Content -LiteralPath $VbsLauncherPath -Value $vbs -Encoding ASCII
   if (Test-Path -LiteralPath $LegacyCmdPath) { Remove-Item -LiteralPath $LegacyCmdPath -Force }
+
+  # Register in HKCU\...\Run so Windows userinit launches it unconditionally on every logon
+  $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+  $regVal = "wscript.exe `"$VbsLauncherPath`""
+  Set-ItemProperty -Path $runKey -Name $ServiceName -Value $regVal -Force
 }
 
 switch ($Action) {
@@ -154,6 +159,7 @@ switch ($Action) {
     if (Test-Path -LiteralPath $VbsLauncherPath) { Remove-Item -LiteralPath $VbsLauncherPath -Force; Write-Step "Removed $VbsLauncherPath" }
     if (Test-Path -LiteralPath $LegacyCmdPath)   { Remove-Item -LiteralPath $LegacyCmdPath -Force; Write-Step "Removed $LegacyCmdPath" }
     if (Test-Path -LiteralPath $CmdLauncherPath) { Remove-Item -LiteralPath $CmdLauncherPath -Force; Write-Step "Removed $CmdLauncherPath" }
+    Remove-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name $ServiceName -ErrorAction SilentlyContinue
     foreach ($p in (Get-ControllerProcess)) {
       Write-Step "Stopping controller pid $($p.ProcessId)"
       Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
@@ -175,6 +181,8 @@ switch ($Action) {
     if (Test-Path -LiteralPath $VbsLauncherPath) { Write-Host "startup entry: $VbsLauncherPath (silent)" }
     elseif (Test-Path -LiteralPath $LegacyCmdPath) { Write-Host "startup entry: $LegacyCmdPath" }
     else { Write-Host "startup entry: not installed" -ForegroundColor Yellow }
+    $runVal = (Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -ErrorAction SilentlyContinue).$ServiceName
+    if ($runVal) { Write-Host "registry run : $runVal" }
   }
   'restart' {
     foreach ($p in (Get-ControllerProcess)) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }
