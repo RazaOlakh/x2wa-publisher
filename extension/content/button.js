@@ -27,9 +27,9 @@ const SVG_NS = 'http://www.w3.org/2000/svg';
 const BUTTON_STYLES = {
   idle:    { fg: '#536471' },
   working: { fg: '#1d9bf0' },
-  success: { fg: '#00a884' },
+  success: { fg: '#1d9bf0' },
   partial: { fg: '#e8912d' },
-  error:   { fg: '#f4212e' },
+  error:   { fg: '#e8912d' },
 };
 
 function xlog(level, event, data) {
@@ -212,10 +212,10 @@ function buttonAction(btn) {
 // tick on the WhatsApp button means "this was posted", which is not what a
 // screenshot does.
 const SHOT_STYLES = {
-  idle:    { fg: '#f91880' },
+  idle:    { fg: '#536471' },
   working: { fg: '#1d9bf0' },
-  success: { fg: '#00a884' },
-  error:   { fg: '#f4212e' },
+  success: { fg: '#1d9bf0' },
+  error:   { fg: '#e8912d' },
 };
 
 function cameraIcon() {
@@ -460,8 +460,8 @@ function wireShotButton(btn) {
 // the slide-in is a transition triggered by a style change, which needs no
 // keyframes.
 const SNACKBAR_TONES = {
-  success: { accent: '#00a884', icon: 'check' },
-  error:   { accent: '#f4212e', icon: 'cross' },
+  success: { accent: '#1d9bf0', icon: 'check' },
+  error:   { accent: '#e8912d', icon: 'cross' },
   info:    { accent: '#1d9bf0', icon: 'info' },
 };
 const SNACKBAR_MS = { success: 4500, info: 5000, error: 8000 };

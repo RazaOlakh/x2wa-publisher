@@ -560,16 +560,16 @@ still sends a picture of the whole post, exactly as described above.
 Each send button is a small, outlined icon — no background, no filled shape —
 that changes as the post is sent, so you can see the outcome without opening
 anything. The three send buttons share every state; only the idle glyph and its
-colour tell them apart — the WhatsApp bubble in WhatsApp green, the `@` in
-blue, the globe in purple, and the camera in pink. Both change:
+colour tell them apart — the WhatsApp bubble and the camera in grey, the `@` in
+blue, and the globe in purple. Both change:
 
 | State | Icon | Colour | Meaning |
 |---|---|---|---|
 | Idle | WhatsApp / `@` / globe / camera glyph | the button's own colour | ready — click to post |
 | Working | spinner | blue | posting (the spinner keeps turning) |
-| Success | check mark | green | everything was published |
+| Success | check mark | blue | everything was published |
 | Partial | warning | amber | some items published, some could not be fetched |
-| Error | cross | red | nothing was published |
+| Error | cross | amber | nothing was published |
 
 There is no text on a button. Hover it for a tooltip with the detail
 (for example *Partial 3/4* or *Err: channel-not-permitted*), and the same
@@ -593,9 +593,9 @@ snackbar at the bottom centre of the page:
 
 | Kind | Looks like | Example |
 |---|---|---|
-| Success | teal edge, check | **Posted to Test** — *Your post is in the channel.* |
+| Success | blue edge, check | **Posted to Test** — *Your post is in the channel.* |
 | Info | blue edge, info | **Partly posted** — *2 of 4 items reached the channel…* |
-| Error | red edge, cross | **Could not post** — *This account cannot post in that channel…* |
+| Error | amber edge, cross | **Could not post** — *This account cannot post in that channel…* |
 
 Each snackbar can be dismissed with its **×** and disappears on its own after
 a few seconds (errors linger longer, since they usually need reading). At most

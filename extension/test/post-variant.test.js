@@ -45,7 +45,7 @@ console.log('the plain variant sends the post as written');
   const v = postVariant('plain');
   eq('its name', v.action, 'Post to WhatsApp');
   eq('the WhatsApp glyph', v.icon, 'whatsapp');
-  eq('its idle colour', v.color, '#25d366');
+  eq('its idle colour', v.color, '#536471');
   eq('it does not add the author', v.nameTheAuthor, false);
   eq('and does not translate', v.translateTo, null);
 }

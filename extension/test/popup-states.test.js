@@ -181,7 +181,7 @@ const wait = () => new Promise((r) => setTimeout(r, 30));
     });
     await ready;
     check('connected title', txt(els, 'waTitle') === 'Connected', txt(els, 'waTitle'));
-    check('green dot', els.waDot.className.includes('on'));
+    check('connected dot', els.waDot.className.includes('on'));
     check('account shown', /923124706501/.test(txt(els, 'waDetail')), txt(els, 'waDetail'));
     check('channel selector enabled', els.channelSelect.disabled === false);
     check('saved channel kept', store.selectedChannelId === 'A@newsletter', store);
