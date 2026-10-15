@@ -160,8 +160,9 @@ No administrator rights, no scheduled task, no stored credentials.
 powershell -ExecutionPolicy Bypass -File scripts\windows\install-startup.ps1 install
 ```
 
-This writes `x2wa-controller.cmd` into your user's **Startup** folder, so the
-controller starts when you log in.
+This writes a **silent** launcher into your user's **Startup** folder, so the
+controller starts when you log in and **no window appears** — the Startup entry
+is a VBScript wrapper that runs the real runner hidden.
 
 | Command | What it does |
 |---|---|
@@ -192,9 +193,42 @@ again after a short wait. A few quick failures in a row (a crash loop, not a
 transient fault) stop the supervisor with a clear log line rather than
 spinning forever — the same start-limit idea as the systemd unit.
 
-The supervisor is why you no longer have to notice that the controller did not
-come up, or bring it back by hand. If it *is* down, `status` and the log will
-say why.
+**Automatic reconnection is in the controller**, so it works however the
+process was started. On a disconnect, a lost network, a sleep/resume, or a dead
+browser page, the controller marks the connection stale, tears the old client
+down (waiting for Chromium to exit so the next launch is not refused), and
+rebuilds it from the saved session with a bounded backoff — 2 s doubling to a
+60 s cap — reset on every successful connect. A heartbeat notices a
+sleep/resume (a beat that arrives far too late) and a page that stops reporting
+`CONNECTED`. A still-valid session is reused, so recovery needs no new QR scan;
+only a rejected session falls back to showing one.
+
+### Optional: run it as a Windows service (NSSM)
+
+The launcher above runs in your logged-in session, which is the context where
+headless Chromium and the per-user WhatsApp session are known to work. If you
+would rather have OS-level supervision (a service that starts at boot, restarts
+on exit, and has a status), NSSM can do that:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\windows\install-service.ps1 install
+```
+
+It requires [NSSM](https://nssm.cc) on `PATH` (or pass `-NssmPath`). It
+registers a service that runs the **same supervisor** with an explicit working
+directory, rotated logs and a restart delay. It sets the service account to
+**your Windows account** — never `LocalSystem` — because the WhatsApp session
+lives under *your* `%LOCALAPPDATA%`; a service running as `LocalSystem` looks
+under the system profile and would not find it. The account password is entered
+through a prompt and handed to NSSM; it is never written to the script, the
+console, or a log.
+
+> **This service path is not verified on a physical Windows host in this
+> environment.** Running headless Chromium (Puppeteer) and the WhatsApp session
+> inside a Windows service has not been tested here; the logon launcher is the
+> verified-safe default. If you use NSSM, check
+> `… install-service.ps1 status` and the log, and be ready to fall back to the
+> launcher. See [Limitations](#limitations).
 
 **Verify it works:**
 
@@ -204,9 +238,10 @@ Get-Content "$env:LOCALAPPDATA\x-whatsapp-poster\controller.log" -Tail 20
 ```
 
 > **Status of Windows support:** the Linux path has been exercised end to end on
-> a real machine. The Windows path is implemented and its launcher contract is
-> covered by automated static checks
-> (`node scripts/windows/startup.test.js`), but it has **not** been run on a
+> a real machine. The Windows path is implemented and its launcher and service
+> contracts are covered by automated static checks
+> (`node scripts/windows/startup.test.js`,
+> `node scripts/windows/service.test.js`), but it has **not** been run on a
 > physical Windows host — treat the first run as something to verify with
 > `status` and the log file.
 
@@ -588,7 +623,7 @@ the partial state is shown rather than quietly dropping the item.
 | Restart it | `./scripts/install-startup.sh restart` | `… install-startup.ps1 restart` |
 | Read the log | `./scripts/install-startup.sh logs` | `Get-Content "$env:LOCALAPPDATA\x-whatsapp-poster\controller.log" -Tail 50` |
 | Stop it | `systemctl --user stop x2wa-controller` | `Stop-Process -Name node` (or uninstall) |
-| Start it | `systemctl --user start x2wa-controller` | run the launcher in the Startup folder |
+| Start it | `systemctl --user start x2wa-controller` | `… install-startup.ps1 restart` |
 | Remove it from login | `./scripts/install-startup.sh uninstall` | `… install-startup.ps1 uninstall` |
 
 **If it stops entirely:** both platforms start it again on their own. Linux
@@ -628,7 +663,7 @@ reboot never needs a new scan.
 | Session (`LocalAuth`) | `~/.local/share/x-whatsapp-poster/whatsapp-session` | `%LOCALAPPDATA%\x-whatsapp-poster\whatsapp-session` |
 | Temporary media | `~/.local/share/x-whatsapp-poster/tmp/` | `%LOCALAPPDATA%\x-whatsapp-poster\tmp\` |
 | Logs | journal: `journalctl --user -u x2wa-controller` | `%LOCALAPPDATA%\x-whatsapp-poster\controller.log` |
-| Service/launcher | `~/.config/systemd/user/x2wa-controller.service` | Startup folder: `x2wa-controller.cmd` → runs `controller/src/supervisor.js` |
+| Service/launcher | `~/.config/systemd/user/x2wa-controller.service` | Startup folder: `x2wa-controller.vbs` (hidden) → `x2wa-controller.cmd` → `controller/src/supervisor.js`; optional NSSM service |
 
 (`$XDG_DATA_HOME` is honoured on Linux if set; macOS uses
 `~/Library/Application Support/x-whatsapp-poster/`.)
@@ -868,6 +903,7 @@ node extension/test/post-variant.test.js     # each send button's variant: name,
 node extension/test/quote-tweet.test.js       # a quote-tweet sends a picture of the quoted post, captioned with the outer words; ordinary posts unchanged
 node extension/test/quote-button.test.js       # the same, driven through the real click handlers: the camera button and the three send buttons agree
 node scripts/windows/startup.test.js         # Windows launcher contract (static)
+node scripts/windows/service.test.js          # Windows service (NSSM) installer contract (static)
 node controller/test/supervisor.test.js      # keeps the controller running: restart, give-up, signal stop
 ```
 
@@ -881,7 +917,9 @@ node controller/test/supervisor.test.js      # keeps the controller running: res
 - Media upload depends on the compatibility patch above for current WhatsApp
   Web internals.
 - Windows startup has **not** been run on a physical Windows host; only static
-  checks cover it.
+  checks cover it. The per-user silent launcher is the default; the optional
+  NSSM service path (running headless Chromium and the WhatsApp session inside
+  a Windows service) is untested and must be verified before use.
 - Only HLS master playlists are sent; a video without one is reported as a
   failure rather than published without sound.
 - Live/streamed clips (Periscope and similar) are not served from

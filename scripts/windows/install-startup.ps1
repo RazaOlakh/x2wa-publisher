@@ -12,6 +12,10 @@
   session), refuses to start a second controller, writes its output to a
   log file, and records a clear message if the controller does not come up.
 
+  Nothing is visible: a VBScript wrapper in the Startup folder starts the
+  real runner with window style 0, so no console window or PowerShell
+  window appears at logon.
+
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File install-startup.ps1 install
   powershell -ExecutionPolicy Bypass -File install-startup.ps1 status
@@ -26,18 +30,19 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-$ServiceName   = 'x2wa-controller'
-$Port          = 47825
-$ControllerDir = (Resolve-Path (Join-Path $PSScriptRoot '..\..\controller')).Path
-$ControllerJs  = Join-Path $ControllerDir 'src\server.js'
-$SupervisorJs  = Join-Path $ControllerDir 'src\supervisor.js'
-$LauncherName  = "$ServiceName.cmd"
-$StartupDir    = [Environment]::GetFolderPath('Startup')
-$LauncherPath  = Join-Path $StartupDir $LauncherName
-$DataRoot      = Join-Path $env:LOCALAPPDATA 'x-whatsapp-poster'
-$SessionDir    = Join-Path $DataRoot 'whatsapp-session'
-$TmpRoot       = Join-Path $DataRoot 'tmp'
-$LogFile       = Join-Path $DataRoot 'controller.log'
+$ServiceName     = 'x2wa-controller'
+$Port            = 47825
+$ControllerDir   = (Resolve-Path (Join-Path $PSScriptRoot '..\..\controller')).Path
+$ControllerJs    = Join-Path $ControllerDir 'src\server.js'
+$SupervisorJs    = Join-Path $ControllerDir 'src\supervisor.js'
+$StartupDir      = [Environment]::GetFolderPath('Startup')
+$DataRoot        = Join-Path $env:LOCALAPPDATA 'x-whatsapp-poster'
+$SessionDir      = Join-Path $DataRoot 'whatsapp-session'
+$TmpRoot         = Join-Path $DataRoot 'tmp'
+$LogFile         = Join-Path $DataRoot 'controller.log'
+$CmdLauncherPath = Join-Path $DataRoot "$ServiceName.cmd"
+$VbsLauncherPath = Join-Path $StartupDir "$ServiceName.vbs"
+$LegacyCmdPath   = Join-Path $StartupDir "$ServiceName.cmd"
 
 function Write-Step($msg) { Write-Host "==> $msg" -ForegroundColor Cyan }
 
@@ -116,7 +121,25 @@ timeout /t 8 /nobreak >nul
 powershell -NoProfile -Command "try { (Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:$Port/health' -TimeoutSec 3).Content | Out-File -Append -Encoding UTF8 '%X2WA_LOG%' } catch { ('[%DATE% %TIME%] ERROR: controller did not answer on port $Port - see the log above.' | Out-File -Append -Encoding UTF8 '%X2WA_LOG%') }"
 "@
 
-  Set-Content -LiteralPath $LauncherPath -Value $body -Encoding ASCII
+  # The runner lives beside the data, not in the Startup folder: only the
+  # VBScript wrapper needs to be in Startup, and keeping the two together
+  # makes uninstall a single removal.
+  if (-not (Test-Path -LiteralPath $DataRoot)) { New-Item -ItemType Directory -Path $DataRoot -Force | Out-Null }
+  Set-Content -LiteralPath $CmdLauncherPath -Value $body -Encoding ASCII
+
+  # Silent VBScript launcher in the user's Startup folder: it runs the runner
+  # with window style 0 (hidden) and does not wait, so nothing is shown at
+  # logon and the logon itself is not held up by the controller.
+  $vbs = @"
+Set WshShell = CreateObject("WScript.Shell")
+WshShell.CurrentDirectory = "$ControllerDir"
+WshShell.Run """$CmdLauncherPath""", 0, False
+"@
+  Set-Content -LiteralPath $VbsLauncherPath -Value $vbs -Encoding ASCII
+
+  # An older install put the .cmd itself in Startup; remove it so only the
+  # silent wrapper is left (a leftover .cmd would show a window).
+  if (Test-Path -LiteralPath $LegacyCmdPath) { Remove-Item -LiteralPath $LegacyCmdPath -Force }
 }
 
 switch ($Action) {
@@ -124,16 +147,18 @@ switch ($Action) {
     Test-Prerequisites
     if (-not (Test-Path -LiteralPath $StartupDir)) { throw "Startup folder not found: $StartupDir" }
     New-Launcher
-    Write-Step "Startup launcher installed at $LauncherPath"
+    Write-Step "Silent startup launcher installed at $VbsLauncherPath"
+    Write-Host "    Runner    : $CmdLauncherPath"
     Write-Host "    Node      : $((Get-Command node).Source)"
     Write-Host "    Session   : $SessionDir"
     Write-Host "    Log file  : $LogFile"
-    Write-Host "    The controller now starts at every logon."
+    Write-Host "    The controller now starts silently at every logon."
     Write-Host "    Check now : $PSCommandPath status"
   }
   'uninstall' {
-    if (Test-Path -LiteralPath $LauncherPath) { Remove-Item -LiteralPath $LauncherPath -Force; Write-Step "Removed $LauncherPath" }
-    else { Write-Host "Nothing to remove at $LauncherPath" }
+    if (Test-Path -LiteralPath $VbsLauncherPath) { Remove-Item -LiteralPath $VbsLauncherPath -Force; Write-Step "Removed $VbsLauncherPath" }
+    if (Test-Path -LiteralPath $LegacyCmdPath)   { Remove-Item -LiteralPath $LegacyCmdPath -Force; Write-Step "Removed $LegacyCmdPath" }
+    if (Test-Path -LiteralPath $CmdLauncherPath) { Remove-Item -LiteralPath $CmdLauncherPath -Force; Write-Step "Removed $CmdLauncherPath" }
     foreach ($p in (Get-ControllerProcess)) {
       Write-Step "Stopping controller pid $($p.ProcessId)"
       Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
@@ -148,14 +173,16 @@ switch ($Action) {
       $s = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/status" -TimeoutSec 3
       Write-Host "controller state: $($s.state)  session: $($s.sessionDir)"
     } catch { Write-Host "controller not answering on 127.0.0.1:$Port" -ForegroundColor Yellow }
-    if (Test-Path -LiteralPath $LauncherPath) { Write-Host "startup entry: $LauncherPath" }
+    if (Test-Path -LiteralPath $VbsLauncherPath) { Write-Host "startup entry: $VbsLauncherPath (silent)" }
+    elseif (Test-Path -LiteralPath $LegacyCmdPath) { Write-Host "startup entry: $LegacyCmdPath" }
     else { Write-Host "startup entry: not installed" -ForegroundColor Yellow }
   }
   'restart' {
     foreach ($p in (Get-ControllerProcess)) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }
     Start-Sleep -Seconds 2
-    if (-not (Test-Path -LiteralPath $LauncherPath)) { throw "not installed - run: $PSCommandPath install" }
-    Start-Process -FilePath $LauncherPath | Out-Null
+    if (-not (Test-Path -LiteralPath $VbsLauncherPath) -and -not (Test-Path -LiteralPath $LegacyCmdPath)) { throw "not installed - run: $PSCommandPath install" }
+    $toStart = if (Test-Path -LiteralPath $VbsLauncherPath) { $VbsLauncherPath } else { $LegacyCmdPath }
+    Start-Process -FilePath $toStart | Out-Null
     Start-Sleep -Seconds 10
     & $PSCommandPath status
   }

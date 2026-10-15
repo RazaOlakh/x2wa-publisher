@@ -100,6 +100,21 @@ console.log('generated launcher contract');
   check('never stores credentials', !/-Credential|Get-Credential|password/i.test(gen));
 }
 
+console.log('silent VBScript launcher contract');
+{
+  // The Startup-folder entry is a VBScript wrapper that runs the real runner
+  // hidden (window style 0) and does not wait, so nothing is shown at logon.
+  check('creates a silent VBScript launcher in the Startup folder', /Set-Content -LiteralPath \$VbsLauncherPath/.test(src));
+  check('the wrapper lives in Startup and the runner beside the data',
+    /\$VbsLauncherPath\s*=\s*Join-Path \$StartupDir/.test(src) && /\$CmdLauncherPath\s*=\s*Join-Path \$DataRoot/.test(src));
+  check('runs the runner hidden with window style 0', /WshShell\.Run\s+"""\$CmdLauncherPath""",\s*0,\s*False/.test(src));
+  check('sets the working directory to the controller', /WshShell\.CurrentDirectory\s*=\s*"\$ControllerDir"/.test(src));
+  check('removes a legacy .cmd from the Startup folder', /LegacyCmdPath/.test(src) && /Remove-Item -LiteralPath \$LegacyCmdPath/.test(src));
+  check('uninstalls the wrapper and the runner', /Remove-Item -LiteralPath \$VbsLauncherPath/.test(src) && /Remove-Item -LiteralPath \$CmdLauncherPath/.test(src));
+  check('status reports the silent entry', /\$VbsLauncherPath \(silent\)/.test(src));
+  check('restart starts the wrapper when present', /\$toStart\s*=\s*if \(Test-Path -LiteralPath \$VbsLauncherPath\) \{ \$VbsLauncherPath \}/.test(src));
+}
+
 console.log('cross-platform session path agrees with the controller');
 {
   const platform = require(path.join(__dirname, '..', '..', 'controller', 'src', 'platform.js'));
