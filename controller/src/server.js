@@ -198,7 +198,9 @@ function killOrphanedSessionBrowsers() {
   if (process.platform === 'win32') {
     try {
       const escaped = SESSION_DIR.replace(/'/g, "''");
-      execSync(`powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \\"Name='chrome.exe'\\" -ErrorAction SilentlyContinue | Where-Object { \\$_.CommandLine -and \\$_.CommandLine -like '*${escaped}*' } | ForEach-Object { Stop-Process -Id \\$_.ProcessId -Force -ErrorAction SilentlyContinue }"`, { stdio: 'ignore', timeout: 5000 });
+      const psScript = `Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -and $_.CommandLine -like '*${escaped}*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`;
+      const encoded = Buffer.from(psScript, 'utf16le').toString('base64');
+      execSync(`powershell -NoProfile -EncodedCommand ${encoded}`, { stdio: 'ignore', timeout: 5000 });
     } catch {}
   }
 }
