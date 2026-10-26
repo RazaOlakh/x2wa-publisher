@@ -2,6 +2,7 @@
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
+const { execSync } = require('child_process');
 const crypto = require('crypto');
 const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
@@ -96,6 +97,9 @@ function startClient(reason) {
   });
   client.initialize().catch((e) => {
     log('error','init-error',{error:e && e.message});
+    if (e && e.message && e.message.includes('already running')) {
+      killOrphanedSessionBrowsers();
+    }
     markConnectionStale('init-error');
   });
 }
@@ -178,6 +182,24 @@ async function stopClient(c) {
   if (exited) {
     await exited;
     log('info', 'browser-stopped', { waited: true, exitCode: proc.exitCode });
+  }
+  if (proc && proc.exitCode === null && !proc.killed) {
+    try {
+      if (process.platform === 'win32') {
+        execSync(`taskkill /pid ${proc.pid} /t /f`, { stdio: 'ignore' });
+      } else {
+        proc.kill('SIGKILL');
+      }
+    } catch {}
+  }
+}
+
+function killOrphanedSessionBrowsers() {
+  if (process.platform === 'win32') {
+    try {
+      const escaped = SESSION_DIR.replace(/'/g, "''");
+      execSync(`powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \\"Name='chrome.exe'\\" -ErrorAction SilentlyContinue | Where-Object { \\$_.CommandLine -and \\$_.CommandLine -like '*${escaped}*' } | ForEach-Object { Stop-Process -Id \\$_.ProcessId -Force -ErrorAction SilentlyContinue }"`, { stdio: 'ignore', timeout: 5000 });
+    } catch {}
   }
 }
 

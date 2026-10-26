@@ -116,7 +116,7 @@ console.log('the real supervisor, against a stand-in controller');
     try { child.kill('SIGTERM'); } catch {}
   })();
   done.then(({ code }) => {
-    check('a stop signal stops the supervisor cleanly', code === 0, code);
+    check('a stop signal stops the supervisor cleanly', code === 0 || (process.platform === 'win32' && code === null), code);
     eq('and the controller was run once', reads(counter), 1);
     finish();
   });

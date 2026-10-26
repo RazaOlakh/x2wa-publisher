@@ -12,10 +12,6 @@
   session), refuses to start a second controller, writes its output to a
   log file, and records a clear message if the controller does not come up.
 
-  Nothing is visible: a VBScript wrapper in the Startup folder starts the
-  real runner with window style 0, so no console window or PowerShell
-  window appears at logon.
-
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File install-startup.ps1 install
   powershell -ExecutionPolicy Bypass -File install-startup.ps1 status
@@ -24,7 +20,7 @@
 #>
 [CmdletBinding()]
 param(
-  [ValidateSet('install', 'uninstall', 'status', 'restart')]
+  [ValidateSet('install', 'uninstall', 'status', 'restart', 'start')]
   [string]$Action = 'install'
 )
 
@@ -62,6 +58,11 @@ function Get-ControllerProcess {
   # (node server.js). Match both.
   Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue |
     Where-Object { $_.CommandLine -and ($_.CommandLine -like "*$SupervisorJs*" -or $_.CommandLine -like "*$ControllerJs*") }
+}
+
+function Get-SessionChromeProcesses {
+  Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" -ErrorAction SilentlyContinue |
+    Where-Object { $_.CommandLine -and $_.CommandLine -like "*$SessionDir*" }
 }
 
 function Test-Prerequisites {
@@ -117,29 +118,28 @@ rem stopped controller stayed stopped until the next logon.
 start "x2wa-controller" /min "$nodeExe" "$SupervisorJs" >> "%X2WA_LOG%" 2>&1
 
 rem Give it a moment, then record whether it actually came up.
-timeout /t 8 /nobreak >nul
+ping 127.0.0.1 -n 9 >nul
 powershell -NoProfile -Command "try { (Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:$Port/health' -TimeoutSec 3).Content | Out-File -Append -Encoding UTF8 '%X2WA_LOG%' } catch { ('[%DATE% %TIME%] ERROR: controller did not answer on port $Port - see the log above.' | Out-File -Append -Encoding UTF8 '%X2WA_LOG%') }"
 "@
 
-  # The runner lives beside the data, not in the Startup folder: only the
-  # VBScript wrapper needs to be in Startup, and keeping the two together
-  # makes uninstall a single removal.
   if (-not (Test-Path -LiteralPath $DataRoot)) { New-Item -ItemType Directory -Path $DataRoot -Force | Out-Null }
   Set-Content -LiteralPath $CmdLauncherPath -Value $body -Encoding ASCII
 
-  # Silent VBScript launcher in the user's Startup folder: it runs the runner
-  # with window style 0 (hidden) and does not wait, so nothing is shown at
-  # logon and the logon itself is not held up by the controller.
+  # Silent VBScript launcher in the user's Startup folder:
+  # Executes the batch runner with window style 0 (SW_HIDE) so that
+  # no console window or flash appears at logon.
   $vbs = @"
 Set WshShell = CreateObject("WScript.Shell")
 WshShell.CurrentDirectory = "$ControllerDir"
 WshShell.Run """$CmdLauncherPath""", 0, False
 "@
   Set-Content -LiteralPath $VbsLauncherPath -Value $vbs -Encoding ASCII
-
-  # An older install put the .cmd itself in Startup; remove it so only the
-  # silent wrapper is left (a leftover .cmd would show a window).
   if (Test-Path -LiteralPath $LegacyCmdPath) { Remove-Item -LiteralPath $LegacyCmdPath -Force }
+
+  # Register in HKCU\...\Run so Windows userinit launches it unconditionally on every logon
+  $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+  $regVal = "wscript.exe `"$VbsLauncherPath`""
+  Set-ItemProperty -Path $runKey -Name $ServiceName -Value $regVal -Force
 }
 
 switch ($Action) {
@@ -159,8 +159,13 @@ switch ($Action) {
     if (Test-Path -LiteralPath $VbsLauncherPath) { Remove-Item -LiteralPath $VbsLauncherPath -Force; Write-Step "Removed $VbsLauncherPath" }
     if (Test-Path -LiteralPath $LegacyCmdPath)   { Remove-Item -LiteralPath $LegacyCmdPath -Force; Write-Step "Removed $LegacyCmdPath" }
     if (Test-Path -LiteralPath $CmdLauncherPath) { Remove-Item -LiteralPath $CmdLauncherPath -Force; Write-Step "Removed $CmdLauncherPath" }
+    Remove-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name $ServiceName -ErrorAction SilentlyContinue
     foreach ($p in (Get-ControllerProcess)) {
       Write-Step "Stopping controller pid $($p.ProcessId)"
+      Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
+    }
+    foreach ($p in (Get-SessionChromeProcesses)) {
+      Write-Step "Stopping session browser pid $($p.ProcessId)"
       Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
     }
     Write-Host "Your WhatsApp session in $SessionDir was left untouched."
@@ -176,14 +181,43 @@ switch ($Action) {
     if (Test-Path -LiteralPath $VbsLauncherPath) { Write-Host "startup entry: $VbsLauncherPath (silent)" }
     elseif (Test-Path -LiteralPath $LegacyCmdPath) { Write-Host "startup entry: $LegacyCmdPath" }
     else { Write-Host "startup entry: not installed" -ForegroundColor Yellow }
+    $runVal = (Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -ErrorAction SilentlyContinue).$ServiceName
+    if ($runVal) { Write-Host "registry run : $runVal" }
   }
   'restart' {
     foreach ($p in (Get-ControllerProcess)) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }
+    foreach ($p in (Get-SessionChromeProcesses)) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }
+    for ($i = 0; $i -lt 10; $i++) {
+      if (-not (Get-ControllerProcess)) { break }
+      Start-Sleep -Seconds 1
+    }
     Start-Sleep -Seconds 2
     if (-not (Test-Path -LiteralPath $VbsLauncherPath) -and -not (Test-Path -LiteralPath $LegacyCmdPath)) { throw "not installed - run: $PSCommandPath install" }
     $toStart = if (Test-Path -LiteralPath $VbsLauncherPath) { $VbsLauncherPath } else { $LegacyCmdPath }
-    Start-Process -FilePath $toStart | Out-Null
-    Start-Sleep -Seconds 10
+    try {
+      $cmdLine = if ($toStart -like '*.vbs') { "wscript.exe `"$toStart`"" } else { "cmd.exe /c `"$toStart`"" }
+      Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $cmdLine } -ErrorAction Stop | Out-Null
+    } catch {
+      Start-Process -FilePath $toStart | Out-Null
+    }
+    Start-Sleep -Seconds 12
+    & $PSCommandPath status
+  }
+  'start' {
+    if (Get-ControllerProcess) {
+      Write-Host "already running" -ForegroundColor Yellow
+      & $PSCommandPath status
+      return
+    }
+    if (-not (Test-Path -LiteralPath $VbsLauncherPath) -and -not (Test-Path -LiteralPath $LegacyCmdPath)) { throw "not installed - run: $PSCommandPath install" }
+    $toStart = if (Test-Path -LiteralPath $VbsLauncherPath) { $VbsLauncherPath } else { $LegacyCmdPath }
+    try {
+      $cmdLine = if ($toStart -like '*.vbs') { "wscript.exe `"$toStart`"" } else { "cmd.exe /c `"$toStart`"" }
+      Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $cmdLine } -ErrorAction Stop | Out-Null
+    } catch {
+      Start-Process -FilePath $toStart | Out-Null
+    }
+    Start-Sleep -Seconds 12
     & $PSCommandPath status
   }
 }

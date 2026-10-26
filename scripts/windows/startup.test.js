@@ -129,5 +129,54 @@ console.log('cross-platform session path agrees with the controller');
     winSession === 'C:/Users/t/AppData/Local/x-whatsapp-poster/whatsapp-session', winSession);
 }
 
+console.log('HKCU Run registry entry contract');
+{
+  check('writes the VBScript path to HKCU Run on install', /Set-ItemProperty -Path \$runKey -Name \$ServiceName/.test(src));
+  check('uses wscript.exe to launch the VBScript', /wscript\.exe.*\$VbsLauncherPath/.test(src));
+  check('removes the registry value on uninstall', /Remove-ItemProperty.*HKCU.*Run.*-Name \$ServiceName/.test(src));
+  check('status reports the registry run value', /Get-ItemProperty.*HKCU.*Run.*\$ServiceName/.test(src));
+}
+
+console.log('session-browser cleanup contract');
+{
+  check('defines Get-SessionChromeProcesses to find stray Chrome', /function Get-SessionChromeProcesses/.test(src));
+  check('filters by the session directory in the command line', /Where-Object\s*{ \$_.CommandLine -and \$_.CommandLine -like "\*\$SessionDir\*" }/.test(src));
+  check('uninstall kills session browsers', /foreach.*Get-SessionChromeProcesses.*Stop-Process -Id \$p.ProcessId/.test(src));
+  check('restart kills session browsers too', /foreach.*Get-SessionChromeProcesses.*Stop-Process -Id \$p.ProcessId/.test(src));
+}
+
+console.log('start action contract');
+{
+  check('implements a start action', /'start'\s*\{/.test(src));
+  check('returns early if already running', /if.*Get-ControllerProcess\).*already running/s.test(src));
+  check('launches via wscript.exe or cmd.exe', /wscript\.exe.*\$toStart|cmd\.exe.*\/c.*\$toStart/.test(src));
+  check('uses Invoke-CimMethod for detached launch', /Invoke-CimMethod.*Win32_Process.*Create/.test(src));
+  check('falls back to Start-Process', /Start-Process -FilePath \$toStart/.test(src));
+}
+
+console.log('detached launch and wait contract');
+{
+  check('restart waits for termination before relaunching', /for.*\$i = 0.*-lt 10.*if.*-not.*Get-ControllerProcess.*break/s.test(src));
+  check('ping 127.0.0.1 -n 9 used for wait in launcher', /ping 127.0.0.1 -n 9 >nul/.test(src));
+}
+
+console.log('rerun-connection.ps1 contract');
+{
+  const rerun = fs.readFileSync(path.join(__dirname, 'rerun-connection.ps1'), 'utf8');
+  check('checks /status endpoint', /http:\/\/127.0.0.1:\$Port\/status/.test(rerun));
+  check('restarts if not ready', /restart/.test(rerun) && /state -ne 'ready'/.test(rerun));
+  check('waits for ready or qr', /state -eq 'ready'|state -eq 'qr'/.test(rerun));
+  check('prints QR action required message', /QR scan required/.test(rerun));
+  check('handles missing console gracefully', /\[Console\]::KeyAvailable/.test(rerun) && /catch \{\}/.test(rerun));
+}
+
+console.log('create-desktop-shortcut.ps1 contract');
+{
+  const shortcut = fs.readFileSync(path.join(__dirname, 'create-desktop-shortcut.ps1'), 'utf8');
+  check('creates a .lnk on the Desktop', /\[Environment\]::GetFolderPath\('Desktop'\)/.test(shortcut) && /CreateShortcut/.test(shortcut));
+  check('targets rerun-connection.ps1', /rerun-connection\.ps1/.test(shortcut));
+  check('uses Chrome icon if available', /chrome\.exe/.test(shortcut) && /IconLocation/.test(shortcut));
+}
+
 console.log(failures ? `\n${failures} FAILURE(S)` : '\nWINDOWS STARTUP STATIC CHECKS PASSED');
 process.exit(failures ? 1 : 0);

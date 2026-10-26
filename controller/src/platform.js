@@ -101,3 +101,4 @@ function isAlive(pid) {
 }
 
 module.exports = { userDataRoot, sessionDir, tmpRoot, acquireSessionLock, isAlive, chromePath };
+
