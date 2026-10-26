@@ -19,8 +19,8 @@
 // Pure, so the differences can be tested without a browser.
 const POST_VARIANTS = {
   plain: { action: 'Post to WhatsApp',      icon: 'whatsapp', color: '#536471', nameTheAuthor: false, translateTo: null },
-  named: { action: 'Post with author name', icon: 'at',       color: '#1d9bf0', nameTheAuthor: true,  translateTo: null },
-  urdu:  { action: 'Post in Urdu',          icon: 'globe',    color: '#7856ff', nameTheAuthor: false, translateTo: 'ur' },
+  named: { action: 'Post with author name', icon: 'at',       color: '#536471', nameTheAuthor: true,  translateTo: null },
+  urdu:  { action: 'Post in Urdu',          icon: 'globe',    color: '#536471', nameTheAuthor: false, translateTo: 'ur' },
 };
 
 // Look a variant up, falling back to the plain one so a name that is ever

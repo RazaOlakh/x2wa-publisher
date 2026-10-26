@@ -55,7 +55,7 @@ console.log('the named variant adds the author\'s name');
   const v = postVariant('named');
   eq('its name', v.action, 'Post with author name');
   eq('the "@" glyph', v.icon, 'at');
-  eq('its idle colour', v.color, '#1d9bf0');
+  eq('its idle colour', v.color, '#536471');
   eq('it asks for the author\'s name', v.nameTheAuthor, true);
   eq('and does not translate', v.translateTo, null);
 }
@@ -65,7 +65,7 @@ console.log('the Urdu variant translates the text');
   const v = postVariant('urdu');
   eq('its name', v.action, 'Post in Urdu');
   eq('the globe glyph', v.icon, 'globe');
-  eq('its idle colour', v.color, '#7856ff');
+  eq('its idle colour', v.color, '#536471');
   eq('it asks for Urdu', v.translateTo, 'ur');
   eq('and does not add the author', v.nameTheAuthor, false);
 }
@@ -96,7 +96,7 @@ console.log('every variant is fully wired');
       v.translateTo === null || (typeof v.translateTo === 'string' && v.translateTo.length > 0 && v.translateTo.length <= 8),
       v.translateTo);
   }
-  eq('and every variant wears its own colour, so the row reads apart', colours.size, Object.keys(POST_VARIANTS).length);
+  eq('and every variant wears the same neutral idle colour', colours.size, 1);
 }
 
 console.log(failures ? `\n${failures} FAILURE(S)` : '\nALL POST-VARIANT TESTS PASSED');
