@@ -152,6 +152,8 @@ console.log('start action contract');
   check('launches via wscript.exe or cmd.exe', /wscript\.exe.*\$toStart|cmd\.exe.*\/c.*\$toStart/.test(src));
   check('uses Invoke-CimMethod for detached launch', /Invoke-CimMethod.*Win32_Process.*Create/.test(src));
   check('falls back to Start-Process', /Start-Process -FilePath \$toStart/.test(src));
+  check('start regenerates the launcher to keep it silent and up-to-date', /'start'\s*\{[\s\S]*?New-Launcher/.test(src));
+  check('restart regenerates the launcher to keep it silent and up-to-date', /'restart'\s*\{[\s\S]*?New-Launcher/.test(src));
 }
 
 console.log('detached launch and wait contract');
