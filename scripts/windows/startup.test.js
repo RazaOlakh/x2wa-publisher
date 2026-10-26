@@ -78,7 +78,7 @@ console.log('generated launcher contract');
   check('quotes balanced (paths with spaces stay quoted)', (gen.match(/"/g) || []).length % 2 === 0, (gen.match(/"/g) || []).length);
   check('node path is absolute and quoted', gen.includes('"C:\\Program Files\\nodejs\\node.exe"'));
   check('supervisor path is quoted for spaces', gen.includes('"C:\\Users\\t\\Documents\\My Projects\\x2wa\\controller\\src\\supervisor.js"'), (gen.match(/start .*/) || [''])[0]);
-  check('starts the supervisor so a stopped controller is restarted', /start "x2wa-controller" \/min "[^"]*node\.exe" "[^"]*supervisor\.js"/.test(gen), (gen.match(/start .*/) || [''])[0]);
+  check('starts the supervisor so a stopped controller is restarted', /node\.exe" "[^"]*supervisor\.js/.test(gen), (gen.match(/node .*/) || [''])[0]);
   check('does not start the controller directly (no supervision then)', !gen.includes('"C:\\Users\\t\\Documents\\My Projects\\x2wa\\controller\\src\\server.js"'));
   check('chrome path is passed through', /set "CHROME_PATH=C:/.test(gen));
 
@@ -95,7 +95,7 @@ console.log('generated launcher contract');
   check('echo redirection is spaced, not glued to the text', !/\S>>\s*"%X2WA_LOG%"/.test(gen), gen.match(/echo .*>>.*/g));
   check('launch failure recorded after start', /did not answer on port 47825/.test(gen));
   check('creates its data directory', /if not exist "%LOCALAPPDATA%\\x-whatsapp-poster" mkdir/.test(gen));
-  check('starts detached/minimised', /start "x2wa-controller" \/min/.test(gen));
+  check('starts the supervisor without a minimised console', /node\.exe" "[^"]*supervisor\.js/.test(gen) && !/start "x2wa-controller" \/min/.test(gen));
   check('binds only loopback (health check is 127.0.0.1)', gen.includes('http://127.0.0.1:47825/health'));
   check('never stores credentials', !/-Credential|Get-Credential|password/i.test(gen));
 }
