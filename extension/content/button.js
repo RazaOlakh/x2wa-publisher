@@ -698,23 +698,17 @@ function showReadError(btn, label, title, detail, requestId, error) {
   }, 4000);
 }
 
-// The author's name for an Urdu post. X gives the name in whatever script the
-// account uses, so an English-spelled name is translated to Urdu here while the
-// post itself is left as written. A name that already reads as Urdu is kept,
-// and a translation that fails falls back to the original name rather than
-// leaving the header without one.
+// The author's name for an Urdu post. Per the post-translate behaviour: names
+// are never translated - the author name keeps its original spelling, in
+// whatever script the profile wrote it, and it is the post's *text* that the
+// controller translates (shielding handles inside it). A name that is already
+// in the post's script is kept; an English-spelled name on an Urdu post keeps
+// its Latin spelling too, rather than being run through the translator.
 async function urduAuthorName(name, requestId) {
   const original = String(name == null ? '' : name);
   const trimmed = original.trim();
-  if (!trimmed || isUrduText(trimmed)) return original;
-  try {
-    const res = await chrome.runtime.sendMessage({ type: 'TRANSLATE_TEXT', text: trimmed, to: 'ur', requestId });
-    if (res && res.ok && typeof res.text === 'string' && res.text.trim()) return res.text.trim();
-    try { xlog('warn', 'author-name-translate-failed', { requestId, error: (res && res.error) || 'empty' }); } catch {}
-  } catch (e) {
-    try { xlog('warn', 'author-name-translate-failed', { requestId, error: e && e.message }); } catch {}
-  }
-  return original;
+  if (!trimmed) return '';
+  return trimmed;
 }
 
 // Publish a quote-tweet: the picture is the post it quotes, the caption is this
