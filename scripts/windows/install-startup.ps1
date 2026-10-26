@@ -120,7 +120,7 @@ rem for as long as the process lives, which put Node.js on the taskbar forever
 rem (issue: Node.js stays permanently visible on Windows taskbar). The VBScript
 rem wrapper already runs this batch with window style 0 (SW_HIDE), so the child
 rem inherits the hidden state and there is no taskbar entry to begin with.
-"$nodeExe" "$SupervisorJs" >> "%X2WA_LOG%" 2>&1
+start "" /b "$nodeExe" "$SupervisorJs" >> "%X2WA_LOG%" 2>&1
 
 rem Give it a moment, then record whether it actually came up.
 ping 127.0.0.1 -n 9 >nul
@@ -198,6 +198,7 @@ switch ($Action) {
     }
     Start-Sleep -Seconds 2
     if (-not (Test-Path -LiteralPath $VbsLauncherPath) -and -not (Test-Path -LiteralPath $LegacyCmdPath)) { throw "not installed - run: $PSCommandPath install" }
+    New-Launcher
     $toStart = if (Test-Path -LiteralPath $VbsLauncherPath) { $VbsLauncherPath } else { $LegacyCmdPath }
     try {
       $cmdLine = if ($toStart -like '*.vbs') { "wscript.exe `"$toStart`"" } else { "cmd.exe /c `"$toStart`"" }
@@ -215,6 +216,7 @@ switch ($Action) {
       return
     }
     if (-not (Test-Path -LiteralPath $VbsLauncherPath) -and -not (Test-Path -LiteralPath $LegacyCmdPath)) { throw "not installed - run: $PSCommandPath install" }
+    New-Launcher
     $toStart = if (Test-Path -LiteralPath $VbsLauncherPath) { $VbsLauncherPath } else { $LegacyCmdPath }
     try {
       $cmdLine = if ($toStart -like '*.vbs') { "wscript.exe `"$toStart`"" } else { "cmd.exe /c `"$toStart`"" }
