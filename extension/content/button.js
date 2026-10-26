@@ -27,9 +27,9 @@ const SVG_NS = 'http://www.w3.org/2000/svg';
 const BUTTON_STYLES = {
   idle:    { fg: '#536471' },
   working: { fg: '#1d9bf0' },
-  success: { fg: '#00a884' },
+  success: { fg: '#1d9bf0' },
   partial: { fg: '#e8912d' },
-  error:   { fg: '#f4212e' },
+  error:   { fg: '#e8912d' },
 };
 
 function xlog(level, event, data) {
@@ -212,10 +212,10 @@ function buttonAction(btn) {
 // tick on the WhatsApp button means "this was posted", which is not what a
 // screenshot does.
 const SHOT_STYLES = {
-  idle:    { fg: '#f91880' },
+  idle:    { fg: '#536471' },
   working: { fg: '#1d9bf0' },
-  success: { fg: '#00a884' },
-  error:   { fg: '#f4212e' },
+  success: { fg: '#1d9bf0' },
+  error:   { fg: '#e8912d' },
 };
 
 function cameraIcon() {
@@ -280,6 +280,70 @@ function renderShotButton(btn, state) {
   btn.dataset.shotState = state;
 }
 
+// Let a style change be painted before the debugger grabs the frame. A
+// background tab may not paint a frame at all, so a timeout is the floor.
+function nextPaint() {
+  return new Promise((resolve) => {
+    const done = () => resolve();
+    requestAnimationFrame(() => requestAnimationFrame(done));
+    setTimeout(done, 100);
+  });
+}
+
+// Capture one element of the page and send it as a picture. `targetEl` is the
+// element whose position is verified at capture time; `clipRect` is the part of
+// it to photograph (the whole element for a quoted post, the post above its
+// action bar for the post itself). `caption` travels with the image, and
+// `dedupeKey` keeps one capture from being sent twice.
+//
+// Both send entry points go through here, so a quote-tweet is photographed the
+// same way whether the camera button or a post button was pressed. The element
+// is tagged with a token so the worker can re-find that exact node and confirm
+// it has not moved; a capture that cannot be verified is refused there rather
+// than sent as a picture of the wrong place.
+async function sendElementShot(targetEl, clipRect, params) {
+  const clip = shotClip(
+    clipRect, window.scrollX, window.scrollY,
+    document.documentElement.scrollWidth, document.documentElement.scrollHeight,
+  );
+  if (!clip) return { error: 'capture-too-small' };
+
+  const rect = targetEl.getBoundingClientRect();
+  const marker = shotMarkerToken();
+  try { targetEl.setAttribute(SHOT_MARKER_ATTR, marker); } catch { /* no marker, no re-check */ }
+  const measured = {
+    rect: { left: rect.left, top: rect.top, width: rect.width, height: rect.height },
+    scroll: { x: window.scrollX, y: window.scrollY },
+  };
+
+  // A capture taller than the window makes Chrome paint the page's fixed and
+  // sticky furniture into the picture, on top of the post. Hide that chrome for
+  // the instant of the capture and put it back afterwards, whatever the
+  // outcome.
+  const hidden = shotHideChrome(targetEl);
+  try {
+    await nextPaint();
+    return await chrome.runtime.sendMessage({
+      type: 'SEND_SCREENSHOT',
+      requestId: params.requestId,
+      clip,
+      marker,
+      rect: measured.rect,
+      scroll: measured.scroll,
+      dedupeKey: params.dedupeKey,
+      // The caption is the post's own words; the Urdu button asks the
+      // controller to translate them, exactly as a normal post's text is.
+      ...(params.translateTo ? { translateTo: params.translateTo } : {}),
+      post: { tweetId: params.tweetId, tweetUrl: params.tweetUrl, text: params.caption || '' },
+    });
+  } catch (e) {
+    return { ok: false, error: 'Failed to fetch' };
+  } finally {
+    try { targetEl.removeAttribute(SHOT_MARKER_ATTR); } catch { /* already gone */ }
+    shotShowChrome(hidden);
+  }
+}
+
 // Screenshot button wiring. Kept beside the post button so the two share
 // the same feedback path.
 function wireShotButton(btn) {
@@ -304,38 +368,51 @@ function wireShotButton(btn) {
       return;
     }
 
-    btn.disabled = true;
-    renderShotButton(btn, 'working');
-
-    // The crop is the post's own box, stopping above its action bar: the
-    // action bar (reply / repost / like / share) and the extension's own row
-    // beneath it are controls, not content, so the picture is the post's
-    // author, text and media rather than the buttons around it.
-    const rect = currentArticle.getBoundingClientRect();
-    const bar = shotActionBar(currentArticle);
-    const contentRect = shotContentRect(rect, bar ? bar.getBoundingClientRect().top : undefined);
-    const clip = shotClip(
-      contentRect, window.scrollX, window.scrollY,
-      document.documentElement.scrollWidth, document.documentElement.scrollHeight,
-    );
-    if (!clip) {
-      btn.disabled = false;
+    // A quote-tweet is photographed as the post it quotes, captioned with this
+    // post's own words, whichever button was pressed (see shotPlan).
+    const plan = shotPlan(currentArticle);
+    if (plan.mode === 'error') {
       renderShotButton(btn, 'error');
-      showSnackbar('error', 'Could not capture', shotErrorHint('capture-too-small'));
+      showSnackbar('error', 'Could not capture', shotErrorHint(plan.error));
       setTimeout(() => renderShotButton(btn, 'idle'), 4000);
       return;
     }
 
-    // Tag this exact post with a token the worker can find again through the
-    // debugger, and hand it the box that was just measured. If the post has
-    // been replaced (the tag is gone) or has moved by the time of the capture,
-    // the worker refuses rather than sending a picture of the wrong place.
-    const marker = shotMarkerToken();
-    try { currentArticle.setAttribute(SHOT_MARKER_ATTR, marker); } catch { /* no marker, no re-check */ }
-    const measured = {
-      rect: { left: rect.left, top: rect.top, width: rect.width, height: rect.height },
-      scroll: { x: window.scrollX, y: window.scrollY },
-    };
+    btn.disabled = true;
+    renderShotButton(btn, 'working');
+
+    let target;
+    let clipRect;
+    let caption = '';
+    if (plan.mode === 'quote') {
+      // The post being quoted, whole: it has no action bar of its own to stop
+      // above. The caption is this post's own words, presented the way the
+      // plain button presents a post (see quoteCaption), so the image carries
+      // the quoted post's words and the caption carries this post's.
+      target = plan.element;
+      try {
+        const post = await extractQuotePost(currentArticle);
+        if (post && !post.error) caption = quoteCaption(post.text, 'plain', post.author);
+      } catch { /* an empty caption is still a valid picture */ }
+    } else {
+      target = currentArticle;
+    }
+
+    // The crop is read only once the post is known to be sendable, never
+    // before: reading a quoted post's words can wait on a link resolution, and
+    // the page may have moved on by then. Reading the box here keeps the
+    // picture where the post is now, exactly as the send buttons do. For an
+    // ordinary post the box stops above the action bar - the reply / repost /
+    // like / share row and the extension's own row beneath it are controls,
+    // not content, so the picture is the post's author, text and media rather
+    // than the buttons around it.
+    const rect = target.getBoundingClientRect();
+    if (plan.mode === 'quote') {
+      clipRect = rect;
+    } else {
+      const bar = shotActionBar(currentArticle);
+      clipRect = shotContentRect(rect, bar ? bar.getBoundingClientRect().top : undefined);
+    }
 
     let tweetId = null;
     let tweetUrl = null;
@@ -345,35 +422,13 @@ function wireShotButton(btn) {
       if (link) tweetUrl = new URL(link.href, location.href).href;
     } catch { /* no permalink */ }
 
-    let result;
-    // A capture taller than the window makes Chrome paint the page's fixed and
-    // sticky furniture - the For you / Following tab strip, overlays - into the
-    // picture, on top of the post. Hide that chrome for the instant of the
-    // capture and put it back afterwards, whatever the outcome.
-    const hidden = shotHideChrome(currentArticle);
-    try {
-      // Let the hidden state be painted before the debugger grabs the frame.
-      await new Promise((resolve) => {
-        const done = () => resolve();
-        requestAnimationFrame(() => requestAnimationFrame(done));
-        setTimeout(done, 100); // a background tab may not paint a frame
-      });
-      result = await chrome.runtime.sendMessage({
-        type: 'SEND_SCREENSHOT',
-        requestId,
-        clip,
-        marker,
-        rect: measured.rect,
-        scroll: measured.scroll,
-        dedupeKey: shotKey(tweetId) || `shot:${requestId}`,
-        post: { tweetId, tweetUrl },
-      });
-    } catch (e) {
-      result = { ok: false, error: 'Failed to fetch' };
-    } finally {
-      try { currentArticle.removeAttribute(SHOT_MARKER_ATTR); } catch { /* already gone */ }
-      shotShowChrome(hidden);
-    }
+    const result = await sendElementShot(target, clipRect, {
+      requestId,
+      caption,
+      dedupeKey: shotKey(tweetId) || `shot:${requestId}`,
+      tweetId,
+      tweetUrl,
+    });
 
     btn.disabled = false;
     const where = await channelName();
@@ -381,7 +436,7 @@ function wireShotButton(btn) {
       renderShotButton(btn, 'success');
       showSnackbar('success',
         where ? 'Screenshot sent to ' + where : 'Screenshot sent',
-        'The image of this post is in the channel.');
+        plan.mode === 'quote' ? 'The image of the quoted post is in the channel.' : 'The image of this post is in the channel.');
     } else if (result && result.partial) {
       renderShotButton(btn, 'error');
       showSnackbar('info', 'Screenshot partly sent',
@@ -405,8 +460,8 @@ function wireShotButton(btn) {
 // the slide-in is a transition triggered by a style change, which needs no
 // keyframes.
 const SNACKBAR_TONES = {
-  success: { accent: '#00a884', icon: 'check' },
-  error:   { accent: '#f4212e', icon: 'cross' },
+  success: { accent: '#1d9bf0', icon: 'check' },
+  error:   { accent: '#e8912d', icon: 'cross' },
   info:    { accent: '#1d9bf0', icon: 'info' },
 };
 const SNACKBAR_MS = { success: 4500, info: 5000, error: 8000 };
@@ -643,23 +698,87 @@ function showReadError(btn, label, title, detail, requestId, error) {
   }, 4000);
 }
 
-// The author's name for an Urdu post. X gives the name in whatever script the
-// account uses, so an English-spelled name is translated to Urdu here while the
-// post itself is left as written. A name that already reads as Urdu is kept,
-// and a translation that fails falls back to the original name rather than
-// leaving the header without one.
+// The author's name for an Urdu post. Per the post-translate behaviour: names
+// are never translated - the author name keeps its original spelling, in
+// whatever script the profile wrote it, and it is the post's *text* that the
+// controller translates (shielding handles inside it). A name that is already
+// in the post's script is kept; an English-spelled name on an Urdu post keeps
+// its Latin spelling too, rather than being run through the translator.
 async function urduAuthorName(name, requestId) {
   const original = String(name == null ? '' : name);
   const trimmed = original.trim();
-  if (!trimmed || isUrduText(trimmed)) return original;
-  try {
-    const res = await chrome.runtime.sendMessage({ type: 'TRANSLATE_TEXT', text: trimmed, to: 'ur', requestId });
-    if (res && res.ok && typeof res.text === 'string' && res.text.trim()) return res.text.trim();
-    try { xlog('warn', 'author-name-translate-failed', { requestId, error: (res && res.error) || 'empty' }); } catch {}
-  } catch (e) {
-    try { xlog('warn', 'author-name-translate-failed', { requestId, error: e && e.message }); } catch {}
+  if (!trimmed) return '';
+  return trimmed;
+}
+
+// Publish a quote-tweet: the picture is the post it quotes, the caption is this
+// post's own words, presented the way the pressed button presents a post. The
+// quoted post's media is never attached separately - it is already in the
+// picture - and a capture that cannot be made is reported instead of falling
+// back to this post's own media.
+async function postQuoteShot(btn, v, variant, article, quoteEl, requestId) {
+  let post;
+  try { post = await extractQuotePost(article); }
+  catch (e) { post = { error: (e && e.message) || 'quote-extract-failed' }; }
+  if (!post || post.error) {
+    showReadError(btn, 'Unsupported', 'Could not post this one', 'X did not expose the words of this post.', requestId, post && post.error);
+    return;
   }
-  return original;
+
+  // The author's name is written in the post's own language, exactly as the
+  // named variant does it for an ordinary post.
+  let name = post.author;
+  if (v.nameTheAuthor) {
+    name = isUrduText(post.text) ? await urduAuthorName(post.author, requestId) : post.author;
+  }
+  const caption = quoteCaption(post.text, variant, name);
+
+  let sent = false;
+  try {
+    const started = Date.now();
+    try { xlog('info', 'quote-shot-started', { requestId, variant, tweetId: post.tweetId }); } catch {}
+    const result = await sendElementShot(quoteEl, quoteEl.getBoundingClientRect(), {
+      requestId,
+      caption,
+      translateTo: v.translateTo,
+      dedupeKey: shotKey(post.tweetId) || `shot:${requestId}`,
+      tweetId: post.tweetId,
+      tweetUrl: post.tweetUrl,
+    });
+    try { xlog('info', 'response-received', { requestId, jobId: result && result.jobId, durationMs: Date.now() - started }); } catch {}
+    const where = await channelName();
+    if (result && result.ok) {
+      sent = true;
+      renderButton(btn, 'success', 'Sent');
+      rememberSent(post.tweetId, where);
+      const count = result.sent ? result.sent.length : 0;
+      showSnackbar('success', where ? 'Posted to ' + where : 'Posted to WhatsApp',
+        count > 1 ? count + ' messages sent.' : 'The post it quotes is in the channel.');
+      try { xlog('info', 'quote-shot-succeeded', { requestId, tweetId: post.tweetId, jobId: result.jobId }); } catch {}
+    } else if (result && result.partial) {
+      renderButton(btn, 'partial', 'Partial');
+      showSnackbar('info', 'Partly posted',
+        'The channel received the picture, but something did not send cleanly.');
+      try { xlog('warn', 'quote-shot-partial', { requestId, tweetId: post.tweetId, jobId: result.jobId, failures: result.failures }); } catch {}
+    } else {
+      const code = (result && result.error) || 'capture-failed';
+      renderButton(btn, 'error', `Err: ${code}`);
+      showSnackbar('error', 'Could not post', shotErrorHint(code));
+      try { xlog('error', 'quote-shot-failed', { requestId, tweetId: post.tweetId, error: code }); } catch {}
+    }
+  } catch (e) {
+    renderButton(btn, 'error', 'Err');
+    showSnackbar('error', 'Could not post', errorDetail('Failed to fetch'));
+    try { xlog('error', 'quote-shot-failed', { requestId, error: e && e.message }); } catch {}
+  } finally {
+    btn.disabled = false;
+  }
+  if (!sent) {
+    setTimeout(() => {
+      const s = btn.dataset.state;
+      if (s !== 'success' && s !== 'working') renderButton(btn, 'idle', 'Post to WhatsApp');
+    }, 4000);
+  }
 }
 
 async function onPostClick(ev, btn, variant) {
@@ -678,6 +797,20 @@ async function onPostClick(ev, btn, variant) {
   const currentArticle = btn.closest('article');
   if (!currentArticle) {
     showReadError(btn, 'Err', 'Could not post', 'The post could not be read from the page.', requestId, 'no article');
+    return;
+  }
+
+  // A quote-tweet is published as a picture of the post it quotes, captioned
+  // with this post's own words - never as this post's text plus the quoted
+  // post's media. Every send button goes through the same decision here, so
+  // each one behaves the same way on a quote-tweet.
+  const plan = shotPlan(currentArticle);
+  if (plan.mode === 'error') {
+    showReadError(btn, 'Unsupported', 'Could not post this one', shotErrorHint(plan.error), requestId, plan.error);
+    return;
+  }
+  if (plan.mode === 'quote') {
+    await postQuoteShot(btn, v, variant, currentArticle, plan.element, requestId);
     return;
   }
 

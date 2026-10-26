@@ -10,6 +10,7 @@
 //   node controller/test/translate.test.js
 const {
   translateText, chunkText, readTranslation, isTranslatable, readTranslateRequest, MAX_CHUNK, ENDPOINT,
+  maskHandles, unmaskHandles,
 } = require('../src/translate');
 
 let failures = 0;
@@ -196,6 +197,21 @@ console.log('the translation request');
     eq('a long language code is refused', readTranslateRequest({ text: 'x', to: 'not-a-lang' }), { ok: false, error: 'bad-request' });
     eq('a non-string language is refused', readTranslateRequest({ text: 'x', to: 7 }), { ok: false, error: 'bad-request' });
     eq('a non-object body is refused', readTranslateRequest(null), { ok: false, error: 'bad-request' });
+  }
+
+  console.log('handles are shielded, never translated');
+  {
+    eq('an @handle is masked to a placeholder', maskHandles('hi @elonmusk there'), { text: 'hi @h0 there', tokens: ['@elonmusk'] });
+    eq('several handles keep their order', maskHandles('@a and @b'), { text: '@h0 and @h1', tokens: ['@a', '@b'] });
+    eq('a name with no handle is untouched', maskHandles('Imran Khan'), { text: 'Imran Khan', tokens: [] });
+    eq('the masked text round-trips back', unmaskHandles('hi @h0 there', ['@elonmusk']), 'hi @elonmusk there');
+    eq('a missing token keeps the placeholder', unmaskHandles('hi @h9 there', ['@elonmusk']), 'hi @h9 there');
+  }
+  {
+    const fetchImpl = fakeFetch([{ json: [['ہیلو @h0', 'en']] }]);
+    const out = await translateText('Hello @elonmusk', 'ur', { fetchImpl, retryDelayMs: 0 });
+    eq('the handle is restored after translation', out, 'ہیلو @elonmusk');
+    check('the translator saw the masked handle', decodeURIComponent(String(fetchImpl.calls[0].opts.body).split('q=')[1] || '').includes('@h0'), String(fetchImpl.calls[0].opts.body));
   }
 
   console.log(failures ? `\n${failures} FAILURE(S)` : '\nALL TRANSLATE TESTS PASSED');

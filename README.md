@@ -160,8 +160,9 @@ No administrator rights, no scheduled task, no stored credentials.
 powershell -ExecutionPolicy Bypass -File scripts\windows\install-startup.ps1 install
 ```
 
-This writes `x2wa-controller.cmd` into your user's **Startup** folder, so the
-controller starts when you log in.
+This writes a **silent** launcher into your user's **Startup** folder, so the
+controller starts when you log in and **no window appears** — the Startup entry
+is a VBScript wrapper that runs the real runner hidden.
 
 | Command | What it does |
 |---|---|
@@ -192,9 +193,42 @@ again after a short wait. A few quick failures in a row (a crash loop, not a
 transient fault) stop the supervisor with a clear log line rather than
 spinning forever — the same start-limit idea as the systemd unit.
 
-The supervisor is why you no longer have to notice that the controller did not
-come up, or bring it back by hand. If it *is* down, `status` and the log will
-say why.
+**Automatic reconnection is in the controller**, so it works however the
+process was started. On a disconnect, a lost network, a sleep/resume, or a dead
+browser page, the controller marks the connection stale, tears the old client
+down (waiting for Chromium to exit so the next launch is not refused), and
+rebuilds it from the saved session with a bounded backoff — 2 s doubling to a
+60 s cap — reset on every successful connect. A heartbeat notices a
+sleep/resume (a beat that arrives far too late) and a page that stops reporting
+`CONNECTED`. A still-valid session is reused, so recovery needs no new QR scan;
+only a rejected session falls back to showing one.
+
+### Optional: run it as a Windows service (NSSM)
+
+The launcher above runs in your logged-in session, which is the context where
+headless Chromium and the per-user WhatsApp session are known to work. If you
+would rather have OS-level supervision (a service that starts at boot, restarts
+on exit, and has a status), NSSM can do that:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\windows\install-service.ps1 install
+```
+
+It requires [NSSM](https://nssm.cc) on `PATH` (or pass `-NssmPath`). It
+registers a service that runs the **same supervisor** with an explicit working
+directory, rotated logs and a restart delay. It sets the service account to
+**your Windows account** — never `LocalSystem` — because the WhatsApp session
+lives under *your* `%LOCALAPPDATA%`; a service running as `LocalSystem` looks
+under the system profile and would not find it. The account password is entered
+through a prompt and handed to NSSM; it is never written to the script, the
+console, or a log.
+
+> **This service path is not verified on a physical Windows host in this
+> environment.** Running headless Chromium (Puppeteer) and the WhatsApp session
+> inside a Windows service has not been tested here; the logon launcher is the
+> verified-safe default. If you use NSSM, check
+> `… install-service.ps1 status` and the log, and be ready to fall back to the
+> launcher. See [Limitations](#limitations).
 
 **Verify it works:**
 
@@ -204,9 +238,10 @@ Get-Content "$env:LOCALAPPDATA\x-whatsapp-poster\controller.log" -Tail 20
 ```
 
 > **Status of Windows support:** the Linux path has been exercised end to end on
-> a real machine. The Windows path is implemented and its launcher contract is
-> covered by automated static checks
-> (`node scripts/windows/startup.test.js`), but it has **not** been run on a
+> a real machine. The Windows path is implemented and its launcher and service
+> contracts are covered by automated static checks
+> (`node scripts/windows/startup.test.js`,
+> `node scripts/windows/service.test.js`), but it has **not** been run on a
 > physical Windows host — treat the first run as something to verify with
 > `status` and the log file.
 
@@ -435,7 +470,8 @@ What the picture contains is the post itself — the author, the text, and any
 images or quoted card. It stops above the post's action bar (reply / repost /
 like / share), which, together with this extension's own row beneath it, is a
 row of controls rather than part of the post. A screenshot is therefore of the
-post as written, with no interface around it.
+post as written, with no interface around it. (A post that *quotes* another is
+the one exception — see [Quoting another post](#quoting-another-post) below.)
 
 The page's own floating furniture — the top bar with its **For you / Following**
 tabs, and any overlay or toast — is fixed or sticky, and a capture taller than
@@ -491,21 +527,49 @@ Screenshots are deduplicated separately from posts, so photographing a post
 does not stop you posting it, and posting it does not stop you photographing
 it.
 
+### Quoting another post
+
+A **quote-tweet** is one post carrying another inside it: your own words, and
+the post you quoted drawn as a card beneath them. Every send button — the post
+buttons and the camera alike — treats it the same way:
+
+- the **picture** sent to the Channel is the post being quoted, alone;
+- the **caption** is the outer post's own words.
+
+So quoting someone shares *their* post as an image, with your comment on it,
+rather than re-publishing your comment beside their picture or video. The
+quoted post's own media is never attached separately — it is already in the
+picture — and the outer post's own media is not sent either: the picture is the
+one thing sent. This is the behavior for every button, because the difference
+between the buttons is only how a post's text is presented (as written, named,
+or translated), and a quote's caption follows the button you pressed exactly as
+an ordinary post's text would.
+
+The picture is the quoted post's card, found by its `quoteTweet` marker, so the
+outer post's text and action bar never appear in it. A quoted post that itself
+quotes a third is still handled: the post being quoted is the outermost card.
+If a post somehow carries more than one quoted card, there is no way to know
+which was meant, and the send is refused (the popup says *This post quotes more
+than one post…*) rather than sending the wrong picture.
+
+The camera button behaves this way on a quote-tweet too. On an ordinary post it
+still sends a picture of the whole post, exactly as described above.
+
 ### What the buttons show
 
 Each send button is a small, outlined icon — no background, no filled shape —
 that changes as the post is sent, so you can see the outcome without opening
 anything. The three send buttons share every state; only the idle glyph and its
-colour tell them apart — the WhatsApp bubble in WhatsApp green, the `@` in
-blue, the globe in purple, and the camera in pink. Both change:
+colour tell them apart — the WhatsApp bubble and the camera in grey, the `@` in
+blue, and the globe in purple. Both change:
 
 | State | Icon | Colour | Meaning |
 |---|---|---|---|
 | Idle | WhatsApp / `@` / globe / camera glyph | the button's own colour | ready — click to post |
 | Working | spinner | blue | posting (the spinner keeps turning) |
-| Success | check mark | green | everything was published |
+| Success | check mark | blue | everything was published |
 | Partial | warning | amber | some items published, some could not be fetched |
-| Error | cross | red | nothing was published |
+| Error | cross | amber | nothing was published |
 
 There is no text on a button. Hover it for a tooltip with the detail
 (for example *Partial 3/4* or *Err: channel-not-permitted*), and the same
@@ -529,9 +593,9 @@ snackbar at the bottom centre of the page:
 
 | Kind | Looks like | Example |
 |---|---|---|
-| Success | teal edge, check | **Posted to Test** — *Your post is in the channel.* |
+| Success | blue edge, check | **Posted to Test** — *Your post is in the channel.* |
 | Info | blue edge, info | **Partly posted** — *2 of 4 items reached the channel…* |
-| Error | red edge, cross | **Could not post** — *This account cannot post in that channel…* |
+| Error | amber edge, cross | **Could not post** — *This account cannot post in that channel…* |
 
 Each snackbar can be dismissed with its **×** and disappears on its own after
 a few seconds (errors linger longer, since they usually need reading). At most
@@ -559,7 +623,7 @@ the partial state is shown rather than quietly dropping the item.
 | Restart it | `./scripts/install-startup.sh restart` | `… install-startup.ps1 restart` |
 | Read the log | `./scripts/install-startup.sh logs` | `Get-Content "$env:LOCALAPPDATA\x-whatsapp-poster\controller.log" -Tail 50` |
 | Stop it | `systemctl --user stop x2wa-controller` | `Stop-Process -Name node` (or uninstall) |
-| Start it | `systemctl --user start x2wa-controller` | run the launcher in the Startup folder |
+| Start it | `systemctl --user start x2wa-controller` | `… install-startup.ps1 restart` |
 | Remove it from login | `./scripts/install-startup.sh uninstall` | `… install-startup.ps1 uninstall` |
 
 **If it stops entirely:** both platforms start it again on their own. Linux
@@ -599,7 +663,7 @@ reboot never needs a new scan.
 | Session (`LocalAuth`) | `~/.local/share/x-whatsapp-poster/whatsapp-session` | `%LOCALAPPDATA%\x-whatsapp-poster\whatsapp-session` |
 | Temporary media | `~/.local/share/x-whatsapp-poster/tmp/` | `%LOCALAPPDATA%\x-whatsapp-poster\tmp\` |
 | Logs | journal: `journalctl --user -u x2wa-controller` | `%LOCALAPPDATA%\x-whatsapp-poster\controller.log` |
-| Service/launcher | `~/.config/systemd/user/x2wa-controller.service` | Startup folder: `x2wa-controller.cmd` → runs `controller/src/supervisor.js` |
+| Service/launcher | `~/.config/systemd/user/x2wa-controller.service` | Startup folder: `x2wa-controller.vbs` (hidden) → `x2wa-controller.cmd` → `controller/src/supervisor.js`; optional NSSM service |
 
 (`$XDG_DATA_HOME` is honoured on Linux if set; macOS uses
 `~/Library/Application Support/x-whatsapp-poster/`.)
@@ -836,7 +900,10 @@ node extension/test/link-first.test.js       # a text-only post's link moves to 
 node extension/test/author-header.test.js    # the author's name is read cleanly, written in the post's language, and put above the post
 node controller/test/translate.test.js       # the Urdu button: the split, the endpoint's shapes, the request, standalone name requests
 node extension/test/post-variant.test.js     # each send button's variant: name, glyph, author, translate
+node extension/test/quote-tweet.test.js       # a quote-tweet sends a picture of the quoted post, captioned with the outer words; ordinary posts unchanged
+node extension/test/quote-button.test.js       # the same, driven through the real click handlers: the camera button and the three send buttons agree
 node scripts/windows/startup.test.js         # Windows launcher contract (static)
+node scripts/windows/service.test.js          # Windows service (NSSM) installer contract (static)
 node controller/test/supervisor.test.js      # keeps the controller running: restart, give-up, signal stop
 ```
 
@@ -850,7 +917,9 @@ node controller/test/supervisor.test.js      # keeps the controller running: res
 - Media upload depends on the compatibility patch above for current WhatsApp
   Web internals.
 - Windows startup has **not** been run on a physical Windows host; only static
-  checks cover it.
+  checks cover it. The per-user silent launcher is the default; the optional
+  NSSM service path (running headless Chromium and the WhatsApp session inside
+  a Windows service) is untested and must be verified before use.
 - Only HLS master playlists are sent; a video without one is reported as a
   failure rather than published without sound.
 - Live/streamed clips (Periscope and similar) are not served from

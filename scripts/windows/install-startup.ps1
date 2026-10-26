@@ -115,7 +115,12 @@ rem Run the supervisor, not the controller directly. If the controller stops -
 rem a crash, a closed browser, a killed process - the supervisor starts it
 rem again, the way systemd's Restart=on-failure does on Linux. Without it a
 rem stopped controller stayed stopped until the next logon.
-start "x2wa-controller" /min "$nodeExe" "$SupervisorJs" >> "%X2WA_LOG%" 2>&1
+rem No "start ... /min": a minimized top-level console keeps a taskbar icon
+rem for as long as the process lives, which put Node.js on the taskbar forever
+rem (issue: Node.js stays permanently visible on Windows taskbar). The VBScript
+rem wrapper already runs this batch with window style 0 (SW_HIDE), so the child
+rem inherits the hidden state and there is no taskbar entry to begin with.
+"$nodeExe" "$SupervisorJs" >> "%X2WA_LOG%" 2>&1
 
 rem Give it a moment, then record whether it actually came up.
 ping 127.0.0.1 -n 9 >nul

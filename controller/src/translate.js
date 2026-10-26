@@ -150,19 +150,44 @@ async function requestChunkRetrying(chunk, target, deps) {
   }
 }
 
+// Usernames / @handles inside a post must survive translation as the same
+// handle, not be transliterated into unrelated words. The post's text is what
+// the post-translate option sends to the translator, so the handles are masked
+// to placeholders before the translator sees them and put back exactly as they
+// were afterwards. (Issue: do not translate names when using the post translate
+// option - names and handles keep their original form.)
+const HANDLE_RE = /@([A-Za-z0-9_]{1,24})/g;
+const HANDLE_TOKEN_RE = /@h(\d+)/g;
+
+function maskHandles(text) {
+  const tokens = [];
+  const masked = String(text).replace(HANDLE_RE, (m, handle) => {
+    tokens.push(m);
+    return `@h${tokens.length - 1}`;
+  });
+  return { text: masked, tokens };
+}
+
+function unmaskHandles(text, tokens) {
+  return String(text).replace(HANDLE_TOKEN_RE, (m, i) => (tokens && tokens[Number(i)] !== undefined ? tokens[Number(i)] : m));
+}
+
 // Translate `text` into `target` (default Urdu). Rejects on failure so the
 // caller can report it rather than send the original text in the wrong
-// language; an empty text resolves to '' without a request.
+// language; an empty text resolves to '' without a request. Handles are
+// masked out of the request and restored on the way back, so a username is
+// never translated into some other word.
 async function translateText(text, target, deps) {
   if (!isTranslatable(text)) return '';
   const lang = target || 'ur';
-  const { chunks, seps } = chunkText(text, (deps && deps.maxChunk) || MAX_CHUNK);
+  const { text: masked, tokens } = maskHandles(text);
+  const { chunks, seps } = chunkText(masked, (deps && deps.maxChunk) || MAX_CHUNK);
   let out = '';
   for (let i = 0; i < chunks.length; i++) {
     out += await requestChunkRetrying(chunks[i], lang, deps);
     out += seps[i];
   }
-  return out;
+  return unmaskHandles(out, tokens);
 }
 
 // The standalone translation request (a short string, e.g. an author's name
@@ -185,6 +210,8 @@ module.exports = {
   readTranslation,
   isTranslatable,
   readTranslateRequest,
+  maskHandles,
+  unmaskHandles,
   MAX_CHUNK,
   MAX_REQUEST_CHARS,
   ENDPOINT,

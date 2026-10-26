@@ -78,7 +78,7 @@ console.log('generated launcher contract');
   check('quotes balanced (paths with spaces stay quoted)', (gen.match(/"/g) || []).length % 2 === 0, (gen.match(/"/g) || []).length);
   check('node path is absolute and quoted', gen.includes('"C:\\Program Files\\nodejs\\node.exe"'));
   check('supervisor path is quoted for spaces', gen.includes('"C:\\Users\\t\\Documents\\My Projects\\x2wa\\controller\\src\\supervisor.js"'), (gen.match(/start .*/) || [''])[0]);
-  check('starts the supervisor so a stopped controller is restarted', /start "x2wa-controller" \/min "[^"]*node\.exe" "[^"]*supervisor\.js"/.test(gen), (gen.match(/start .*/) || [''])[0]);
+  check('starts the supervisor so a stopped controller is restarted', /node\.exe" "[^"]*supervisor\.js/.test(gen), (gen.match(/node .*/) || [''])[0]);
   check('does not start the controller directly (no supervision then)', !gen.includes('"C:\\Users\\t\\Documents\\My Projects\\x2wa\\controller\\src\\server.js"'));
   check('chrome path is passed through', /set "CHROME_PATH=C:/.test(gen));
 
@@ -95,17 +95,24 @@ console.log('generated launcher contract');
   check('echo redirection is spaced, not glued to the text', !/\S>>\s*"%X2WA_LOG%"/.test(gen), gen.match(/echo .*>>.*/g));
   check('launch failure recorded after start', /did not answer on port 47825/.test(gen));
   check('creates its data directory', /if not exist "%LOCALAPPDATA%\\x-whatsapp-poster" mkdir/.test(gen));
-  check('starts detached/minimised', /start "x2wa-controller" \/min/.test(gen));
+  check('starts the supervisor without a minimised console', /node\.exe" "[^"]*supervisor\.js/.test(gen) && !/start "x2wa-controller" \/min/.test(gen));
   check('binds only loopback (health check is 127.0.0.1)', gen.includes('http://127.0.0.1:47825/health'));
   check('never stores credentials', !/-Credential|Get-Credential|password/i.test(gen));
 }
 
 console.log('silent VBScript launcher contract');
 {
-  check('creates silent VBScript launcher in Startup folder', /Set-Content -LiteralPath \$VbsLauncherPath/.test(src));
-  check('VBScript launcher runs hidden with window style 0', /WshShell\.Run\s+"""\$CmdLauncherPath""",\s*0,\s*False/.test(src));
-  check('VBScript launcher sets working directory to controller', /WshShell\.CurrentDirectory\s*=\s*"\$ControllerDir"/.test(src));
-  check('uninstalls both VBS and CMD launchers', /Remove-Item -LiteralPath \$VbsLauncherPath/.test(src) && /Remove-Item -LiteralPath \$CmdLauncherPath/.test(src));
+  // The Startup-folder entry is a VBScript wrapper that runs the real runner
+  // hidden (window style 0) and does not wait, so nothing is shown at logon.
+  check('creates a silent VBScript launcher in the Startup folder', /Set-Content -LiteralPath \$VbsLauncherPath/.test(src));
+  check('the wrapper lives in Startup and the runner beside the data',
+    /\$VbsLauncherPath\s*=\s*Join-Path \$StartupDir/.test(src) && /\$CmdLauncherPath\s*=\s*Join-Path \$DataRoot/.test(src));
+  check('runs the runner hidden with window style 0', /WshShell\.Run\s+"""\$CmdLauncherPath""",\s*0,\s*False/.test(src));
+  check('sets the working directory to the controller', /WshShell\.CurrentDirectory\s*=\s*"\$ControllerDir"/.test(src));
+  check('removes a legacy .cmd from the Startup folder', /LegacyCmdPath/.test(src) && /Remove-Item -LiteralPath \$LegacyCmdPath/.test(src));
+  check('uninstalls the wrapper and the runner', /Remove-Item -LiteralPath \$VbsLauncherPath/.test(src) && /Remove-Item -LiteralPath \$CmdLauncherPath/.test(src));
+  check('status reports the silent entry', /\$VbsLauncherPath \(silent\)/.test(src));
+  check('restart starts the wrapper when present', /\$toStart\s*=\s*if \(Test-Path -LiteralPath \$VbsLauncherPath\) \{ \$VbsLauncherPath \}/.test(src));
 }
 
 console.log('cross-platform session path agrees with the controller');
@@ -120,6 +127,55 @@ console.log('cross-platform session path agrees with the controller');
   if (savedLocal === undefined) delete process.env.LOCALAPPDATA; else process.env.LOCALAPPDATA = savedLocal;
   check('controller resolves the same Windows session dir the launcher sets',
     winSession === 'C:/Users/t/AppData/Local/x-whatsapp-poster/whatsapp-session', winSession);
+}
+
+console.log('HKCU Run registry entry contract');
+{
+  check('writes the VBScript path to HKCU Run on install', /Set-ItemProperty -Path \$runKey -Name \$ServiceName/.test(src));
+  check('uses wscript.exe to launch the VBScript', /wscript\.exe.*\$VbsLauncherPath/.test(src));
+  check('removes the registry value on uninstall', /Remove-ItemProperty.*HKCU.*Run.*-Name \$ServiceName/.test(src));
+  check('status reports the registry run value', /Get-ItemProperty.*HKCU.*Run.*\$ServiceName/.test(src));
+}
+
+console.log('session-browser cleanup contract');
+{
+  check('defines Get-SessionChromeProcesses to find stray Chrome', /function Get-SessionChromeProcesses/.test(src));
+  check('filters by the session directory in the command line', /Where-Object\s*{ \$_.CommandLine -and \$_.CommandLine -like "\*\$SessionDir\*" }/.test(src));
+  check('uninstall kills session browsers', /foreach.*Get-SessionChromeProcesses.*Stop-Process -Id \$p.ProcessId/.test(src));
+  check('restart kills session browsers too', /foreach.*Get-SessionChromeProcesses.*Stop-Process -Id \$p.ProcessId/.test(src));
+}
+
+console.log('start action contract');
+{
+  check('implements a start action', /'start'\s*\{/.test(src));
+  check('returns early if already running', /if.*Get-ControllerProcess\).*already running/s.test(src));
+  check('launches via wscript.exe or cmd.exe', /wscript\.exe.*\$toStart|cmd\.exe.*\/c.*\$toStart/.test(src));
+  check('uses Invoke-CimMethod for detached launch', /Invoke-CimMethod.*Win32_Process.*Create/.test(src));
+  check('falls back to Start-Process', /Start-Process -FilePath \$toStart/.test(src));
+}
+
+console.log('detached launch and wait contract');
+{
+  check('restart waits for termination before relaunching', /for.*\$i = 0.*-lt 10.*if.*-not.*Get-ControllerProcess.*break/s.test(src));
+  check('ping 127.0.0.1 -n 9 used for wait in launcher', /ping 127.0.0.1 -n 9 >nul/.test(src));
+}
+
+console.log('rerun-connection.ps1 contract');
+{
+  const rerun = fs.readFileSync(path.join(__dirname, 'rerun-connection.ps1'), 'utf8');
+  check('checks /status endpoint', /http:\/\/127.0.0.1:\$Port\/status/.test(rerun));
+  check('restarts if not ready', /restart/.test(rerun) && /state -ne 'ready'/.test(rerun));
+  check('waits for ready or qr', /state -eq 'ready'|state -eq 'qr'/.test(rerun));
+  check('prints QR action required message', /QR scan required/.test(rerun));
+  check('handles missing console gracefully', /\[Console\]::KeyAvailable/.test(rerun) && /catch \{\}/.test(rerun));
+}
+
+console.log('create-desktop-shortcut.ps1 contract');
+{
+  const shortcut = fs.readFileSync(path.join(__dirname, 'create-desktop-shortcut.ps1'), 'utf8');
+  check('creates a .lnk on the Desktop', /\[Environment\]::GetFolderPath\('Desktop'\)/.test(shortcut) && /CreateShortcut/.test(shortcut));
+  check('targets rerun-connection.ps1', /rerun-connection\.ps1/.test(shortcut));
+  check('uses Chrome icon if available', /chrome\.exe/.test(shortcut) && /IconLocation/.test(shortcut));
 }
 
 console.log(failures ? `\n${failures} FAILURE(S)` : '\nWINDOWS STARTUP STATIC CHECKS PASSED');
