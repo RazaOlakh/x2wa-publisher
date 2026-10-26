@@ -44,6 +44,7 @@ console.log('state colour mapping');
 
 console.log('context menu actions');
 {
+  check('context menu uses ToolStripMenuItem items', /ToolStripMenuItem/.test(src) && !/New-Object System\.Windows\.Forms\.MenuItem/.test(src));
   check('Reconnect / Restart Controller', /Reconnect\s*\/\s*Restart Controller/.test(src) && /Restart-Controller/.test(src));
   check('Disconnect / Stop Controller', /Disconnect\s*\/\s*Stop Controller/.test(src) && /Stop-Controller/.test(src));
   check('Open Settings / Dashboard', /Open Settings\s*\/\s*Dashboard/.test(src) && /Open-Settings/.test(src));

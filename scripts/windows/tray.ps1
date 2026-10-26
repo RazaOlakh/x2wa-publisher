@@ -140,12 +140,12 @@ $notify.Text = 'X -> WhatsApp Controller: stopped'
 $notify.Visible = $true
 
 $menu = New-Object System.Windows.Forms.ContextMenuStrip
-$miRestart = New-Object System.Windows.Forms.MenuItem -ArgumentList 'Reconnect / Restart Controller'
-$miStop = New-Object System.Windows.Forms.MenuItem -ArgumentList 'Disconnect / Stop Controller'
-$miSettings = New-Object System.Windows.Forms.MenuItem -ArgumentList 'Open Settings / Dashboard'
-$miLogs = New-Object System.Windows.Forms.MenuItem -ArgumentList 'View Logs'
-$miSession = New-Object System.Windows.Forms.MenuItem -ArgumentList 'Open Session Folder'
-$miExit = New-Object System.Windows.Forms.MenuItem -ArgumentList 'Exit'
+$miRestart = New-Object System.Windows.Forms.ToolStripMenuItem -ArgumentList 'Reconnect / Restart Controller'
+$miStop = New-Object System.Windows.Forms.ToolStripMenuItem -ArgumentList 'Disconnect / Stop Controller'
+$miSettings = New-Object System.Windows.Forms.ToolStripMenuItem -ArgumentList 'Open Settings / Dashboard'
+$miLogs = New-Object System.Windows.Forms.ToolStripMenuItem -ArgumentList 'View Logs'
+$miSession = New-Object System.Windows.Forms.ToolStripMenuItem -ArgumentList 'Open Session Folder'
+$miExit = New-Object System.Windows.Forms.ToolStripMenuItem -ArgumentList 'Exit'
 foreach ($mi in @($miRestart, $miStop, $miSettings, $miLogs, $miSession, $miExit)) { $menu.Items.Add($mi) | Out-Null }
 $notify.ContextMenuStrip = $menu
 
