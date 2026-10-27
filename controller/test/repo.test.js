@@ -12,6 +12,9 @@ function check(name, cond, extra) {
   if (cond) console.log(`  ok   ${name}`);
   else { failures++; console.log(`  FAIL ${name}${extra !== undefined ? ' -> ' + JSON.stringify(extra) : ''}`); }
 }
+function readText(filePath) {
+  return fs.readFileSync(filePath, 'utf8').replace(/\r\n/g, '\n');
+}
 function eq(name, got, want) {
   check(name, JSON.stringify(got) === JSON.stringify(want), { got, want });
 }
@@ -64,6 +67,7 @@ function makeUpstream(dir) {
   git(origin, ['init', '-q', '-b', 'main']);
   git(origin, ['config', 'user.email', 'test@example.invalid']);
   git(origin, ['config', 'user.name', 'Test']);
+  git(origin, ['config', 'receive.denyCurrentBranch', 'updateInstead']);
   fs.writeFileSync(path.join(origin, 'README.md'), 'hello\n');
   git(origin, ['add', '.']);
   git(origin, ['commit', '-q', '-m', 'first']);
@@ -177,6 +181,7 @@ console.log('counts what is waiting upstream, without going to the network');
   git(origin, ['init', '-q', '-b', 'main']);
   git(origin, ['config', 'user.email', 'test@example.invalid']);
   git(origin, ['config', 'user.name', 'Test']);
+  git(origin, ['config', 'receive.denyCurrentBranch', 'updateInstead']);
   fs.writeFileSync(path.join(origin, 'README.md'), 'hello\n');
   git(origin, ['add', '.']);
   git(origin, ['commit', '-q', '-m', 'first']);
@@ -234,6 +239,136 @@ console.log('counts what is waiting upstream, without going to the network');
   const aheadAfter = inRepo(dir, '(async (repo) => { await repo.update(); return repo.status(); })');
   eq('a local commit is still reported as ahead', aheadAfter.ahead, 1);
   eq('and nothing is waiting', aheadAfter.behind, 0);
+
+  fs.rmSync(dir, { recursive: true, force: true });
+  fs.rmSync(origin, { recursive: true, force: true });
+}
+
+// ------------------------------------------------------------------ push
+console.log('pushes commits to upstream repository');
+{
+  const dir = makeRepo();
+  const origin = makeUpstream(dir);
+
+  fs.writeFileSync(path.join(dir, 'local-feature.txt'), 'feature code\n');
+  git(dir, ['add', '.']);
+  git(dir, ['commit', '-q', '-m', 'add feature']);
+
+  const p = inRepo(dir, '(repo) => repo.push()');
+  check('push succeeds', p.ok === true && p.pushed === true, p);
+  eq('ahead becomes 0', p.ahead, 0);
+  eq('behind stays 0', p.behind, 0);
+  eq('upstream has the pushed file', readText(path.join(origin, 'local-feature.txt')), 'feature code\n');
+
+  fs.rmSync(dir, { recursive: true, force: true });
+  fs.rmSync(origin, { recursive: true, force: true });
+}
+
+// ------------------------------------------------------------------ sync
+console.log('syncs checkout when already up to date');
+{
+  const dir = makeRepo();
+  const origin = makeUpstream(dir);
+
+  const s = inRepo(dir, '(repo) => repo.sync()');
+  check('sync succeeds as no-op', s.ok === true && s.synced === true, s);
+  eq('nothing pulled', s.pulled, false);
+  eq('nothing pushed', s.pushed, false);
+
+  fs.rmSync(dir, { recursive: true, force: true });
+  fs.rmSync(origin, { recursive: true, force: true });
+}
+
+console.log('syncs by pulling when behind');
+{
+  const dir = makeRepo();
+  const origin = makeUpstream(dir);
+
+  fs.writeFileSync(path.join(origin, 'remote-change.txt'), 'remote code\n');
+  git(origin, ['add', '.']);
+  git(origin, ['commit', '-q', '-m', 'remote commit']);
+
+  const s = inRepo(dir, '(repo) => repo.sync()');
+  check('sync succeeds by pulling', s.ok === true && s.pulled === true && s.pushed === false, s);
+  eq('dir received remote file', readText(path.join(dir, 'remote-change.txt')), 'remote code\n');
+
+  fs.rmSync(dir, { recursive: true, force: true });
+  fs.rmSync(origin, { recursive: true, force: true });
+}
+
+console.log('syncs by pushing when ahead');
+{
+  const dir = makeRepo();
+  const origin = makeUpstream(dir);
+
+  fs.writeFileSync(path.join(dir, 'local-change.txt'), 'local code\n');
+  git(dir, ['add', '.']);
+  git(dir, ['commit', '-q', '-m', 'local commit']);
+
+  const s = inRepo(dir, '(repo) => repo.sync()');
+  check('sync succeeds by pushing', s.ok === true && s.pulled === false && s.pushed === true, s);
+  eq('origin received local file', readText(path.join(origin, 'local-change.txt')), 'local code\n');
+
+  fs.rmSync(dir, { recursive: true, force: true });
+  fs.rmSync(origin, { recursive: true, force: true });
+}
+
+console.log('syncs bidirectional changes cleanly when both ahead and behind');
+{
+  const dir = makeRepo();
+  const origin = makeUpstream(dir);
+
+  fs.writeFileSync(path.join(origin, 'from-remote.txt'), 'from remote\n');
+  git(origin, ['add', '.']);
+  git(origin, ['commit', '-q', '-m', 'commit on remote']);
+
+  fs.writeFileSync(path.join(dir, 'from-local.txt'), 'from local\n');
+  git(dir, ['add', '.']);
+  git(dir, ['commit', '-q', '-m', 'commit on local']);
+
+  const s = inRepo(dir, '(repo) => repo.sync()');
+  check('sync succeeds pulling and pushing', s.ok === true && s.pulled === true && s.pushed === true, s);
+  check('rebased cleanly', s.rebased === true);
+  eq('dir has remote file', readText(path.join(dir, 'from-remote.txt')), 'from remote\n');
+  eq('origin has local file', readText(path.join(origin, 'from-local.txt')), 'from local\n');
+
+  fs.rmSync(dir, { recursive: true, force: true });
+  fs.rmSync(origin, { recursive: true, force: true });
+}
+
+console.log('sync refuses when local tree is dirty');
+{
+  const dir = makeRepo();
+  const origin = makeUpstream(dir);
+
+  fs.writeFileSync(path.join(dir, 'README.md'), 'dirty edits\n');
+  const s = inRepo(dir, '(repo) => repo.sync()');
+  check('sync refused', s.ok === false, s);
+  eq('reason is local-changes', s.error, 'local-changes');
+
+  fs.rmSync(dir, { recursive: true, force: true });
+  fs.rmSync(origin, { recursive: true, force: true });
+}
+
+console.log('sync aborts cleanly on conflict without leaving repo in rebase state');
+{
+  const dir = makeRepo();
+  const origin = makeUpstream(dir);
+
+  fs.writeFileSync(path.join(origin, 'README.md'), 'remote change\n');
+  git(origin, ['add', '.']);
+  git(origin, ['commit', '-q', '-m', 'conflict commit on remote']);
+
+  fs.writeFileSync(path.join(dir, 'README.md'), 'conflicting local change\n');
+  git(dir, ['add', '.']);
+  git(dir, ['commit', '-q', '-m', 'conflict commit on local']);
+
+  const s = inRepo(dir, '(repo) => repo.sync()');
+  check('sync reports conflict', s.ok === false && s.error === 'sync-conflict', s);
+
+  // Check repo is clean and not stuck in rebase
+  const statusOut = git(dir, ['status', '--porcelain']);
+  eq('working directory left untouched', statusOut.trim(), '');
 
   fs.rmSync(dir, { recursive: true, force: true });
   fs.rmSync(origin, { recursive: true, force: true });

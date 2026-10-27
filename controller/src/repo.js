@@ -8,7 +8,7 @@
 const { execFile } = require('child_process');
 const path = require('path');
 
-const TIMEOUT = { quick: 10000, normal: 20000, fetch: 45000, pull: 90000 };
+const TIMEOUT = { quick: 10000, normal: 20000, fetch: 45000, pull: 90000, push: 90000 };
 const REMOTE = 'origin';
 // Only ever used with values git itself produced, but checked anyway so a
 // surprising ref name cannot turn into an argument we did not expect.
@@ -172,4 +172,168 @@ async function update() {
   };
 }
 
-module.exports = { status, check, update, local, root };
+// Push local commits to the remote upstream.
+// Only pushes if on a git repo and safe branch.
+async function push() {
+  const l = await local();
+  if (!l.ok) return l;
+  const dir = await root();
+
+  const before = await git(['rev-parse', 'HEAD'], dir, TIMEOUT.quick);
+  if (!before.ok) return { ok: false, error: 'not-a-repo' };
+
+  let pushArgs = ['push', '--quiet'];
+  if (!l.upstream) {
+    if (!SAFE_REF.test(l.branch)) {
+      return { ok: false, error: 'invalid-branch', branch: l.branch };
+    }
+    pushArgs = ['push', '-u', '--quiet', REMOTE, l.branch];
+  }
+
+  const pushed = await git(pushArgs, dir, TIMEOUT.push);
+  if (!pushed.ok) {
+    const isBehind = /fetch first|non-fast-forward|\[rejected\]/i.test(pushed.err);
+    return Object.assign({}, await status(), {
+      ok: false,
+      error: isBehind ? 'push-rejected-behind' : 'push-failed',
+      detail: pushed.err.split('\n').slice(0, 4).join(' '),
+    });
+  }
+
+  const upstream = l.upstream || `${REMOTE}/${l.branch}`;
+  const now = await counts(dir, upstream);
+  lastCheck = {
+    at: Date.now(),
+    upstream,
+    behind: now ? now.behind : 0,
+    ahead: now ? now.ahead : 0,
+  };
+
+  return {
+    ok: true,
+    pushed: true,
+    branch: l.branch,
+    sha: before.out.slice(0, 7),
+    ahead: now ? now.ahead : 0,
+    behind: now ? now.behind : 0,
+  };
+}
+
+// Bidirectional synchronization: pull incoming changes and push outgoing commits.
+// If the checkout is behind, fast-forwards or rebases cleanly. If a rebase conflict
+// occurs, the rebase is aborted immediately so work is never clobbered or left
+// in a half-rebasing state.
+async function sync() {
+  const l = await local();
+  if (!l.ok) return l;
+  if (l.dirty) {
+    return { ok: false, error: 'local-changes', branch: l.branch, sha: l.sha };
+  }
+  const dir = await root();
+
+  // If no upstream is set yet and branch is valid, use origin/<branch>
+  const upstream = l.upstream || (SAFE_REF.test(l.branch) ? `${REMOTE}/${l.branch}` : null);
+  if (!upstream) {
+    return { ok: false, error: 'no-upstream', branch: l.branch, sha: l.sha };
+  }
+
+  // Fetch remote state first
+  const fetched = await git(['fetch', '--quiet', REMOTE], dir, TIMEOUT.fetch);
+  if (!fetched.ok && l.upstream) {
+    return Object.assign({}, await status(), {
+      ok: false,
+      error: 'unreachable',
+      detail: fetched.err.split('\n').slice(0, 4).join(' '),
+    });
+  }
+
+  const before = await git(['rev-parse', 'HEAD'], dir, TIMEOUT.quick);
+  if (!before.ok) return { ok: false, error: 'not-a-repo' };
+
+  const c = await counts(dir, upstream);
+  const behind = c ? c.behind : 0;
+  const ahead = c ? c.ahead : 0;
+
+  let pulled = false;
+  let rebased = false;
+
+  if (behind > 0) {
+    if (ahead === 0) {
+      // Pure fast-forward pull
+      const rPull = await git(['pull', '--ff-only', '--quiet'], dir, TIMEOUT.pull);
+      if (!rPull.ok) {
+        return Object.assign({}, await status(), {
+          ok: false,
+          error: 'pull-failed',
+          detail: rPull.err.split('\n').slice(0, 4).join(' '),
+        });
+      }
+      pulled = true;
+    } else {
+      // Both ahead and behind: rebase pull to incorporate remote changes cleanly
+      const rRebase = await git(['pull', '--rebase', '--quiet'], dir, TIMEOUT.pull);
+      if (!rRebase.ok) {
+        // Abort immediately so checkout is left clean
+        await git(['rebase', '--abort'], dir, TIMEOUT.quick);
+        return Object.assign({}, await status(), {
+          ok: false,
+          error: 'sync-conflict',
+          detail: 'Remote changes conflict with local commits. Rebase was aborted to protect your checkout.',
+        });
+      }
+      pulled = true;
+      rebased = true;
+    }
+  }
+
+  // Check remaining commits to push
+  const postPullCounts = await counts(dir, upstream);
+  const remainingAhead = postPullCounts ? postPullCounts.ahead : ahead;
+  let pushed = false;
+
+  if (remainingAhead > 0 || !l.upstream) {
+    let pushArgs = ['push', '--quiet'];
+    if (!l.upstream) {
+      pushArgs = ['push', '-u', '--quiet', REMOTE, l.branch];
+    }
+    const rPush = await git(pushArgs, dir, TIMEOUT.push);
+    if (!rPush.ok) {
+      return Object.assign({}, await status(), {
+        ok: false,
+        error: 'push-failed',
+        detail: rPush.err.split('\n').slice(0, 4).join(' '),
+      });
+    }
+    pushed = true;
+  }
+
+  const after = await git(['rev-parse', 'HEAD'], dir, TIMEOUT.quick);
+  const changed = await git(['diff', '--name-only', `${before.out}..${after.out}`], dir, TIMEOUT.normal);
+  const files = changed.ok ? changed.out.split('\n').filter(Boolean) : [];
+
+  const now = await counts(dir, upstream);
+  lastCheck = {
+    at: Date.now(),
+    upstream,
+    behind: now ? now.behind : 0,
+    ahead: now ? now.ahead : 0,
+  };
+
+  return {
+    ok: true,
+    synced: true,
+    pulled,
+    pushed,
+    rebased,
+    updated: after.out !== before.out,
+    from: before.out.slice(0, 7),
+    to: after.out.slice(0, 7),
+    files: files.length,
+    ahead: now ? now.ahead : 0,
+    behind: now ? now.behind : 0,
+    reloadExtension: files.some((f) => f.startsWith('extension/')),
+    restartController: files.some((f) => f.startsWith('controller/')),
+  };
+}
+
+module.exports = { status, check, update, pull: update, push, sync, local, root };
