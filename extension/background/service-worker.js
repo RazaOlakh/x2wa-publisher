@@ -5,8 +5,60 @@
 // shared/clip.js holds the (testable) capture geometry: the page-zoom
 // conversion between the crop's CSS pixels and the capture command's DIP, and
 // the marker that lets a capture re-find the post it was measured from.
-importScripts('video-source.js');
-importScripts('../shared/clip.js');
+try {
+  importScripts('/background/video-source.js');
+} catch (e1) {
+  try { importScripts('./video-source.js'); } catch (e2) {}
+}
+
+try {
+  importScripts('/shared/clip.js');
+} catch (e1) {
+  try { importScripts('../shared/clip.js'); } catch (e2) {}
+}
+
+// Fallbacks in case importScripts fails due to Chromium service worker reload/cache bugs.
+if (typeof inferVideoId !== 'function') {
+  function inferVideoId(videoId, hints, usedIds, videoCount) {
+    if (videoId) return videoId;
+    const candidates = Object.keys(hints || {}).filter((id) => hints[id] && hints[id].master);
+    if (videoCount !== 1 || candidates.length !== 1) return null;
+    if (usedIds.has(candidates[0])) return null;
+    return candidates[0];
+  }
+}
+
+if (typeof clipToDip !== 'function') {
+  function pageZoom(metrics) {
+    const z = metrics && metrics.cssVisualViewport && metrics.cssVisualViewport.zoom;
+    return typeof z === 'number' && isFinite(z) && z > 0 ? z : 1;
+  }
+  function validClip(clip) {
+    return !!clip
+      && [clip.x, clip.y, clip.width, clip.height].every((n) => typeof n === 'number' && isFinite(n))
+      && clip.width > 0 && clip.height > 0;
+  }
+  function clipToDip(clip, zoom) {
+    if (!validClip(clip)) return null;
+    const z = typeof zoom === 'number' && isFinite(zoom) && zoom > 0 ? zoom : 1;
+    const x = Math.max(0, Math.round(clip.x * z));
+    const y = Math.max(0, Math.round(clip.y * z));
+    const width = Math.round(clip.width * z);
+    const height = Math.round(clip.height * z);
+    if (!(width > 0) || !(height > 0)) return null;
+    return { x, y, width, height, scale: 1 };
+  }
+  function rectsAgree(a, b, tolerance) {
+    if (!a || !b) return false;
+    const tol = typeof tolerance === 'number' ? tolerance : 2;
+    return ['left', 'top', 'width', 'height'].every((k) => Math.abs(a[k] - b[k]) <= tol);
+  }
+  const SHOT_MARKER_ATTR = 'data-xwap-shot';
+  function markerSelector(token) {
+    if (typeof token !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(token)) return null;
+    return '[' + SHOT_MARKER_ATTR + '="' + token + '"]';
+  }
+}
 
 const CONTROLLER = 'http://127.0.0.1:47825';
 
