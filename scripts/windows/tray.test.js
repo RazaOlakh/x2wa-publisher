@@ -57,6 +57,7 @@ console.log('context menu actions');
   check('session folder opens in explorer', /Start-Process[\s\S]{0,40}explorer/.test(src));
   check('exit stops the timer', /\$timer\.Stop\(\s*\)/.test(src));
   check('exit disposes the icon', /\$notify\.Visible\s*=\s*\$false/.test(src) && /\$notify\.Dispose\(\)/.test(src));
+  check('menu items wire native click handlers', /\$miSettings\.add_Click/.test(src) && /\$miLogs\.add_Click/.test(src));
 }
 
 console.log('tray icon and polling');

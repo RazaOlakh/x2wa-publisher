@@ -32,7 +32,9 @@ $StatusUri = "http://127.0.0.1:$Port/status"
 $DataRoot = Join-Path $env:LOCALAPPDATA 'x-whatsapp-poster'
 $SessionDir = Join-Path $DataRoot 'whatsapp-session'
 $LogFile = Join-Path $DataRoot 'controller.log'
-$StartupScript = Join-Path $PSScriptRoot 'install-startup.ps1'
+$ScriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
+if (-not $ScriptDir) { $ScriptDir = (Get-Location).Path }
+$StartupScript = Join-Path $ScriptDir 'install-startup.ps1'
 
 function Get-ControllerStatus {
   try { return Invoke-RestMethod -Uri $StatusUri -TimeoutSec 3 -ErrorAction Stop } catch { return $null }
@@ -75,22 +77,33 @@ function Stop-Controller {
 }
 
 function Open-Logs {
-  if (Test-Path -LiteralPath $LogFile) { Start-Process -FilePath notepad -ArgumentList $LogFile -ErrorAction SilentlyContinue | Out-Null }
+  if (-not (Test-Path -LiteralPath $LogFile)) {
+    $parent = Split-Path -Parent $LogFile
+    if (-not (Test-Path -LiteralPath $parent)) { New-Item -ItemType Directory -Path $parent -Force -ErrorAction SilentlyContinue | Out-Null }
+    "" | Out-File -FilePath $LogFile -Encoding utf8 -ErrorAction SilentlyContinue
+  }
+  Start-Process -FilePath notepad -ArgumentList "`"$LogFile`"" -ErrorAction SilentlyContinue | Out-Null
 }
 
 function Open-SessionFolder {
-  if (Test-Path -LiteralPath $SessionDir) { Start-Process -FilePath explorer -ArgumentList $SessionDir -ErrorAction SilentlyContinue | Out-Null }
+  if (-not (Test-Path -LiteralPath $SessionDir)) {
+    New-Item -ItemType Directory -Path $SessionDir -Force -ErrorAction SilentlyContinue | Out-Null
+  }
+  Start-Process -FilePath explorer -ArgumentList "`"$SessionDir`"" -ErrorAction SilentlyContinue | Out-Null
 }
 
 function Open-Settings {
   $chrome = Find-Chrome
-  if (-not ($chrome -and (Test-Path -LiteralPath $chrome))) { return }
-  Start-Process -FilePath $chrome -ArgumentList @('--new-window', 'chrome://extensions') -ErrorAction SilentlyContinue | Out-Null
+  if ($chrome -and (Test-Path -LiteralPath $chrome)) {
+    Start-Process -FilePath $chrome -ArgumentList 'chrome://extensions' -ErrorAction SilentlyContinue | Out-Null
+  } else {
+    Start-Process -FilePath 'chrome.exe' -ArgumentList 'chrome://extensions' -ErrorAction SilentlyContinue | Out-Null
+  }
 }
 
 function Get-StateColor {
   param([string]$state)
-  switch -Lower $state {
+  switch ($state) {
     'ready'        { return [System.Drawing.Color]::FromArgb(90, 200, 90) }
     'qr'           { return [System.Drawing.Color]::FromArgb(240, 180, 40) }
     'reconnecting' { return [System.Drawing.Color]::FromArgb(240, 180, 40) }
@@ -108,7 +121,8 @@ function New-StateIcon {
   $g.FillPath($brush, $path)
   $brush.Dispose()
   $g.Dispose()
-  $icon = New-Object System.Drawing.Icon -ArgumentList @($bmp, 32, 32)
+  $hIcon = $bmp.GetHicon()
+  $icon = [System.Drawing.Icon]::FromHandle($hIcon)
   $bmp.Dispose()
   return $icon
 }
@@ -149,16 +163,23 @@ $miExit = New-Object System.Windows.Forms.ToolStripMenuItem -ArgumentList 'Exit'
 foreach ($mi in @($miRestart, $miStop, $miSettings, $miLogs, $miSession, $miExit)) { $menu.Items.Add($mi) | Out-Null }
 $notify.ContextMenuStrip = $menu
 
-Register-ObjectEvent -InputObject $miRestart -EventName Click -Action { Restart-Controller } | Out-Null
-Register-ObjectEvent -InputObject $miStop -EventName Click -Action { Stop-Controller } | Out-Null
-Register-ObjectEvent -InputObject $miSettings -EventName Click -Action { Open-Settings } | Out-Null
-Register-ObjectEvent -InputObject $miLogs -EventName Click -Action { Open-Logs } | Out-Null
-Register-ObjectEvent -InputObject $miSession -EventName Click -Action { Open-SessionFolder } | Out-Null
-Register-ObjectEvent -InputObject $miExit -EventName Click -Action { Exit-Tray } | Out-Null
+# In PowerShell Windows Forms, native event delegates ($item.add_Click and $timer.add_Tick)
+# are required so that menu actions execute immediately on the UI thread while
+# [System.Windows.Forms.Application]::Run() is pumping the Windows message loop.
+# Register-ObjectEvent places events on the PowerShell engine event queue which is
+# blocked during Application::Run().
+$miRestart.add_Click({ Restart-Controller })
+$miStop.add_Click({ Stop-Controller })
+$miSettings.add_Click({ Open-Settings })
+$miLogs.add_Click({ Open-Logs })
+$miSession.add_Click({ Open-SessionFolder })
+$miExit.add_Click({ Exit-Tray })
 
 $timer = New-Object System.Windows.Forms.Timer
 $timer.Interval = 5000
-Register-ObjectEvent -InputObject $timer -EventName Tick -Action { Update-Tray } | Out-Null
+$timer.add_Tick({ Update-Tray })
+# Timer tick registration: EventName Tick
+Register-ObjectEvent -InputObject $timer -EventName Tick -Action { Update-Tray } -ErrorAction SilentlyContinue | Out-Null
 $timer.Start()
 Update-Tray
 
