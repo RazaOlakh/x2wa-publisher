@@ -64,7 +64,7 @@ function buildDom() {
   return { ids, els };
 }
 
-function runPopup({ status, channels, qr, storage }) {
+function runPopup({ status, channels, qr, storage, version, update, push, sync }) {
   const { ids, els } = buildDom();
   const storeData = Object.assign({}, storage);
 
@@ -84,6 +84,22 @@ function runPopup({ status, channels, qr, storage }) {
       return jsonResponse(200, qr);
     }
     if (u.endsWith('/auth/logout')) return jsonResponse(200, { ok: true });
+    if (u.endsWith('/version')) {
+      if (version === 'UNREACHABLE') throw new Error('connect ECONNREFUSED');
+      return jsonResponse(200, version || { ok: true, branch: 'main', sha: '1234567', dirty: false, upstream: 'origin/main', behind: 0, ahead: 0 });
+    }
+    if (u.endsWith('/version/check')) {
+      return jsonResponse(200, typeof version === 'function' ? version() : (version || { ok: true, branch: 'main', sha: '1234567', dirty: false, upstream: 'origin/main', behind: 0, ahead: 0 }));
+    }
+    if (u.endsWith('/update')) {
+      return jsonResponse(200, update || { ok: true, updated: true, from: '1234567', to: '7654321', files: 1 });
+    }
+    if (u.endsWith('/push')) {
+      return jsonResponse(200, push || { ok: true, pushed: true, branch: 'main', sha: '1234567', ahead: 0, behind: 0 });
+    }
+    if (u.endsWith('/sync')) {
+      return jsonResponse(200, sync || { ok: true, synced: true, pulled: true, pushed: true, from: '1234567', to: '7654321', files: 1, ahead: 0, behind: 0 });
+    }
     throw new Error('unexpected fetch ' + u);
   };
 
@@ -320,6 +336,86 @@ const wait = () => new Promise((r) => setTimeout(r, 30));
     ctx.fire('disconnectBtn', 'click');
     check('first click asks to confirm', /Confirm/i.test(txt(ctx.els, 'disconnectBtn')), txt(ctx.els, 'disconnectBtn'));
     check('warns about new QR', /new QR scan/i.test(txt(ctx.els, 'channelNote')), txt(ctx.els, 'channelNote'));
+  }
+
+  // 13. Version card: Up to date
+  console.log('version: up to date');
+  {
+    const ctx = runPopup({
+      status: { state: 'ready', me: { _serialized: '1@c.us' } },
+      channels: { channels: [] },
+      version: { ok: true, branch: 'main', sha: 'abcdef1', dirty: false, upstream: 'origin/main', behind: 0, ahead: 0, checkedAt: Date.now() },
+    });
+    await ctx.ready;
+    check('up to date title', /Up to date/i.test(txt(ctx.els, 'verTitle')), txt(ctx.els, 'verTitle'));
+    check('green dot', ctx.els.verDot.className.includes('on'));
+    check('sync not primary', !ctx.els.syncBtn.className.includes('primary'));
+    check('update not primary', !ctx.els.updateBtn.className.includes('primary'));
+    check('push not primary', !ctx.els.pushBtn.className.includes('primary'));
+  }
+
+  // 14. Version card: Behind remote (updates available) -> Pull highlighted
+  console.log('version: behind (updates available)');
+  {
+    const ctx = runPopup({
+      status: { state: 'ready', me: { _serialized: '1@c.us' } },
+      channels: { channels: [] },
+      version: { ok: true, branch: 'main', sha: 'abcdef1', dirty: false, upstream: 'origin/main', behind: 2, ahead: 0, checkedAt: Date.now() },
+    });
+    await ctx.ready;
+    check('shows updates available', /2 updates? available/i.test(txt(ctx.els, 'verTitle')), txt(ctx.els, 'verTitle'));
+    check('pull button is primary', ctx.els.updateBtn.className.includes('primary'));
+    check('pull button indicates count', /Pull \(2\)/.test(txt(ctx.els, 'updateBtn')), txt(ctx.els, 'updateBtn'));
+    ctx.fire('updateBtn', 'click');
+    check('pull asks confirmation', /Confirm pull/i.test(txt(ctx.els, 'updateBtn')), txt(ctx.els, 'updateBtn'));
+  }
+
+  // 15. Version card: Ahead of remote (local commits) -> Push highlighted
+  console.log('version: ahead (local commits waiting)');
+  {
+    const ctx = runPopup({
+      status: { state: 'ready', me: { _serialized: '1@c.us' } },
+      channels: { channels: [] },
+      version: { ok: true, branch: 'main', sha: 'abcdef1', dirty: false, upstream: 'origin/main', behind: 0, ahead: 3, checkedAt: Date.now() },
+    });
+    await ctx.ready;
+    check('shows commits ahead', /3 local commits? ahead/i.test(txt(ctx.els, 'verTitle')), txt(ctx.els, 'verTitle'));
+    check('push button is primary', ctx.els.pushBtn.className.includes('primary'));
+    check('push button indicates count', /Push \(3\)/.test(txt(ctx.els, 'pushBtn')), txt(ctx.els, 'pushBtn'));
+    ctx.fire('pushBtn', 'click');
+    check('push asks confirmation', /Confirm push/i.test(txt(ctx.els, 'pushBtn')), txt(ctx.els, 'pushBtn'));
+  }
+
+  // 16. Version card: Both ahead and behind -> Sync highlighted
+  console.log('version: both ahead and behind (diverged)');
+  {
+    const ctx = runPopup({
+      status: { state: 'ready', me: { _serialized: '1@c.us' } },
+      channels: { channels: [] },
+      version: { ok: true, branch: 'main', sha: 'abcdef1', dirty: false, upstream: 'origin/main', behind: 1, ahead: 2, checkedAt: Date.now() },
+    });
+    await ctx.ready;
+    check('shows behind and ahead', /1 behind, 2 ahead/i.test(txt(ctx.els, 'verTitle')), txt(ctx.els, 'verTitle'));
+    check('sync button is primary', ctx.els.syncBtn.className.includes('primary'));
+    check('sync button shows counts', /Sync \(1↓ 2↑\)/.test(txt(ctx.els, 'syncBtn')), txt(ctx.els, 'syncBtn'));
+    ctx.fire('syncBtn', 'click');
+    check('sync asks confirmation', /Confirm sync/i.test(txt(ctx.els, 'syncBtn')), txt(ctx.els, 'syncBtn'));
+  }
+
+  // 17. Version card: Dirty tree (uncommitted edits) -> Actions disabled
+  console.log('version: uncommitted changes');
+  {
+    const ctx = runPopup({
+      status: { state: 'ready', me: { _serialized: '1@c.us' } },
+      channels: { channels: [] },
+      version: { ok: true, branch: 'main', sha: 'abcdef1', dirty: true, upstream: 'origin/main', behind: 1, ahead: 1 },
+    });
+    await ctx.ready;
+    check('shows local changes', /Local changes/i.test(txt(ctx.els, 'verTitle')), txt(ctx.els, 'verTitle'));
+    check('sync button disabled', ctx.els.syncBtn.disabled === true);
+    check('pull button disabled', ctx.els.updateBtn.disabled === true);
+    check('push button disabled', ctx.els.pushBtn.disabled === true);
+    check('note explains uncommitted edits', /uncommitted edits/i.test(txt(ctx.els, 'verNote')), txt(ctx.els, 'verNote'));
   }
 
   console.log(failures ? `\n${failures} FAILURE(S)` : '\nALL POPUP STATE TESTS PASSED');

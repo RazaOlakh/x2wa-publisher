@@ -710,7 +710,7 @@ const server = http.createServer(async (req, res) => {
       log('info', 'version-check', { ok: r.ok, behind: r.behind, checkFailed: r.checkFailed });
       return json(res, r.ok ? 200 : 500, r);
     }
-    if (req.method === 'POST' && url.pathname === '/update') {
+    if (req.method === 'POST' && (url.pathname === '/update' || url.pathname === '/pull')) {
       const r = await repo.update();
       log(r.ok ? 'info' : 'warn', 'update', {
         ok: r.ok, error: r.error, from: r.from, to: r.to, files: r.files,
@@ -719,6 +719,28 @@ const server = http.createServer(async (req, res) => {
         // Answer first, then restart: the controller restarting is the whole
         // point, so it happens once this response is on its way. Best
         // effort - someone running it by hand has no unit to restart.
+        setTimeout(() => {
+          try {
+            const { spawn } = require('child_process');
+            spawn('systemctl', ['--user', 'restart', 'x2wa-controller'], { detached: true, stdio: 'ignore' }).unref();
+          } catch (e) { log('warn', 'restart-failed', { error: String((e && e.message) || e) }); }
+        }, 1500);
+      }
+      return json(res, r.ok ? 200 : 409, r);
+    }
+    if (req.method === 'POST' && url.pathname === '/push') {
+      const r = await repo.push();
+      log(r.ok ? 'info' : 'warn', 'push', {
+        ok: r.ok, error: r.error, branch: r.branch, sha: r.sha,
+      });
+      return json(res, r.ok ? 200 : 409, r);
+    }
+    if (req.method === 'POST' && url.pathname === '/sync') {
+      const r = await repo.sync();
+      log(r.ok ? 'info' : 'warn', 'sync', {
+        ok: r.ok, error: r.error, pulled: r.pulled, pushed: r.pushed, from: r.from, to: r.to, files: r.files,
+      });
+      if (r.ok && r.restartController) {
         setTimeout(() => {
           try {
             const { spawn } = require('child_process');

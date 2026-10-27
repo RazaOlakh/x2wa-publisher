@@ -15,6 +15,7 @@ const ui = {
   verCard: el('versionCard'), verDot: el('verDot'), verTitle: el('verTitle'),
   verDetail: el('verDetail'), verNote: el('verNote'),
   checkUpd: el('checkUpdBtn'), update: el('updateBtn'),
+  pull: el('updateBtn'), push: el('pushBtn'), sync: el('syncBtn'),
 };
 
 const store = {
@@ -328,11 +329,40 @@ async function refresh() {
 // forward. Reading the status is local and cheap, so it can ride along with
 // every refresh; only "Check for updates" goes to the network.
 let updateArmed = false;
+let pushArmed = false;
+let syncArmed = false;
+let disarmTimer = null;
+
+function disarmAllActions() {
+  if (disarmTimer) { clearTimeout(disarmTimer); disarmTimer = null; }
+  updateArmed = false;
+  pushArmed = false;
+  syncArmed = false;
+  if (ui.update) {
+    ui.update.classList.remove("confirm");
+    ui.update.textContent = "Pull";
+  }
+  if (ui.push) {
+    ui.push.classList.remove("confirm");
+    ui.push.textContent = "Push";
+  }
+  if (ui.sync) {
+    ui.sync.classList.remove("confirm");
+    ui.sync.textContent = "Sync";
+  }
+}
+
+function setButtonsDisabled(disabled) {
+  if (ui.checkUpd) ui.checkUpd.disabled = disabled;
+  if (ui.sync) ui.sync.disabled = disabled;
+  if (ui.update) ui.update.disabled = disabled;
+  if (ui.push) ui.push.disabled = disabled;
+}
 
 function ago(ts) {
-  if (!ts) return '';
+  if (!ts) return "";
   const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
-  if (s < 60) return 'just now';
+  if (s < 60) return "just now";
   if (s < 3600) return `${Math.round(s / 60)} min ago`;
   if (s < 86400) return `${Math.round(s / 3600)} h ago`;
   return `${Math.round(s / 86400)} d ago`;
@@ -341,8 +371,8 @@ function ago(ts) {
 function setVer(dotClass, title, detail) {
   ui.verDot.className = `dot ${dotClass}`;
   ui.verTitle.textContent = title;
-  ui.verDetail.textContent = detail || '';
-  ui.verDetail.classList.toggle('hidden', !detail);
+  ui.verDetail.textContent = detail || "";
+  ui.verDetail.classList.toggle("hidden", !detail);
 }
 
 // The popup re-reads the status every couple of seconds, which is what keeps
@@ -358,64 +388,92 @@ const verNote = (text, kind) => {
 
 function renderVersion(v) {
   if (!v) {
-    setVer('', 'Version unknown', '');
-    ui.checkUpd.disabled = true;
-    ui.update.classList.add('hidden');
+    setVer("", "Version unknown", "");
+    setButtonsDisabled(true);
     return;
   }
-  if (v.ok === false && v.error === 'not-a-repo') {
-    setVer('err', 'Not a git checkout', 'The controller could not find the project files.');
-    ui.checkUpd.disabled = true;
-    ui.update.classList.add('hidden');
+  if (v.ok === false && v.error === "not-a-repo") {
+    setVer("err", "Not a git checkout", "The controller could not find the project files.");
+    setButtonsDisabled(true);
     return;
   }
 
-  const where = `${v.branch || '?'} · ${(v.sha || '?').slice(0, 7)}`;
-  const checked = v.checkedAt ? ` · checked ${ago(v.checkedAt)}` : '';
+  const where = `${v.branch || "?"} · ${(v.sha || "?").slice(0, 7)}`;
+  const checked = v.checkedAt ? ` · checked ${ago(v.checkedAt)}` : "";
 
-  ui.update.classList.toggle('hidden', !(Number(v.behind) > 0));
-  ui.update.disabled = false;
-  ui.checkUpd.disabled = false;
+  setButtonsDisabled(false);
+
+  // Clear primary emphasis by default
+  if (ui.sync) ui.sync.classList.remove("primary");
+  if (ui.update) ui.update.classList.remove("primary");
+  if (ui.push) ui.push.classList.remove("primary");
+
+  // Reset base button labels if not currently armed
+  if (!updateArmed && ui.update) ui.update.textContent = "Pull";
+  if (!pushArmed && ui.push) ui.push.textContent = "Push";
+  if (!syncArmed && ui.sync) ui.sync.textContent = "Sync";
 
   if (v.dirty) {
-    // Uncommitted edits to tracked files: a pull would clobber them, so the
-    // update is not offered rather than being refused after a confirmation.
-    // Untracked files never reach this branch - the controller ignores them.
-    ui.update.classList.add('hidden');
-    setVer('wait', 'Local changes', `${where} · uncommitted`);
-    verNote('You have uncommitted edits, so updating is not offered — the update would be refused rather than touching your work. Untracked files never get in the way.', 'warn');
+    // Uncommitted edits: pull or sync would be refused to avoid clobbering work
+    if (ui.sync) ui.sync.disabled = true;
+    if (ui.update) ui.update.disabled = true;
+    if (ui.push) ui.push.disabled = true;
+    setVer("wait", "Local changes", `${where} · uncommitted`);
+    verNote("You have uncommitted edits. Commit or stash them before syncing, pulling, or pushing.", "warn");
     return;
   }
-  if (v.checkFailed === 'unreachable') {
-    // Being unable to ask is not the same as being up to date, so this is
-    // never dressed up as a clean bill of health.
-    setVer('wait', 'Could not reach the remote', where + checked);
-    verNote('The repository could not be reached, so this is the last known result rather than a fresh one.', 'warn');
+  if (v.checkFailed === "unreachable") {
+    setVer("wait", "Could not reach the remote", where + checked);
+    verNote("The repository could not be reached, so this is the last known result rather than a fresh one.", "warn");
     return;
   }
   if (v.behind === null || v.behind === undefined) {
-    setVer('', 'Update status unknown', where + checked);
-    if (!v.upstream) verNote('This checkout has no upstream branch to compare with.', 'warn');
-    else verNote('Press Check for updates to ask the remote.', 'idle');
+    setVer("", "Update status unknown", where + checked);
+    if (!v.upstream) verNote("This checkout has no upstream branch to compare with.", "warn");
+    else verNote("Press Check for updates to ask the remote.", "idle");
     return;
   }
-  if (Number(v.behind) > 0) {
-    setVer('wait', `${v.behind} update${v.behind === 1 ? '' : 's'} available`, where + checked);
-    verNote('Updates fast-forward this checkout to the latest commit on the remote.', 'idle');
+
+  const behind = Number(v.behind) || 0;
+  const ahead = Number(v.ahead) || 0;
+
+  if (behind > 0 && ahead > 0) {
+    setVer("wait", `${behind} behind, ${ahead} ahead`, where + checked);
+    if (ui.sync) {
+      ui.sync.classList.add("primary");
+      if (!syncArmed) ui.sync.textContent = `Sync (${behind}↓ ${ahead}↑)`;
+    }
+    if (!updateArmed && ui.update) ui.update.textContent = `Pull (${behind})`;
+    if (!pushArmed && ui.push) ui.push.textContent = `Push (${ahead})`;
+    verNote("Checkout has diverged from remote. Press Sync to pull updates and push commits.", "idle");
     return;
   }
-  if (Number(v.ahead) > 0) {
-    setVer('', `${v.ahead} local commit${Number(v.ahead) === 1 ? '' : 's'} ahead`, where + checked);
-    verNote('Your checkout has commits the remote has not seen.', 'idle');
+  if (behind > 0) {
+    setVer("wait", `${behind} update${behind === 1 ? "" : "s"} available`, where + checked);
+    if (ui.update) {
+      ui.update.classList.add("primary");
+      if (!updateArmed) ui.update.textContent = `Pull (${behind})`;
+    }
+    verNote("Updates fast-forward this checkout to the latest commit on the remote.", "idle");
     return;
   }
-  setVer('on', 'Up to date', where + checked);
-  verNote('', 'idle');
+  if (ahead > 0) {
+    setVer("", `${ahead} local commit${ahead === 1 ? "" : "s"} ahead`, where + checked);
+    if (ui.push) {
+      ui.push.classList.add("primary");
+      if (!pushArmed) ui.push.textContent = `Push (${ahead})`;
+    }
+    verNote("Your checkout has commits the remote has not seen.", "idle");
+    return;
+  }
+
+  setVer("on", "Up to date", where + checked);
+  verNote("", "idle");
 }
 
 async function versionStatus() {
   try {
-    const r = await req('/version');
+    const r = await req("/version");
     return r.ok ? r.body : null;
   } catch {
     return null;
@@ -423,80 +481,82 @@ async function versionStatus() {
 }
 
 function disarmUpdate() {
-  updateArmed = false;
-  ui.update.textContent = 'Update now';
-  ui.update.classList.remove('confirm');
+  disarmAllActions();
 }
 
-ui.checkUpd.addEventListener('click', async () => {
-  ui.checkUpd.disabled = true;
-  setVer('busy', 'Checking…', '');
-  setNote(ui.verNote, 'Asking the remote what it has.', 'idle');
+ui.checkUpd.addEventListener("click", async () => {
+  setButtonsDisabled(true);
+  disarmAllActions();
+  setVer("busy", "Checking…", "");
+  setNote(ui.verNote, "Asking the remote what it has.", "idle");
   holdVerNote();
   try {
-    const r = await req('/version/check', { method: 'POST' });
+    const r = await req("/version/check", { method: "POST" });
     renderVersion(r.ok ? r.body : null);
   } catch {
     renderVersion(null);
-    setNote(ui.verNote, 'Lost contact with the controller.', 'error');
+    setNote(ui.verNote, "Lost contact with the controller.", "error");
   }
-  ui.checkUpd.disabled = false;
+  setButtonsDisabled(false);
 });
 
-ui.update.addEventListener('click', async () => {
+ui.update.addEventListener("click", async () => {
   if (!updateArmed) {
+    disarmAllActions();
     updateArmed = true;
-    ui.update.textContent = 'Confirm update';
-    ui.update.classList.add('confirm');
+    ui.update.textContent = "Confirm pull";
+    ui.update.classList.add("confirm");
     holdVerNote();
     setNote(ui.verNote,
-      'This fast-forwards your checkout to the latest commit on the remote. Uncommitted edits are never touched, and untracked files do not block it.',
-      'warn');
-    setTimeout(disarmUpdate, 6000);
+      "This fast-forwards your checkout to the latest commit on the remote. Uncommitted edits are never touched, and untracked files do not block it.",
+      "warn");
+    disarmTimer = setTimeout(disarmAllActions, 6000);
     return;
   }
-  disarmUpdate();
+  disarmAllActions();
   holdVerNote();
-  ui.update.disabled = true;
-  ui.checkUpd.disabled = true;
-  setVer('busy', 'Updating…', '');
-  setNote(ui.verNote, 'Fast-forwarding to the latest commit.', 'idle');
+  setButtonsDisabled(true);
+  setVer("busy", "Pulling…", "");
+  setNote(ui.verNote, "Fast-forwarding to the latest commit.", "idle");
 
   let r;
-  try { r = await req('/update', { method: 'POST' }); }
+  try { r = await req("/update", { method: "POST" }); }
   catch {
-    ui.update.disabled = false; ui.checkUpd.disabled = false;
-    setVer('err', 'Update failed', '');
-    setNote(ui.verNote, 'Lost contact with the controller.', 'error');
+    setButtonsDisabled(false);
+    setVer("err", "Pull failed", "");
+    setNote(ui.verNote, "Lost contact with the controller.", "error");
     return;
   }
 
   const body = r.body || {};
   if (!r.ok) {
-    ui.update.disabled = false; ui.checkUpd.disabled = false;
-    if (body.error === 'local-changes') {
-      setVer('err', 'Update refused', 'You have uncommitted edits.');
-      setNote(ui.verNote, 'Commit or stash your work first — the update will not touch it.', 'warn');
+    setButtonsDisabled(false);
+    if (body.error === "local-changes") {
+      setVer("err", "Pull refused", "You have uncommitted edits.");
+      setNote(ui.verNote, "Commit or stash your work first — the pull will not touch it.", "warn");
     } else {
-      setVer('err', 'Update failed', '');
-      setNote(ui.verNote, body.detail || body.error || 'The update could not be applied.', 'error');
+      setVer("err", "Pull failed", "");
+      setNote(ui.verNote, body.detail || body.error || "The pull could not be applied.", "error");
     }
     return;
   }
 
   if (!body.updated) {
-    ui.update.disabled = false; ui.checkUpd.disabled = false;
-    setVer('on', 'Up to date', '');
-    setNote(ui.verNote, 'Already on the latest commit.', 'ok');
+    setButtonsDisabled(false);
+    setVer("on", "Up to date", "");
+    setNote(ui.verNote, "Already on the latest commit.", "ok");
+    renderVersion(await versionStatus());
     return;
   }
 
   // Reloading closes the popup, so leave the result where it can be read
   // next time it opens.
-  const message = `Updated ${body.from} → ${body.to}${body.restartController ? '. The controller is restarting.' : ''}`;
+  const message = `Pulled ${body.from} → ${body.to}${body.restartController ? ". The controller is restarting." : ""}`;
   await store.set({ updateNotice: { text: message, at: Date.now(), reloadExtension: Boolean(body.reloadExtension) } });
-  setVer('on', 'Updated', `${body.to.slice(0, 7)}`);
-  setNote(ui.verNote, message, 'ok');
+  setVer("on", "Pulled", `${body.to.slice(0, 7)}`);
+  setNote(ui.verNote, message, "ok");
+  setButtonsDisabled(false);
+  renderVersion(await versionStatus());
 
   if (body.reloadExtension) {
     // The extension on disk changed, but the running copy is the old one
@@ -504,6 +564,124 @@ ui.update.addEventListener('click', async () => {
     setTimeout(() => chrome.runtime.reload(), 900);
   }
 });
+
+if (ui.push) {
+  ui.push.addEventListener("click", async () => {
+    if (!pushArmed) {
+      disarmAllActions();
+      pushArmed = true;
+      ui.push.textContent = "Confirm push";
+      ui.push.classList.add("confirm");
+      holdVerNote();
+      setNote(ui.verNote,
+        "This pushes your local commits to the remote repository.",
+        "warn");
+      disarmTimer = setTimeout(disarmAllActions, 6000);
+      return;
+    }
+    disarmAllActions();
+    holdVerNote();
+    setButtonsDisabled(true);
+    setVer("busy", "Pushing…", "");
+    setNote(ui.verNote, "Pushing local commits to remote.", "idle");
+
+    let r;
+    try { r = await req("/push", { method: "POST" }); }
+    catch {
+      setButtonsDisabled(false);
+      setVer("err", "Push failed", "");
+      setNote(ui.verNote, "Lost contact with the controller.", "error");
+      return;
+    }
+
+    const body = r.body || {};
+    if (!r.ok) {
+      setButtonsDisabled(false);
+      if (body.error === "push-rejected-behind") {
+        setVer("err", "Push rejected", "Remote has newer commits.");
+        setNote(ui.verNote, "Remote has changes you do not have. Pull or Sync first.", "warn");
+      } else {
+        setVer("err", "Push failed", "");
+        setNote(ui.verNote, body.detail || body.error || "The push could not be completed.", "error");
+      }
+      return;
+    }
+
+    setButtonsDisabled(false);
+    setVer("on", "Pushed", (body.sha || "").slice(0, 7));
+    setNote(ui.verNote, "Successfully pushed commits to remote.", "ok");
+    renderVersion(await versionStatus());
+  });
+}
+
+if (ui.sync) {
+  ui.sync.addEventListener("click", async () => {
+    if (!syncArmed) {
+      disarmAllActions();
+      syncArmed = true;
+      ui.sync.textContent = "Confirm sync";
+      ui.sync.classList.add("confirm");
+      holdVerNote();
+      setNote(ui.verNote,
+        "This synchronizes your checkout with remote: pulling updates and pushing your commits.",
+        "warn");
+      disarmTimer = setTimeout(disarmAllActions, 6000);
+      return;
+    }
+    disarmAllActions();
+    holdVerNote();
+    setButtonsDisabled(true);
+    setVer("busy", "Syncing…", "");
+    setNote(ui.verNote, "Synchronizing with remote repository.", "idle");
+
+    let r;
+    try { r = await req("/sync", { method: "POST" }); }
+    catch {
+      setButtonsDisabled(false);
+      setVer("err", "Sync failed", "");
+      setNote(ui.verNote, "Lost contact with the controller.", "error");
+      return;
+    }
+
+    const body = r.body || {};
+    if (!r.ok) {
+      setButtonsDisabled(false);
+      if (body.error === "local-changes") {
+        setVer("err", "Sync refused", "You have uncommitted edits.");
+        setNote(ui.verNote, "Commit or stash your work first — sync will not touch it.", "warn");
+      } else if (body.error === "sync-conflict") {
+        setVer("err", "Sync conflict", "Merge conflict detected.");
+        setNote(ui.verNote, body.detail || "Rebase conflict detected. Rebase was aborted to protect your code.", "error");
+      } else {
+        setVer("err", "Sync failed", "");
+        setNote(ui.verNote, body.detail || body.error || "Sync could not be completed.", "error");
+      }
+      return;
+    }
+
+    setButtonsDisabled(false);
+    let msg = "Checkout synchronized.";
+    if (body.pulled && body.pushed) {
+      msg = `Synced: pulled ${body.from} → ${body.to} and pushed commits.`;
+    } else if (body.pulled) {
+      msg = `Synced: pulled ${body.from} → ${body.to}.`;
+    } else if (body.pushed) {
+      msg = "Synced: pushed local commits to remote.";
+    } else {
+      msg = "Already fully synchronized with remote.";
+    }
+
+    if (body.restartController) msg += " The controller is restarting.";
+    if (body.reloadExtension) {
+      await store.set({ updateNotice: { text: msg, at: Date.now(), reloadExtension: true } });
+      setTimeout(() => chrome.runtime.reload(), 900);
+    }
+
+    setVer("on", "Synchronized", (body.to || body.sha || "").slice(0, 7));
+    setNote(ui.verNote, msg, "ok");
+    renderVersion(await versionStatus());
+  });
+}
 
 // Shown once, on the next open, so a reload cannot swallow the result.
 (async () => {
