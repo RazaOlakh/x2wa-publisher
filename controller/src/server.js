@@ -15,7 +15,7 @@ const { decodeInlineImage, isInlineImage, MAX_INLINE_BYTES } = require('./inline
 const videoPipeline = require('./video-pipeline');
 const hlsPrefetch = require('./hls-prefetch');
 const duplicate = require('./duplicate-guard');
-const { translateText, readTranslateRequest } = require('./translate');
+const { translateText, readTranslateRequest, transliterateText, translatePostText } = require('./translate');
 
 const HOST = '127.0.0.1';
 const PORT = parseInt(process.env.CONTROLLER_PORT || '47825', 10);
@@ -603,7 +603,7 @@ async function runSend(body) {
       const t0 = Date.now();
       log('info','translate-start',{requestId,jobId,channelId,target,chars:text.length});
       try {
-        outText = await translateText(text, target);
+        outText = await translatePostText(text, target, body.author);
         log('info','translate-done',{requestId,jobId,target,charsIn:text.length,charsOut:outText.length,ms:Date.now()-t0});
       } catch (e) {
         duplicateLog.set(key, { ts: now, status: 'failed', jobId });
@@ -809,13 +809,15 @@ const server = http.createServer(async (req, res) => {
     // Urdu post. The post itself is translated through /send's translateTo;
     // this is for the small pieces that are translated on their own. It does
     // not touch WhatsApp, so it is available whenever the controller is.
-    if (req.method === 'POST' && url.pathname === '/translate') {
+    if (req.method === 'POST' && (url.pathname === '/translate' || url.pathname === '/transliterate')) {
       const body = JSON.parse(await readBody(req));
       const request = readTranslateRequest(body);
       if (!request.ok) { log('error','translate-rejected-bad-request',{}); return json(res, 400, { error: request.error }); }
       try {
-        const out = await translateText(request.text, request.to);
-        log('info','translate-http',{to:request.to,charsIn:request.text.length,charsOut:out.length});
+        const out = request.mode === 'translate'
+          ? await translateText(request.text, request.to)
+          : await transliterateText(request.text, request.to);
+        log('info','translate-http',{to:request.to,charsIn:request.text.length,charsOut:out.length,mode:request.mode||'transliterate'});
         return json(res, 200, { ok: true, text: out, to: request.to });
       } catch (e) {
         log('warn','translate-http-failed',{to:request.to,error:errMsg(e)});
@@ -833,6 +835,10 @@ const server = http.createServer(async (req, res) => {
       // so a stray value can never reshape the translate request.
       if (body.translateTo != null && (typeof body.translateTo !== 'string' || body.translateTo.length === 0 || body.translateTo.length > 8)) {
         log('error','send-rejected-bad-request',{badField:'translateTo'});
+        return json(res, 400, { error: 'bad-request' });
+      }
+      if (body.author != null && (typeof body.author !== 'string' || body.author.length > 200)) {
+        log('error','send-rejected-bad-request',{badField:'author'});
         return json(res, 400, { error: 'bad-request' });
       }
       log('info','send-request-validated',{requestId:body.requestId,tweetId:body.tweetId,mediaTypes:body.media.map(m=>m.type)});

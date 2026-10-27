@@ -19,6 +19,8 @@
 // logged in one place. Nothing of the text is logged.
 
 const ENDPOINT = 'https://translate.googleapis.com/translate_a/t';
+const TRANSLITERATE_ENDPOINT = 'https://inputtools.google.com/request';
+const TRANSLITERATE_ITC = 'ur-t-i0-und';
 const CLIENT = 'dict-chrome-ex';
 const USER_AGENT =
   'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
@@ -190,6 +192,112 @@ async function translateText(text, target, deps) {
   return unmaskHandles(out, tokens);
 }
 
+function readTransliteration(data, fallback) {
+  if (data && data[0] === 'SUCCESS' && Array.isArray(data[1])) {
+    const parts = data[1].map((p) => {
+      if (p && Array.isArray(p[1]) && typeof p[1][0] === 'string' && p[1][0].trim()) {
+        return p[1][0].trim();
+      }
+      return (p && typeof p[0] === 'string' && p[0].trim()) || '';
+    });
+    const result = parts.filter(Boolean).join(' ').trim();
+    if (result) return result;
+  }
+  return fallback;
+}
+
+function isUrduScript(text) {
+  return typeof text === 'string' && /[\u0600-\u06FF\u0750-\u077F\uFB50-\uFDFF\uFE70-\uFEFF]/.test(text);
+}
+
+async function requestTransliterationChunk(chunk, target, deps) {
+  const fetchImpl = (deps && deps.fetchImpl) || fetch;
+  const itc = (target === 'ur' || !target) ? TRANSLITERATE_ITC : `${target}-t-i0-und`;
+  const url = `${TRANSLITERATE_ENDPOINT}?text=${encodeURIComponent(chunk)}&itc=${encodeURIComponent(itc)}&num=1`;
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => { try { controller.abort(); } catch {} },
+    (deps && deps.timeoutMs) || TIMEOUT_MS);
+  try {
+    const res = await fetchImpl(url, {
+      method: 'GET',
+      headers: {
+        'User-Agent': USER_AGENT,
+      },
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      const err = new Error('transliterate-http-' + res.status);
+      err.status = res.status;
+      throw err;
+    }
+    const data = await res.json();
+    return readTransliteration(data, chunk);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function requestTransliterationRetrying(chunk, target, deps) {
+  try {
+    return await requestTransliterationChunk(chunk, target, deps);
+  } catch (e) {
+    const status = e && e.status;
+    const transient = e && (!status || status === 429 || (status >= 500 && status <= 599));
+    if (!transient) return chunk;
+    await new Promise((r) => setTimeout(r, (deps && deps.retryDelayMs) || RETRY_DELAY_MS));
+    try {
+      return await requestTransliterationChunk(chunk, target, deps);
+    } catch {
+      return chunk;
+    }
+  }
+}
+
+// Phonetically transliterate text into the target script (default Urdu).
+// Used for names so words like "Reborn" are written phonetically in Urdu script
+// ("ریبورن") rather than being semantically translated into unrelated words
+// like "دوبارہ پیدا ہوا".
+async function transliterateText(text, target, deps) {
+  if (!isTranslatable(text)) return '';
+  const trimmed = text.trim();
+  if (isUrduScript(trimmed) && !/[A-Za-z]/.test(trimmed)) {
+    return trimmed;
+  }
+  const lang = target || 'ur';
+  const { text: masked, tokens } = maskHandles(trimmed);
+  try {
+    const res = await requestTransliterationRetrying(masked, lang, deps);
+    return unmaskHandles(res, tokens);
+  } catch {
+    return trimmed;
+  }
+}
+
+// Translate a post's text into the target language (default Urdu).
+// If the text starts with an author header (separated by \n\n) or matches `author`,
+// the author name is phonetically transliterated into Urdu (e.g. "Reborn" -> "ریبورن")
+// rather than being semantically translated into Urdu vocabulary words (like "دوبارہ پیدا ہوا"),
+// while the rest of the post text is translated normally.
+async function translatePostText(text, target, author, deps) {
+  if (!isTranslatable(text)) return '';
+  const lang = target || 'ur';
+  const sepIdx = text.indexOf('\n\n');
+  if (sepIdx > 0) {
+    const firstLine = text.slice(0, sepIdx).trim();
+    const rest = text.slice(sepIdx + 2);
+    const authorMatches = author && typeof author === 'string' &&
+      (firstLine.toLowerCase() === author.trim().toLowerCase() || firstLine === author.trim());
+    const isUrduAuthorHeader = isUrduScript(firstLine) && !/[A-Za-z]/.test(firstLine);
+    if (authorMatches || isUrduAuthorHeader) {
+      const transliteratedAuthor = await transliterateText(firstLine, lang, deps);
+      const translatedBody = await translateText(rest, lang, deps);
+      return transliteratedAuthor + '\n\n' + translatedBody;
+    }
+  }
+  return translateText(text, lang, deps);
+}
+
 // The standalone translation request (a short string, e.g. an author's name
 // that heads an Urdu post). Validate it here so a stray value can never reshape
 // the translate call, whatever the caller sent.
@@ -201,11 +309,17 @@ function readTranslateRequest(body) {
   if (typeof text !== 'string' || text.length === 0 || text.length > MAX_REQUEST_CHARS) return { ok: false, error: 'bad-request' };
   const to = body.to == null ? 'ur' : body.to;
   if (typeof to !== 'string' || to.length === 0 || to.length > 8) return { ok: false, error: 'bad-request' };
-  return { ok: true, text, to };
+  const out = { ok: true, text, to };
+  if (body.mode === 'translate' || body.mode === 'transliterate') out.mode = body.mode;
+  return out;
 }
 
 module.exports = {
   translateText,
+  transliterateText,
+  translatePostText,
+  readTransliteration,
+  isUrduScript,
   chunkText,
   readTranslation,
   isTranslatable,
@@ -215,4 +329,5 @@ module.exports = {
   MAX_CHUNK,
   MAX_REQUEST_CHARS,
   ENDPOINT,
+  TRANSLITERATE_ENDPOINT,
 };
