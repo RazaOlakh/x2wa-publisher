@@ -375,6 +375,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       const payload = {
         tweetId: p.tweetId,
         tweetUrl: p.tweetUrl,
+        author: p.author || null,
         text: p.text,
         media: media.filter((m) => m.source),
         mediaFailures,

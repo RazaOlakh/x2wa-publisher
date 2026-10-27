@@ -10,7 +10,7 @@
 //   node controller/test/translate.test.js
 const {
   translateText, chunkText, readTranslation, isTranslatable, readTranslateRequest, MAX_CHUNK, ENDPOINT,
-  maskHandles, unmaskHandles,
+  maskHandles, unmaskHandles, transliterateText, translatePostText, readTransliteration, isUrduScript,
 } = require('../src/translate');
 
 let failures = 0;
@@ -212,6 +212,82 @@ console.log('the translation request');
     const out = await translateText('Hello @elonmusk', 'ur', { fetchImpl, retryDelayMs: 0 });
     eq('the handle is restored after translation', out, 'ہیلو @elonmusk');
     check('the translator saw the masked handle', decodeURIComponent(String(fetchImpl.calls[0].opts.body).split('q=')[1] || '').includes('@h0'), String(fetchImpl.calls[0].opts.body));
+  }
+
+  console.log('transliteration reads candidates from Google Input Tools');
+  {
+    eq('single token transliteration is parsed', readTransliteration(['SUCCESS', [['Reborn', ['ریبورن']]]], 'Reborn'), 'ریبورن');
+    eq('multi token transliteration is joined', readTransliteration(['SUCCESS', [['Elon', ['ایلون']], ['Musk', ['مسک']]]], 'Elon Musk'), 'ایلون مسک');
+    eq('candidate with spaces is preserved', readTransliteration(['SUCCESS', [['Elon Musk', ['الوں مسک']]]], 'Elon Musk'), 'الوں مسک');
+    eq('failed response returns fallback', readTransliteration(['FAILED', []], 'fallback'), 'fallback');
+    eq('null response returns fallback', readTransliteration(null, 'fallback'), 'fallback');
+  }
+
+  console.log('Urdu script detection');
+  {
+    eq('Urdu text is detected', isUrduScript('عمران خان'), true);
+    eq('transliterated Urdu word is detected', isUrduScript('ریبورن'), true);
+    eq('Latin text is not Urdu', isUrduScript('Reborn'), false);
+    eq('Latin sentence is not Urdu', isUrduScript('Hello world'), false);
+  }
+
+  console.log('transliterateText phonetically transliterates names');
+  {
+    const fetchImpl = fakeFetch([{ json: ['SUCCESS', [['Reborn', ['ریبورن']]]] }]);
+    const out = await transliterateText('Reborn', 'ur', { fetchImpl, retryDelayMs: 0 });
+    eq('Reborn transliterates to phonetic Urdu script', out, 'ریبورن');
+    check('requested ur-t-i0-und input tools endpoint', fetchImpl.calls[0].url.includes('itc=ur-t-i0-und'), fetchImpl.calls[0].url);
+  }
+  {
+    // Already in Urdu script: no fetch needed
+    const fetchImpl = fakeFetch([]);
+    const out = await transliterateText('عمران خان', 'ur', { fetchImpl });
+    eq('Urdu name is returned as-is without network call', out, 'عمران خان');
+    eq('no fetch was made for Urdu text', fetchImpl.calls.length, 0);
+  }
+  {
+    // Handles inside names are shielded
+    const fetchImpl = fakeFetch([{ json: ['SUCCESS', [['Reborn @h0', ['ریبورن @h0']]]] }]);
+    const out = await transliterateText('Reborn @reborn', 'ur', { fetchImpl, retryDelayMs: 0 });
+    eq('handle is preserved during transliteration', out, 'ریبورن @reborn');
+  }
+  {
+    // Failure fallback returns original
+    const fetchImpl = fakeFetch([{ status: 500, ok: false }, { status: 500, ok: false }]);
+    const out = await transliterateText('Reborn', 'ur', { fetchImpl, retryDelayMs: 0 });
+    eq('transliteration failure falls back gracefully to raw text', out, 'Reborn');
+  }
+  {
+    eq('empty text returns empty', await transliterateText(''), '');
+    eq('whitespace only returns empty', await transliterateText('   '), '');
+  }
+
+  console.log('translatePostText handles author headers and post body');
+  {
+    // First call to fetch is for transliterating the author (Input Tools),
+    // second call is for translating the post body (Translate API).
+    const fetchImpl = fakeFetch([
+      { json: ['SUCCESS', [['Reborn', ['ریبورن']]]] },
+      { json: [['ہیلو دنیا', 'en']] },
+    ]);
+    const out = await translatePostText('Reborn\n\nHello world', 'ur', 'Reborn', { fetchImpl, retryDelayMs: 0 });
+    eq('author header is transliterated and body translated', out, 'ریبورن\n\nہیلو دنیا');
+  }
+  {
+    // Already Urdu author header is not re-translated or corrupted
+    const fetchImpl = fakeFetch([
+      { json: [['ہیلو دنیا', 'en']] },
+    ]);
+    const out = await translatePostText('ریبورن\n\nHello world', 'ur', 'Reborn', { fetchImpl, retryDelayMs: 0 });
+    eq('already-Urdu author header is preserved and body translated', out, 'ریبورن\n\nہیلو دنیا');
+  }
+  {
+    // Post without author header translates body normally
+    const fetchImpl = fakeFetch([
+      { json: [['ہیلو دنیا', 'en']] },
+    ]);
+    const out = await translatePostText('Hello world', 'ur', null, { fetchImpl, retryDelayMs: 0 });
+    eq('plain post without author header translates normally', out, 'ہیلو دنیا');
   }
 
   console.log(failures ? `\n${failures} FAILURE(S)` : '\nALL TRANSLATE TESTS PASSED');

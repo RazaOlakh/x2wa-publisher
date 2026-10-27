@@ -699,16 +699,22 @@ function showReadError(btn, label, title, detail, requestId, error) {
 }
 
 // The author's name for an Urdu post. Per the post-translate behaviour: names
-// are never translated - the author name keeps its original spelling, in
-// whatever script the profile wrote it, and it is the post's *text* that the
-// controller translates (shielding handles inside it). A name that is already
-// in the post's script is kept; an English-spelled name on an Urdu post keeps
-// its Latin spelling too, rather than being run through the translator.
+// are phonetically transliterated into Urdu script rather than semantically translated
+// (e.g. "Reborn" transliterates to "ریبورن" instead of "دوبارہ پیدا ہوا").
+// A name that is already in Urdu script is kept as-is, and on network failure the
+// original name is kept rather than leaving the post without one.
 async function urduAuthorName(name, requestId) {
   const original = String(name == null ? '' : name);
   const trimmed = original.trim();
-  if (!trimmed) return '';
-  return trimmed;
+  if (!trimmed || isUrduText(trimmed)) return original;
+  try {
+    const res = await chrome.runtime.sendMessage({ type: 'TRANSLATE_TEXT', text: trimmed, to: 'ur', requestId });
+    if (res && res.ok && typeof res.text === 'string' && res.text.trim()) return res.text.trim();
+    try { xlog('warn', 'author-name-translate-failed', { requestId, error: (res && res.error) || 'empty' }); } catch {}
+  } catch (e) {
+    try { xlog('warn', 'author-name-translate-failed', { requestId, error: e && e.message }); } catch {}
+  }
+  return original;
 }
 
 // Publish a quote-tweet: the picture is the post it quotes, the caption is this
@@ -729,7 +735,7 @@ async function postQuoteShot(btn, v, variant, article, quoteEl, requestId) {
   // named variant does it for an ordinary post.
   let name = post.author;
   if (v.nameTheAuthor) {
-    name = isUrduText(post.text) ? await urduAuthorName(post.author, requestId) : post.author;
+    name = (isUrduText(post.text) || v.translateTo === 'ur') ? await urduAuthorName(post.author, requestId) : post.author;
   }
   const caption = quoteCaption(post.text, variant, name);
 
@@ -831,7 +837,7 @@ async function onPostClick(ev, btn, variant) {
   // translates it, in the controller, after this reordering so the link stays
   // first. With no author found the text goes through untouched.
   if (v.nameTheAuthor) {
-    const name = isUrduText(post.text) ? await urduAuthorName(post.author, requestId) : post.author;
+    const name = (isUrduText(post.text) || v.translateTo === 'ur') ? await urduAuthorName(post.author, requestId) : post.author;
     post = { ...post, text: withAuthorHeader(post.text, name) };
   }
 
