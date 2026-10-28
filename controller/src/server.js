@@ -320,7 +320,14 @@ for (const signal of ['SIGTERM', 'SIGINT']) {
 
 startClient('startup');
 
-function json(res, code, obj) { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(obj, null, 1)); }
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Requested-With, *',
+  'Access-Control-Allow-Private-Network': 'true',
+};
+
+function json(res, code, obj) { res.writeHead(code, Object.assign({ 'Content-Type': 'application/json' }, CORS_HEADERS)); res.end(JSON.stringify(obj, null, 1)); }
 
 // Renders the pairing QR as an SVG data URL. The extension displays the
 // image, so the scannable payload itself is never sent to the browser
@@ -684,6 +691,10 @@ function cleanup(dir) {
 }
 
 const server = http.createServer(async (req, res) => {
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204, CORS_HEADERS);
+    return res.end();
+  }
   const url = new URL(req.url, `http://${HOST}:${PORT}`);
   try {
     if (req.method === 'GET' && url.pathname === '/health') {

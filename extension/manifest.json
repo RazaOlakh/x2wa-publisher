@@ -10,7 +10,8 @@
     "https://pbs.twimg.com/*",
     "https://video.twimg.com/*",
     "https://t.co/*",
-    "http://127.0.0.1/*"
+    "http://127.0.0.1/*",
+    "http://localhost/*"
   ],
   "content_scripts": [
     {
