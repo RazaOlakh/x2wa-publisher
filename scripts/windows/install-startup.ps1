@@ -124,7 +124,7 @@ start "" /b "$nodeExe" "$SupervisorJs" >> "%X2WA_LOG%" 2>&1
 
 rem Give it a moment, then record whether it actually came up.
 ping 127.0.0.1 -n 9 >nul
-powershell -NoProfile -Command "try { (Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:$Port/health' -TimeoutSec 3).Content | Out-File -Append -Encoding UTF8 '%X2WA_LOG%' } catch { ('[%DATE% %TIME%] ERROR: controller did not answer on port $Port - see the log above.' | Out-File -Append -Encoding UTF8 '%X2WA_LOG%') }"
+"$nodeExe" -e "fetch('http://127.0.0.1:$Port/health').then(function(r){return r.text()}).then(function(t){console.log(t)}).catch(function(){console.log('[%%DATE%% %%TIME%%] ERROR: controller did not answer on port $Port - see the log above.')})" >> "%X2WA_LOG%" 2>&1
 "@
 
   if (-not (Test-Path -LiteralPath $DataRoot)) { New-Item -ItemType Directory -Path $DataRoot -Force | Out-Null }
