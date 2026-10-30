@@ -264,6 +264,13 @@ async function transliterateText(text, target, deps) {
   if (isUrduScript(trimmed) && !/[A-Za-z]/.test(trimmed)) {
     return trimmed;
   }
+  const store = (deps && deps.store) || (function() {
+    try { return require('./transliterate').defaultStore; } catch { return null; }
+  })();
+  if (store) {
+    const override = store.lookup(trimmed);
+    if (override && override.transliteration) return override.transliteration;
+  }
   const lang = target || 'ur';
   const { text: masked, tokens } = maskHandles(trimmed);
   try {

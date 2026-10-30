@@ -28,7 +28,7 @@ function eq(name, got, want) {
 const sandbox = { window: {}, console: { log() {} }, location: { origin: 'https://x.com' } };
 vm.createContext(sandbox);
 vm.runInContext(src, sandbox);
-const { pickAuthorName, authorHeader, withAuthorHeader, isUrduText, findTweetAuthor, extractPost } = sandbox;
+const { pickAuthorName, pickAuthorHandle, authorHeader, withAuthorHeader, isUrduText, findTweetAuthor, findTweetAuthorHandle, extractPost } = sandbox;
 
 // --- the rule, on its own ---
 console.log('the display name is the first real name in the User-Name block');
@@ -40,6 +40,7 @@ console.log('the display name is the first real name in the User-Name block');
     { text: '42m', href: '/Iam_ArbazRaees/status/2109715181408494080' },
   ];
   eq('the name wins', pickAuthorName(anchors), 'Arbaz Niazi');
+  eq('the handle is picked', pickAuthorHandle(anchors), '@Iam_ArbazRaees');
 }
 {
   // A wrapped name must not carry a newline into the post's first line.
@@ -180,13 +181,14 @@ console.log('\nextraction carries the author');
     },
     querySelectorAll(sel) {
       if (sel === '[data-testid="User-Name"]') {
-        return [userBlock([anchor('Imran Khan', '/ImranKhan')], { article: art })];
+        return [userBlock([anchor('Imran Khan', '/ImranKhan'), anchor('@ImranKhan', '/ImranKhan')], { article: art })];
       }
       return [];
     },
   };
   const post = extractPost(art);
   eq('the extracted post carries the author', post.author, 'Imran Khan');
+  eq('the extracted post carries the author handle', post.authorHandle, '@ImranKhan');
   eq('and still the rest of the post', { tweetId: post.tweetId, text: post.text }, { tweetId: '123456', text: 'Hello world' });
 }
 

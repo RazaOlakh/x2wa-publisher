@@ -16,6 +16,13 @@ const ui = {
   verDetail: el('verDetail'), verNote: el('verNote'),
   checkUpd: el('checkUpdBtn'), update: el('updateBtn'),
   pull: el('updateBtn'), push: el('pushBtn'), sync: el('syncBtn'),
+  // Author name transliteration review
+  revCard: el('reviewCard'), revBadge: el('revBadge'), revContent: el('revContent'),
+  revOriginal: el('revOriginal'), revHandle: el('revHandle'), revUrdu: el('revUrdu'),
+  revApprove: el('revApproveBtn'), revEdit: el('revEditBtn'), revRemove: el('revRemoveBtn'),
+  revDismiss: el('revDismissBtn'), revEditor: el('revEditor'), revInput: el('revInput'),
+  revSave: el('revSaveBtn'), revCancel: el('revCancelBtn'), revNote: el('revNote'),
+  revEmpty: el('revEmpty'),
 };
 
 const store = {
@@ -168,11 +175,200 @@ ui.connect.addEventListener('click', async () => {
   }
 });
 
+function setBadge(text, kind) {
+  if (!ui.revBadge) return;
+  ui.revBadge.textContent = text || '';
+  ui.revBadge.className = `badge ${kind || 'idle'}`;
+  if (ui.revBadge.style) {
+    if (kind === 'ok') ui.revBadge.style.color = 'var(--green-dark)';
+    else if (kind === 'warn') ui.revBadge.style.color = 'var(--amber)';
+    else ui.revBadge.style.color = 'var(--muted)';
+  }
+}
+
+// ------------------------------------------------ author transliteration
+let currentReviewItem = null;
+
+async function refreshReview() {
+  if (!ui.revCard) return;
+  let item = null;
+  try {
+    const data = await store.get(['latestReviewItem']);
+    item = data && data.latestReviewItem;
+  } catch {}
+
+  if (!item || !item.original) {
+    currentReviewItem = null;
+    ui.revContent.classList.add('hidden');
+    ui.revEmpty.classList.remove('hidden');
+    setBadge('None', 'idle');
+    return;
+  }
+
+  currentReviewItem = item;
+  ui.revEmpty.classList.add('hidden');
+  ui.revContent.classList.remove('hidden');
+  ui.revOriginal.textContent = item.original || '—';
+  ui.revHandle.textContent = item.handle ? item.handle : '';
+  ui.revUrdu.textContent = item.transliteration || '—';
+
+  // Check if this item is currently overridden in the dictionary
+  let isOverridden = item.source === 'override';
+  try {
+    const res = await req('/overrides');
+    if (res.ok && res.body && res.body.overrides) {
+      const overrides = res.body.overrides;
+      const normName = String(item.original).normalize('NFC').replace(/\s+/g, ' ').trim().toLowerCase();
+      const normHandle = item.handle ? String(item.handle).trim().toLowerCase() : null;
+
+      if (normHandle && (overrides[`handle:${normHandle}`] || overrides[normHandle])) {
+        const found = overrides[`handle:${normHandle}`] || overrides[normHandle];
+        isOverridden = true;
+        ui.revUrdu.textContent = found.transliteration;
+      } else if (overrides[`name:${normName}`] || overrides[normName]) {
+        const found = overrides[`name:${normName}`] || overrides[normName];
+        isOverridden = true;
+        ui.revUrdu.textContent = found.transliteration;
+      }
+    }
+  } catch {}
+
+  if (isOverridden) {
+    setBadge('Saved override', 'ok');
+    ui.revApprove.classList.add('hidden');
+    ui.revRemove.classList.remove('hidden');
+    ui.revEdit.textContent = 'Edit spelling';
+  } else {
+    if (item.source === 'inputtools') {
+      setBadge('Google Input Tools', 'idle');
+    } else if (item.source === 'original') {
+      setBadge('Urdu original', 'idle');
+    } else {
+      setBadge('Unchanged fallback', 'warn');
+    }
+    ui.revApprove.classList.remove('hidden');
+    ui.revRemove.classList.add('hidden');
+    ui.revEdit.textContent = 'Edit spelling';
+  }
+}
+
+if (ui.revApprove) {
+  ui.revApprove.addEventListener('click', async () => {
+    if (!currentReviewItem) return;
+    ui.revApprove.disabled = true;
+    setNote(ui.revNote, 'Saving to dictionary…', 'idle');
+    try {
+      const res = await req('/transliterate/override', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          original: currentReviewItem.original,
+          transliteration: currentReviewItem.transliteration,
+          handle: currentReviewItem.handle,
+        }),
+      });
+      if (!res.ok) throw new Error((res.body && res.body.error) || 'Failed to save');
+      setNote(ui.revNote, 'Saved! Future occurrences will use this spelling.', 'ok');
+      currentReviewItem.source = 'override';
+      currentReviewItem.status = 'saved';
+      await store.set({ latestReviewItem: currentReviewItem });
+      await refreshReview();
+    } catch (e) {
+      setNote(ui.revNote, 'Could not save override: ' + (e.message || e), 'error');
+    } finally {
+      ui.revApprove.disabled = false;
+    }
+  });
+
+  ui.revEdit.addEventListener('click', () => {
+    if (!currentReviewItem) return;
+    ui.revEditor.classList.remove('hidden');
+    ui.revInput.value = currentReviewItem.transliteration || '';
+    ui.revInput.focus();
+  });
+
+  ui.revCancel.addEventListener('click', () => {
+    ui.revEditor.classList.add('hidden');
+    setNote(ui.revNote, '', 'idle');
+  });
+
+  ui.revSave.addEventListener('click', async () => {
+    if (!currentReviewItem) return;
+    const corrected = ui.revInput.value.trim();
+    if (!corrected) {
+      setNote(ui.revNote, 'Urdu transliteration cannot be empty.', 'warn');
+      return;
+    }
+    ui.revSave.disabled = true;
+    setNote(ui.revNote, 'Saving correction…', 'idle');
+    try {
+      const res = await req('/transliterate/override', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          original: currentReviewItem.original,
+          transliteration: corrected,
+          handle: currentReviewItem.handle,
+        }),
+      });
+      if (!res.ok) throw new Error((res.body && res.body.error) || 'Failed to save');
+      ui.revUrdu.textContent = corrected;
+      ui.revEditor.classList.add('hidden');
+      setNote(ui.revNote, 'Correction saved to dictionary!', 'ok');
+      currentReviewItem.transliteration = corrected;
+      currentReviewItem.source = 'override';
+      currentReviewItem.status = 'saved';
+      await store.set({ latestReviewItem: currentReviewItem });
+      await refreshReview();
+    } catch (e) {
+      setNote(ui.revNote, 'Could not save correction: ' + (e.message || e), 'error');
+    } finally {
+      ui.revSave.disabled = false;
+    }
+  });
+
+  ui.revDismiss.addEventListener('click', async () => {
+    await store.remove(['latestReviewItem']);
+    currentReviewItem = null;
+    ui.revContent.classList.add('hidden');
+    ui.revEmpty.classList.remove('hidden');
+    setBadge('None', 'idle');
+    setNote(ui.revNote, '', 'idle');
+  });
+
+  ui.revRemove.addEventListener('click', async () => {
+    if (!currentReviewItem) return;
+    ui.revRemove.disabled = true;
+    setNote(ui.revNote, 'Removing override…', 'idle');
+    try {
+      const res = await req('/transliterate/override', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          original: currentReviewItem.original,
+          handle: currentReviewItem.handle,
+        }),
+      });
+      if (!res.ok) throw new Error((res.body && res.body.error) || 'Failed to delete');
+      setNote(ui.revNote, 'Override removed. The engine will transliterate fresh next time.', 'ok');
+      currentReviewItem.source = 'inputtools';
+      currentReviewItem.status = 'pending';
+      await store.set({ latestReviewItem: currentReviewItem });
+      await refreshReview();
+    } catch (e) {
+      setNote(ui.revNote, 'Could not remove override: ' + (e.message || e), 'error');
+    } finally {
+      ui.revRemove.disabled = false;
+    }
+  });
+}
+
 // --------------------------------------------------------------- refresh
 async function refresh() {
   const s = await status();
   // Local and cheap: safe to ask on every tick, unlike a network fetch.
   renderVersion(await versionStatus());
+  await refreshReview();
 
   if (s.state === 'unavailable') {
     hideQr();

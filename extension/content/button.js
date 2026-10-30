@@ -698,22 +698,33 @@ function showReadError(btn, label, title, detail, requestId, error) {
   }, 4000);
 }
 
-// The author's name for an Urdu post. Per the post-translate behaviour: names
-// are phonetically transliterated into Urdu script rather than semantically translated
-// (e.g. "Reborn" transliterates to "ریبورن" instead of "دوبارہ پیدا ہوا").
-// A name that is already in Urdu script is kept as-is, and on network failure the
-// original name is kept rather than leaving the post without one.
-async function urduAuthorName(name, requestId) {
-  const original = String(name == null ? '' : name);
-  const trimmed = original.trim();
-  if (!trimmed || isUrduText(trimmed)) return original;
+// The author's name for an Urdu post. Converts the author's name phonetically
+// into Urdu script using the persistent resolution pipeline:
+// 1. If already Urdu, preserved as-is.
+// 2. Checks local persistent JSON dictionary.
+// 3. Otherwise calls Google Input Tools (phonetic transliteration).
+// 4. If the engine fails, safely falls back to the original name.
+// 5. Makes the latest result available for optional review in the popup.
+async function urduAuthorName(name, requestId, context) {
+  const original = String(name == null ? '' : name).trim();
+  if (!original) return '';
+  if (isUrduText(original)) return original;
+
+  const handle = context && context.handle ? context.handle : null;
   try {
-    const res = await chrome.runtime.sendMessage({ type: 'TRANSLATE_TEXT', text: trimmed, to: 'ur', requestId });
-    if (res && res.ok && typeof res.text === 'string' && res.text.trim()) return res.text.trim();
-    try { xlog('warn', 'author-name-translate-failed', { requestId, error: (res && res.error) || 'empty' }); } catch {}
+    const res = await chrome.runtime.sendMessage({
+      type: 'TRANSLITERATE_NAME',
+      text: original,
+      handle,
+      requestId,
+    });
+    if (res && res.ok && typeof res.text === 'string' && res.text.trim()) {
+      return res.text.trim();
+    }
   } catch (e) {
-    try { xlog('warn', 'author-name-translate-failed', { requestId, error: e && e.message }); } catch {}
+    try { xlog('warn', 'author-name-transliterate-failed', { requestId, error: e && e.message }); } catch {}
   }
+  // Safe fallback: original name. Never semantically translate.
   return original;
 }
 
@@ -735,7 +746,10 @@ async function postQuoteShot(btn, v, variant, article, quoteEl, requestId) {
   // named variant does it for an ordinary post.
   let name = post.author;
   if (v.nameTheAuthor) {
-    name = (isUrduText(post.text) || v.translateTo === 'ur') ? await urduAuthorName(post.author, requestId) : post.author;
+    const handle = post.authorHandle || null;
+    name = (isUrduText(post.text) || v.translateTo === 'ur')
+      ? await urduAuthorName(post.author, requestId, { handle })
+      : post.author;
   }
   const caption = quoteCaption(post.text, variant, name);
 
@@ -837,7 +851,10 @@ async function onPostClick(ev, btn, variant) {
   // translates it, in the controller, after this reordering so the link stays
   // first. With no author found the text goes through untouched.
   if (v.nameTheAuthor) {
-    const name = (isUrduText(post.text) || v.translateTo === 'ur') ? await urduAuthorName(post.author, requestId) : post.author;
+    const handle = post.authorHandle || null;
+    const name = (isUrduText(post.text) || v.translateTo === 'ur')
+      ? await urduAuthorName(post.author, requestId, { handle })
+      : post.author;
     post = { ...post, text: withAuthorHeader(post.text, name) };
   }
 

@@ -174,7 +174,79 @@ async function captureClip(tabId, clip, marker, measured) {
   }
 }
 
+async function updateLatestReviewItem(item) {
+  if (!chrome.storage || !chrome.storage.local) return;
+  return new Promise((resolve) => {
+    chrome.storage.local.get(['latestReviewItem'], (res) => {
+      const existing = res && res.latestReviewItem;
+      // Stale guard: if an existing review item is newer than this request, do not overwrite.
+      if (existing && existing.timestamp && existing.timestamp > item.timestamp) {
+        return resolve();
+      }
+      chrome.storage.local.set({ latestReviewItem: item }, () => resolve());
+    });
+  });
+}
+
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  // Transliterate an author's name phonetically into Urdu script.
+  // Checks dictionary overrides first, then Google Input Tools, and falls back
+  // to original text safely on error. Stores latest review item in storage.
+  if (msg && msg.type === 'TRANSLITERATE_NAME' && typeof msg.text === 'string') {
+    (async () => {
+      const originalText = msg.text.trim();
+      const opId = msg.requestId || `rev-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      const requestTimestamp = Date.now();
+      try {
+        const res = await fetch(`${CONTROLLER}/transliterate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: originalText, handle: msg.handle || null }),
+        });
+        const j = await res.json();
+        const transliterated = (j && j.ok && typeof j.text === 'string') ? j.text : originalText;
+        const source = (j && j.source) || 'fallback';
+
+        await updateLatestReviewItem({
+          id: opId,
+          original: (j && j.original) || originalText,
+          handle: (j && j.handle) || msg.handle || null,
+          transliteration: transliterated,
+          source,
+          timestamp: requestTimestamp,
+          status: source === 'override' ? 'saved' : 'pending',
+        });
+
+        return reply(sendResponse, {
+          ok: true,
+          text: transliterated,
+          source,
+          original: originalText,
+          handle: msg.handle || null,
+        });
+      } catch (e) {
+        swLog('warn', 'transliterate-name-failed', { error: e.message });
+        await updateLatestReviewItem({
+          id: opId,
+          original: originalText,
+          handle: msg.handle || null,
+          transliteration: originalText,
+          source: 'fallback',
+          timestamp: requestTimestamp,
+          status: 'pending',
+          error: e.message,
+        });
+        reply(sendResponse, {
+          ok: true,
+          text: originalText,
+          source: 'fallback',
+          original: originalText,
+          handle: msg.handle || null,
+        });
+      }
+    })();
+    return true;
+  }
   // Resolve t.co shortlinks to their canonical destination URLs.
   // The content script cannot read the expanded URL from the DOM (X only
   // exposes the shortlink href), so the resolution happens here where the

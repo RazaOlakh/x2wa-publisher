@@ -120,6 +120,52 @@
     </div>
   </section>
 
+  <!-- Author name transliteration review (optional) -->
+  <section class="card" id="reviewCard">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+      <span class="status-title" style="font-size:12.5px;">Author Name in Urdu</span>
+      <span class="badge" id="revBadge" style="font-size:11px; padding:2px 7px; border-radius:12px; background:var(--panel); border:1px solid var(--line); color:var(--muted);">Checking…</span>
+    </div>
+
+    <!-- Review Content -->
+    <div id="revContent">
+      <div style="margin-bottom:6px;">
+        <span style="font-size:11.5px; color:var(--muted); display:block;">Original author:</span>
+        <strong id="revOriginal" style="font-size:13px;">—</strong>
+        <span id="revHandle" style="font-size:11.5px; color:var(--muted); margin-left:4px;"></span>
+      </div>
+
+      <div style="margin-bottom:8px; padding:8px 10px; background:var(--panel); border:1px solid var(--line); border-radius:7px;">
+        <span style="font-size:11px; color:var(--muted); display:block; margin-bottom:2px;">Urdu transliteration:</span>
+        <div id="revUrdu" dir="rtl" style="font-size:16px; font-weight:600; font-family:'Segoe UI', Tahoma, sans-serif; min-height:22px; color:var(--ink);">—</div>
+      </div>
+
+      <div class="row" id="revActions" style="margin-top:6px;">
+        <button id="revApproveBtn" class="primary">Correct</button>
+        <button id="revEditBtn">Edit spelling</button>
+        <button id="revRemoveBtn" class="danger hidden">Remove override</button>
+        <button id="revDismissBtn">Dismiss</button>
+      </div>
+
+      <!-- Inline Editor -->
+      <div id="revEditor" class="hidden" style="margin-top:8px; padding-top:8px; border-top:1px dashed var(--line);">
+        <label class="field" for="revInput" style="font-size:11.5px;">Edit Urdu transliteration</label>
+        <input type="text" id="revInput" dir="rtl" style="width:100%; font-size:15px; font-weight:500; padding:6px 8px; border-radius:6px; border:1px solid var(--line); margin-top:3px; margin-bottom:6px;" />
+        <div class="row" style="margin-top:0;">
+          <button id="revSaveBtn" class="primary">Save</button>
+          <button id="revCancelBtn">Cancel</button>
+        </div>
+      </div>
+
+      <div class="note idle" id="revNote"></div>
+    </div>
+
+    <!-- Empty State -->
+    <div id="revEmpty" class="hidden" style="color:var(--muted); font-size:12px; padding:4px 0;">
+      No recent author name to review. When you send a post in Urdu or with author name, the phonetic transliteration will appear here for optional review.
+    </div>
+  </section>
+
   <!-- Version / update -->
   <section class="card" id="versionCard">
     <div class="status">

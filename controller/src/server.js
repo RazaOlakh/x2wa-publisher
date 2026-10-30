@@ -16,6 +16,11 @@ const videoPipeline = require('./video-pipeline');
 const hlsPrefetch = require('./hls-prefetch');
 const duplicate = require('./duplicate-guard');
 const { translateText, readTranslateRequest, transliterateText, translatePostText } = require('./translate');
+const {
+  resolveTransliteration,
+  defaultStore: overridesStore,
+  MAX_NAME_CHARS,
+} = require('./transliterate');
 
 const HOST = '127.0.0.1';
 const PORT = parseInt(process.env.CONTROLLER_PORT || '47825', 10);
@@ -820,7 +825,7 @@ const server = http.createServer(async (req, res) => {
     // Urdu post. The post itself is translated through /send's translateTo;
     // this is for the small pieces that are translated on their own. It does
     // not touch WhatsApp, so it is available whenever the controller is.
-    if (req.method === 'POST' && (url.pathname === '/translate' || url.pathname === '/transliterate')) {
+    if (req.method === 'POST' && url.pathname === '/translate') {
       const body = JSON.parse(await readBody(req));
       const request = readTranslateRequest(body);
       if (!request.ok) { log('error','translate-rejected-bad-request',{}); return json(res, 400, { error: request.error }); }
@@ -833,6 +838,85 @@ const server = http.createServer(async (req, res) => {
       } catch (e) {
         log('warn','translate-http-failed',{to:request.to,error:errMsg(e)});
         return json(res, 502, { ok: false, error: 'translate-failed' });
+      }
+    }
+    // Phonetic transliteration for author names into Urdu script.
+    // Consults local JSON overrides first, then Google Input Tools, and safely
+    // falls back to the original name if the engine fails. Never semantically translates.
+    if (req.method === 'POST' && url.pathname === '/transliterate') {
+      let body;
+      try { body = JSON.parse(await readBody(req)); }
+      catch { return json(res, 400, { ok: false, error: 'bad-request' }); }
+      if (!body || typeof body !== 'object' || typeof body.text !== 'string') {
+        return json(res, 400, { ok: false, error: 'bad-request' });
+      }
+      if (body.text.length > MAX_NAME_CHARS) {
+        return json(res, 400, { ok: false, error: 'name-too-long' });
+      }
+      try {
+        const result = await resolveTransliteration(body.text, body.handle);
+        log('info', 'transliterate-http', {
+          source: result.source,
+          charsIn: body.text.length,
+          charsOut: result.text.length,
+        });
+        return json(res, 200, result);
+      } catch (e) {
+        log('warn', 'transliterate-http-failed', { error: errMsg(e) });
+        return json(res, 200, {
+          ok: true,
+          text: body.text,
+          source: 'fallback',
+          original: body.text,
+          error: 'transliterate-failed',
+        });
+      }
+    }
+    // Read the persistent JSON overrides dictionary.
+    if (req.method === 'GET' && (url.pathname === '/overrides' || url.pathname === '/transliterate/overrides')) {
+      const data = overridesStore.getAll();
+      return json(res, 200, { ok: true, version: data.version || 1, overrides: data.overrides || {} });
+    }
+    // Save or update an approved/corrected transliteration in the dictionary.
+    if (req.method === 'POST' && (url.pathname === '/overrides' || url.pathname === '/transliterate/override')) {
+      let body;
+      try { body = JSON.parse(await readBody(req)); }
+      catch { return json(res, 400, { ok: false, error: 'bad-request' }); }
+      if (!body || typeof body !== 'object' || typeof body.original !== 'string' || typeof body.transliteration !== 'string') {
+        return json(res, 400, { ok: false, error: 'bad-request' });
+      }
+      if (body.original.length > MAX_NAME_CHARS || body.transliteration.length > MAX_NAME_CHARS) {
+        return json(res, 400, { ok: false, error: 'value-too-long' });
+      }
+      try {
+        const entry = await overridesStore.setOverride(body);
+        log('info', 'override-saved', { key: entry.key, original: entry.original });
+        return json(res, 200, { ok: true, entry });
+      } catch (e) {
+        log('warn', 'override-save-failed', { error: errMsg(e) });
+        return json(res, 500, { ok: false, error: (e && e.message) || 'save-failed' });
+      }
+    }
+    // Delete an override from the dictionary.
+    if (req.method === 'DELETE' && (url.pathname === '/overrides' || url.pathname === '/transliterate/override')) {
+      let body = {};
+      try {
+        const raw = await readBody(req);
+        if (raw && raw.trim()) body = JSON.parse(raw);
+      } catch {}
+      const key = body.key || url.searchParams.get('key');
+      const original = body.original || url.searchParams.get('original');
+      const handle = body.handle || url.searchParams.get('handle');
+      if (!key && !original && !handle) {
+        return json(res, 400, { ok: false, error: 'missing-identifier' });
+      }
+      try {
+        const r = await overridesStore.deleteOverride({ key, original, handle });
+        log('info', 'override-deleted', { key, original, handle, removed: r.removed });
+        return json(res, 200, { ok: true, removed: r.removed });
+      } catch (e) {
+        log('warn', 'override-delete-failed', { error: errMsg(e) });
+        return json(res, 500, { ok: false, error: 'delete-failed' });
       }
     }
     if (req.method === 'POST' && url.pathname === '/send') {

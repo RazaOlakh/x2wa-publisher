@@ -51,6 +51,15 @@ function pickAuthorName(anchors) {
   return null;
 }
 
+function pickAuthorHandle(anchors) {
+  for (const a of anchors || []) {
+    const text = normalizeAuthorName(a && a.text);
+    if (!text) continue;
+    if (text.charAt(0) === '@') return text;
+  }
+  return null;
+}
+
 function findTweetAuthor(article) {
   if (!article || !article.querySelectorAll) return null;
   const blocks = article.querySelectorAll('[data-testid="User-Name"]');
@@ -66,6 +75,23 @@ function findTweetAuthor(article) {
     }
     const name = pickAuthorName(anchors);
     if (name) return name;
+  }
+  return null;
+}
+
+function findTweetAuthorHandle(article) {
+  if (!article || !article.querySelectorAll) return null;
+  const blocks = article.querySelectorAll('[data-testid="User-Name"]');
+  for (const block of blocks) {
+    if (block.closest && block.closest('article') !== article) continue;
+    if (block.closest && block.closest('[data-testid="quoteTweet"]')) continue;
+    const anchors = [];
+    const found = block.querySelectorAll ? block.querySelectorAll('a') : [];
+    for (const a of found) {
+      anchors.push({ text: a.innerText || a.textContent || '', href: a.getAttribute('href') || '' });
+    }
+    const handle = pickAuthorHandle(anchors);
+    if (handle) return handle;
   }
   return null;
 }
@@ -506,6 +532,7 @@ function extractPost(article) {
     tweetId: id,
     tweetUrl: url,
     author: findTweetAuthor(article),
+    authorHandle: findTweetAuthorHandle(article),
     text,
     hasImage: photoHrefs.length > 0 || mediaItems.some((m) => m.type === 'image'),
     hasVideo: hasVideo(article) || mediaItems.some((m) => m.type === 'video'),
