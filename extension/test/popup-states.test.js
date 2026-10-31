@@ -67,8 +67,10 @@ function buildDom() {
 function runPopup({ status, channels, qr, storage, version, update, push, sync }) {
   const { ids, els } = buildDom();
   const storeData = Object.assign({}, storage);
+  const calls = [];
 
   const fetchStub = async (url, opts) => {
+    calls.push({ url: String(url), opts });
     const u = String(url);
     if (u.endsWith('/status')) {
       if (status === 'UNREACHABLE') throw new Error('connect ECONNREFUSED');
@@ -84,6 +86,7 @@ function runPopup({ status, channels, qr, storage, version, update, push, sync }
       return jsonResponse(200, qr);
     }
     if (u.endsWith('/auth/logout')) return jsonResponse(200, { ok: true });
+    if (u.endsWith('/auth/start')) return jsonResponse(200, { ok: true, state: 'starting' });
     if (u.endsWith('/version')) {
       if (version === 'UNREACHABLE') throw new Error('connect ECONNREFUSED');
       return jsonResponse(200, version || { ok: true, branch: 'main', sha: '1234567', dirty: false, upstream: 'origin/main', behind: 0, ahead: 0 });
@@ -134,7 +137,7 @@ function runPopup({ status, channels, qr, storage, version, update, push, sync }
   // The popup refreshes on DOMContentLoaded; that refresh is async, so the
   // caller awaits it before asserting what the user would see.
   const ready = Promise.resolve(doc._on_DOMContentLoaded());
-  return { els, store: storeData, ready, fire: (id, ev) => els[id][`_on_${ev}`]({ target: els[id], preventDefault() {} }) };
+  return { els, store: storeData, ready, calls, fire: (id, ev) => els[id][`_on_${ev}`]({ target: els[id], preventDefault() {} }) };
 }
 
 function jsonResponse(status, body) {
@@ -170,12 +173,16 @@ const wait = () => new Promise((r) => setTimeout(r, 30));
   // 2. Controller starting / WhatsApp connecting
   for (const st of ['starting', 'authenticated']) {
     console.log(`state: ${st} (connecting)`);
-    const { els, ready } = runPopup({ status: { state: st }, channels: 'UNREACHABLE' });
+    const { els, ready, calls } = runPopup({ status: { state: st }, channels: 'UNREACHABLE' });
     await ready;
     check(`[${st}] connecting title`, /Connecting to WhatsApp/i.test(txt(els, 'waTitle')), txt(els, 'waTitle'));
     check(`[${st}] busy dot`, els.waDot.className.includes('busy'));
     check(`[${st}] not shown as connected`, !/Connected/.test(txt(els, 'waTitle')));
-    check(`[${st}] channels disabled`, els.channelSelect.disabled === true);
+            check(`[${st}] channels disabled`, els.channelSelect.disabled === true);
+    await els.checkBtn._on_click({ target: els.checkBtn, preventDefault() {} });
+    const authStartCall = calls.find((c) => c.url.endsWith('/auth/start') && c.opts && c.opts.method === 'POST');
+    check(`[${st}] refresh sends recovery nudge to auth/start`, Boolean(authStartCall));
+    
   }
 
   // 3. Authentication required + QR ready

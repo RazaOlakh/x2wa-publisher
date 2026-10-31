@@ -191,5 +191,22 @@ console.log('sleep/wake is noticed instead of posting into a dead page');
   eq('a blip after reset only waits once', q.observe('OPENING').verdict, 'wait');
 }
 
+
+// ---------------------------------------------------- startup stuck watchdog
+console.log('startup watchdog detects clients stuck in starting or authenticated');
+{
+  const { isStartupStuck } = require('../src/heartbeat');
+
+  check('short starting period is not stuck', !isStartupStuck('starting', 10000));
+  check('starting past 60s is stuck', isStartupStuck('starting', 60000));
+  check('short authenticated period is not stuck', !isStartupStuck('authenticated', 25000));
+  check('authenticated past 60s is stuck', isStartupStuck('authenticated', 60001));
+  check('ready state is never stuck', !isStartupStuck('ready', 120000));
+  check('qr state is never stuck (waits on user scan)', !isStartupStuck('qr', 120000));
+  check('reconnecting state is never stuck', !isStartupStuck('reconnecting', 120000));
+  check('custom timeout is respected', isStartupStuck('starting', 15000, 15000));
+  check('custom timeout not reached', !isStartupStuck('starting', 14999, 15000));
+}
+
 console.log(failures ? `\n${failures} FAILURE(S)` : '\nALL CONTROLLER TESTS PASSED');
 process.exit(failures ? 1 : 0);

@@ -18,7 +18,13 @@ const DEFAULTS = {
   // One odd page state is usually momentary (a reconnecting socket, a
   // navigation, a page swap), so it takes several in a row to act on.
   missesBeforeRestart: 3,
+  startupTimeoutMs: 60000,
 };
+
+function isStartupStuck(state, elapsedMs, timeoutMs) {
+  const limit = typeof timeoutMs === 'number' ? timeoutMs : DEFAULTS.startupTimeoutMs;
+  return (state === 'starting' || state === 'authenticated') && elapsedMs >= limit;
+}
 
 function createHeartbeat(options) {
   const opts = Object.assign({}, DEFAULTS, options);
@@ -30,6 +36,7 @@ function createHeartbeat(options) {
   return {
     resumeGapMs,
     missesBeforeRestart: opts.missesBeforeRestart,
+    startupTimeoutMs: opts.startupTimeoutMs,
 
     // Number of non-CONNECTED reports seen since the last good one.
     misses: () => misses,
@@ -58,4 +65,4 @@ function createHeartbeat(options) {
   };
 }
 
-module.exports = { createHeartbeat, DEFAULTS };
+module.exports = { createHeartbeat, isStartupStuck, DEFAULTS };
