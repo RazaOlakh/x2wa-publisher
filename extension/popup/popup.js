@@ -158,8 +158,23 @@ ui.disconnect.addEventListener('click', async () => {
   }
 });
 
-ui.refresh.addEventListener('click', () => refresh());
-ui.check.addEventListener('click', () => refresh());
+ui.refresh.addEventListener('click', async () => {
+  ui.refresh.disabled = true;
+  const original = ui.refresh.textContent;
+  ui.refresh.textContent = 'Reloading…';
+  await refresh();
+  ui.refresh.disabled = false;
+  ui.refresh.textContent = original;
+});
+ui.check.addEventListener('click', async () => {
+  ui.check.disabled = true;
+  const isRetry = ui.check.textContent === 'Retry';
+  ui.check.textContent = isRetry ? 'Connecting…' : 'Checking…';
+  setStatus('busy', isRetry ? 'Connecting to controller…' : 'Checking connection…', 'Attempting to reach local controller on 127.0.0.1:47825…');
+  await new Promise((r) => setTimeout(r, 400));
+  await refresh();
+  ui.check.disabled = false;
+});
 ui.connect.addEventListener('click', async () => {
   ui.connect.disabled = true;
   setStatus('busy', 'Waiting for authentication…', '');
@@ -364,7 +379,20 @@ if (ui.revApprove) {
 }
 
 // --------------------------------------------------------------- refresh
-async function refresh() {
+let refreshingPromise = null;
+function refresh() {
+  if (refreshingPromise) return refreshingPromise;
+  refreshingPromise = (async () => {
+    try {
+      await doRefresh();
+    } finally {
+      refreshingPromise = null;
+    }
+  })();
+  return refreshingPromise;
+}
+
+async function doRefresh() {
   const s = await status();
   // Local and cheap: safe to ask on every tick, unlike a network fetch.
   renderVersion(await versionStatus());
@@ -373,7 +401,7 @@ async function refresh() {
   if (s.state === 'unavailable') {
     hideQr();
     setStatus('err', 'Controller not running',
-      'The local controller is not reachable on 127.0.0.1:47825. It normally starts with your user session — if it does not, start it and press Refresh.');
+      'The local controller is not reachable on 127.0.0.1:47825. Ensure it is started via the Desktop shortcut “Rerun X2WA Connection” or startup script, then click Retry.');
     ui.connect.classList.add('hidden');
     ui.check.textContent = 'Retry';
     ui.select.disabled = true;

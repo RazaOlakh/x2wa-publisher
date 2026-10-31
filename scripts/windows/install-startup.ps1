@@ -173,6 +173,8 @@ switch ($Action) {
       Write-Step "Stopping session browser pid $($p.ProcessId)"
       Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
     }
+    $lockFile = Join-Path $SessionDir 'controller.lock'
+    if (Test-Path -LiteralPath $lockFile) { Remove-Item -LiteralPath $lockFile -Force -ErrorAction SilentlyContinue }
     Write-Host "Your WhatsApp session in $SessionDir was left untouched."
   }
   'status' {
@@ -197,6 +199,8 @@ switch ($Action) {
       Start-Sleep -Seconds 1
     }
     Start-Sleep -Seconds 2
+    $lockFile = Join-Path $SessionDir 'controller.lock'
+    if (Test-Path -LiteralPath $lockFile) { Remove-Item -LiteralPath $lockFile -Force -ErrorAction SilentlyContinue }
     if (-not (Test-Path -LiteralPath $VbsLauncherPath) -and -not (Test-Path -LiteralPath $LegacyCmdPath)) { throw "not installed - run: $PSCommandPath install" }
     New-Launcher
     $toStart = if (Test-Path -LiteralPath $VbsLauncherPath) { $VbsLauncherPath } else { $LegacyCmdPath }
@@ -215,6 +219,8 @@ switch ($Action) {
       & $PSCommandPath status
       return
     }
+    $lockFile = Join-Path $SessionDir 'controller.lock'
+    if (Test-Path -LiteralPath $lockFile) { Remove-Item -LiteralPath $lockFile -Force -ErrorAction SilentlyContinue }
     if (-not (Test-Path -LiteralPath $VbsLauncherPath) -and -not (Test-Path -LiteralPath $LegacyCmdPath)) { throw "not installed - run: $PSCommandPath install" }
     New-Launcher
     $toStart = if (Test-Path -LiteralPath $VbsLauncherPath) { $VbsLauncherPath } else { $LegacyCmdPath }
