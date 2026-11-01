@@ -10,6 +10,22 @@ importScripts('../shared/clip.js');
 
 const CONTROLLER = 'http://127.0.0.1:47825';
 
+// Configure Chrome Side Panel to open the popup UI in the sidebar when action icon is clicked
+if (typeof chrome !== 'undefined' && chrome.sidePanel) {
+  if (chrome.sidePanel.setPanelBehavior) {
+    chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
+  }
+}
+if (typeof chrome !== 'undefined' && chrome.action && chrome.action.onClicked) {
+  chrome.action.onClicked.addListener(async (tab) => {
+    if (chrome.sidePanel && chrome.sidePanel.open) {
+      try {
+        await chrome.sidePanel.open({ windowId: tab.windowId });
+      } catch {}
+    }
+  });
+}
+
 function swLog(level,event,data){ const rec={ts:new Date().toISOString(),level,component:'sw',event,...(data||{})}; try{ console.log(JSON.stringify(rec)); }catch{ console.log(`${level} ${event}`); } }
 
 // --- Video manifest capture (needed because the X <video> element only exposes a blob:).

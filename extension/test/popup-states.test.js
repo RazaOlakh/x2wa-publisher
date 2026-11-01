@@ -31,6 +31,7 @@ function makeEl(id) {
     value: '',
     selectedIndex: 0,
     options: [],
+    style: {},
     naturalWidth: 0,
     naturalHeight: 0,
     _classes: new Set(),

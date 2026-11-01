@@ -9,7 +9,7 @@
     "48": "icons/icon-48.png",
     "128": "icons/icon-128.png"
   },
-  "permissions": ["storage", "webRequest", "debugger"],
+  "permissions": ["storage", "webRequest", "debugger", "sidePanel"],
   "host_permissions": [
     "https://x.com/*",
     "https://twitter.com/*",
@@ -29,8 +29,10 @@
   "background": {
     "service_worker": "background/service-worker.js"
   },
+  "side_panel": {
+    "default_path": "popup/popup.html"
+  },
   "action": {
-    "default_popup": "popup/popup.html",
     "default_icon": {
       "16": "icons/icon-16.png",
       "32": "icons/icon-32.png",

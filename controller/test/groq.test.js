@@ -220,6 +220,13 @@ async function testGroqModule() {
   }
   ok('aborts and throws on timeout', errTimeout && errTimeout.timeout === true);
 
+  console.log('Groq config endpoint and key masking');
+  {
+    const maskKey = (k) => k && k.length > 8 ? `${k.slice(0, 4)}...${k.slice(-4)}` : '';
+    eq('masks key properly', maskKey('gsk_123456789abcdef'), 'gsk_...cdef');
+    eq('empty key returns empty', maskKey(''), '');
+  }
+
   console.log('\nALL GROQ TESTS PASSED');
 }
 

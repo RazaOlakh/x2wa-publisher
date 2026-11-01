@@ -37,6 +37,35 @@ function loadEnv() {
 }
 loadEnv();
 
+function persistEnvKey(key, value) {
+  const envPath = path.join(__dirname, '..', '.env');
+  let lines = [];
+  if (fs.existsSync(envPath)) {
+    try {
+      lines = fs.readFileSync(envPath, 'utf8').split('\n');
+    } catch {}
+  }
+  let found = false;
+  const prefix = `${key}=`;
+  const newLines = [];
+  for (const line of lines) {
+    if (line.trim().startsWith(prefix)) {
+      found = true;
+      if (value !== undefined && value !== null && value !== '') {
+        newLines.push(`${key}="${value}"`);
+      }
+    } else {
+      newLines.push(line);
+    }
+  }
+  if (!found && value !== undefined && value !== null && value !== '') {
+    newLines.push(`${key}="${value}"`);
+  }
+  try {
+    fs.writeFileSync(envPath, newLines.filter(Boolean).join('\n') + '\n', 'utf8');
+  } catch {}
+}
+
 const { execSync } = require('child_process');
 const crypto = require('crypto');
 const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
@@ -915,6 +944,49 @@ const server = http.createServer(async (req, res) => {
         log('warn','translate-http-failed',{to:request.to,error:errMsg(e)});
         return json(res, 502, { ok: false, error: 'translate-failed' });
       }
+    }
+    // Read Groq API translation configuration status
+    if (req.method === 'GET' && url.pathname === '/groq/config') {
+      const apiKey = process.env.GROQ_API_KEY || '';
+      const configured = typeof apiKey === 'string' && apiKey.trim().length > 0;
+      const model = process.env.GROQ_MODEL || 'qwen/qwen3.8-27b';
+      const maskedKey = configured
+        ? (apiKey.length > 8 ? `${apiKey.slice(0, 4)}...${apiKey.slice(-4)}` : '••••••••')
+        : '';
+      return json(res, 200, { ok: true, configured, model, maskedKey, hasKey: configured });
+    }
+    // Set or clear Groq API translation configuration and persist to .env
+    if (req.method === 'POST' && url.pathname === '/groq/config') {
+      let body;
+      try { body = JSON.parse(await readBody(req)); }
+      catch { return json(res, 400, { ok: false, error: 'bad-request' }); }
+      if (!body || typeof body !== 'object') {
+        return json(res, 400, { ok: false, error: 'bad-request' });
+      }
+      if (body.apiKey !== undefined) {
+        const key = String(body.apiKey).trim();
+        if (key.length > 0) {
+          process.env.GROQ_API_KEY = key;
+          persistEnvKey('GROQ_API_KEY', key);
+        } else {
+          delete process.env.GROQ_API_KEY;
+          persistEnvKey('GROQ_API_KEY', '');
+        }
+      }
+      if (body.model !== undefined) {
+        const model = String(body.model).trim();
+        if (model.length > 0) {
+          process.env.GROQ_MODEL = model;
+          persistEnvKey('GROQ_MODEL', model);
+        }
+      }
+      const isConfigured = Boolean(process.env.GROQ_API_KEY && process.env.GROQ_API_KEY.trim());
+      log('info', 'groq-config-updated', { configured: isConfigured, model: process.env.GROQ_MODEL || 'qwen/qwen3.8-27b' });
+      return json(res, 200, {
+        ok: true,
+        configured: isConfigured,
+        model: process.env.GROQ_MODEL || 'qwen/qwen3.8-27b',
+      });
     }
     // Phonetic transliteration for author names into Urdu script.
     // Consults local JSON overrides first, then Google Input Tools, and safely

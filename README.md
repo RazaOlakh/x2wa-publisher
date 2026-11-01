@@ -447,7 +447,10 @@ To enable Qwen 3.8 27B via Groq:
 1. Obtain a Groq API key from [console.groq.com](https://console.groq.com/).
 2. Provide the key using any of the following methods:
 
-**Method A: Local `.env` file (recommended)**
+**Method A: Extension Popup / Sidebar (recommended)**
+Open the extension popup/sidebar in Chrome, paste your key into the **Urdu Translation (AI)** card, and click **Save Key**. It is instantly active without needing a terminal or restart.
+
+**Method B: Local `.env` file**
 Create `controller/.env` or `.env` in the repository root:
 ```bash
 GROQ_API_KEY="gsk_your_groq_api_key_here"
@@ -456,7 +459,7 @@ GROQ_API_KEY="gsk_your_groq_api_key_here"
 # GROQ_TIMEOUT_MS="30000"
 ```
 
-**Method B: Environment variable / Systemd on Linux**
+**Method C: Environment variable / Systemd on Linux**
 Add to `~/.config/x-whatsapp-poster/env`:
 ```bash
 GROQ_API_KEY=gsk_your_groq_api_key_here
@@ -466,7 +469,7 @@ Or export directly in shell before starting:
 export GROQ_API_KEY="gsk_your_groq_api_key_here"
 ```
 
-**Method C: Windows User Environment Variable**
+**Method D: Windows User Environment Variable**
 ```powershell
 [System.Environment]::SetEnvironmentVariable('GROQ_API_KEY', 'gsk_your_groq_api_key_here', 'User')
 ```
@@ -936,6 +939,7 @@ node extension/test/author-header.test.js    # the author's name is read cleanly
 node controller/test/translate.test.js       # the Urdu button: the split, the endpoint's shapes, the request, standalone name requests
 node controller/test/groq.test.js            # Groq Qwen 3.8 27B client, system prompt, and response sanitization
 node controller/test/translate-groq.test.js  # Groq translation, Google fallback, 8 real-world categories comparison
+node extension/test/popup-sidebar-groq.test.js # Chrome side panel integration, in-popup Groq key & name override config
 node extension/test/post-variant.test.js     # each send button's variant: name, glyph, author, translate
 node extension/test/quote-tweet.test.js       # a quote-tweet sends a picture of the quoted post, captioned with the outer words; ordinary posts unchanged
 node extension/test/quote-button.test.js       # the same, driven through the real click handlers: the camera button and the three send buttons agree

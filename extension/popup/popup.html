@@ -12,7 +12,7 @@
     * { box-sizing: border-box; }
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-      width: 340px; margin: 0; padding: 16px; color: var(--ink); background: var(--bg);
+      min-width: 300px; max-width: 100%; margin: 0; padding: 16px; color: var(--ink); background: var(--bg);
       font-size: 13px; line-height: 1.45;
     }
     header { margin-bottom: 14px; }
@@ -73,12 +73,15 @@
   </style>
 </head>
 <body>
-  <header style="display:flex; align-items:center; gap:10px;">
-    <img src="../icons/icon-32.png" width="28" height="28" alt="X to WhatsApp icon" style="border-radius:6px; flex-shrink:0;">
-    <div>
-    <h1>X → WhatsApp Channel Poster</h1>
-    <p class="sub">Send any X post to your WhatsApp Channel from the post button.</p>
-  </div>
+  <header style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
+    <div style="display:flex; align-items:center; gap:10px;">
+      <img src="../icons/icon-32.png" width="28" height="28" alt="X to WhatsApp icon" style="border-radius:6px; flex-shrink:0;">
+      <div>
+        <h1>X → WhatsApp Channel Poster</h1>
+        <p class="sub">Send any X post to your WhatsApp Channel.</p>
+      </div>
+    </div>
+    <button id="openSidebarBtn" title="Open in Chrome sidebar" style="flex:0 0 auto; width:auto; padding:4px 8px; font-size:11.5px; border-radius:6px; border:1px solid var(--line); background:var(--panel); cursor:pointer;">◨ Sidebar</button>
   </header>
 
   <!-- WhatsApp connection -->
@@ -123,11 +126,45 @@
     </div>
   </section>
 
+  <!-- Urdu translation engine (Groq Qwen 3.8 27B / Google fallback) -->
+  <section class="card" id="groqCard">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+      <span class="status-title" style="font-size:12.5px;">Urdu Translation (AI)</span>
+      <span class="badge" id="groqBadge" style="font-size:11px; padding:2px 7px; border-radius:12px; background:var(--panel); border:1px solid var(--line); color:var(--muted);">Checking…</span>
+    </div>
+    <div id="groqForm">
+      <label class="field" for="groqKeyInput" style="font-size:11.5px;">Groq API Key</label>
+      <input type="password" id="groqKeyInput" placeholder="Enter Groq API Key (gsk_...)" autocomplete="off" style="width:100%; font-size:12.5px; padding:6px 8px; border-radius:6px; border:1px solid var(--line); margin-top:3px; margin-bottom:6px;" />
+      <div class="row" style="margin-top:0;">
+        <button id="groqSaveBtn" class="primary">Save Key</button>
+        <button id="groqClearBtn" class="danger hidden">Remove Key</button>
+      </div>
+    </div>
+    <div class="note idle" id="groqNote"></div>
+  </section>
+
   <!-- Author name transliteration review (optional) -->
   <section class="card" id="reviewCard">
     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
       <span class="status-title" style="font-size:12.5px;">Author Name in Urdu</span>
-      <span class="badge" id="revBadge" style="font-size:11px; padding:2px 7px; border-radius:12px; background:var(--panel); border:1px solid var(--line); color:var(--muted);">Checking…</span>
+      <div style="display:flex; align-items:center; gap:6px;">
+        <button id="revAddBtn" style="flex:0 0 auto; width:auto; padding:2px 7px; font-size:11px; border-radius:6px; border:1px solid var(--line); background:var(--panel); cursor:pointer;">+ Add override</button>
+        <span class="badge" id="revBadge" style="font-size:11px; padding:2px 7px; border-radius:12px; background:var(--panel); border:1px solid var(--line); color:var(--muted);">Checking…</span>
+      </div>
+    </div>
+
+    <!-- Manual Add Form -->
+    <div id="revAddForm" class="hidden" style="margin-bottom:10px; padding:9px 10px; background:var(--panel); border:1px solid var(--line); border-radius:8px;">
+      <div style="font-weight:600; font-size:11.5px; margin-bottom:6px;">Add Name Transliteration Override</div>
+      <label class="field" for="revAddOriginal" style="font-size:11px;">English name or handle</label>
+      <input type="text" id="revAddOriginal" placeholder="e.g. Reborn or @handle" style="width:100%; font-size:12.5px; padding:5px 7px; border-radius:6px; border:1px solid var(--line); margin-top:2px; margin-bottom:6px;" />
+      <label class="field" for="revAddUrdu" style="font-size:11px;">Urdu transliteration</label>
+      <input type="text" id="revAddUrdu" dir="rtl" placeholder="e.g. ریبورن" style="width:100%; font-size:14px; padding:5px 7px; border-radius:6px; border:1px solid var(--line); margin-top:2px; margin-bottom:6px;" />
+      <div class="row" style="margin-top:2px;">
+        <button id="revAddSaveBtn" class="primary">Save Override</button>
+        <button id="revAddCancelBtn">Cancel</button>
+      </div>
+      <div class="note idle" id="revAddNote"></div>
     </div>
 
     <!-- Review Content -->

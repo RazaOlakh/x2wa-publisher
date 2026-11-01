@@ -16,6 +16,10 @@ const ui = {
   verDetail: el('verDetail'), verNote: el('verNote'),
   checkUpd: el('checkUpdBtn'), update: el('updateBtn'),
   pull: el('updateBtn'), push: el('pushBtn'), sync: el('syncBtn'),
+  openSidebar: el('openSidebarBtn'),
+  // Groq Translation
+  groqCard: el('groqCard'), groqBadge: el('groqBadge'), groqKeyInput: el('groqKeyInput'),
+  groqSave: el('groqSaveBtn'), groqClear: el('groqClearBtn'), groqNote: el('groqNote'),
   // Author name transliteration review
   revCard: el('reviewCard'), revBadge: el('revBadge'), revContent: el('revContent'),
   revOriginal: el('revOriginal'), revHandle: el('revHandle'), revUrdu: el('revUrdu'),
@@ -23,6 +27,10 @@ const ui = {
   revDismiss: el('revDismissBtn'), revEditor: el('revEditor'), revInput: el('revInput'),
   revSave: el('revSaveBtn'), revCancel: el('revCancelBtn'), revNote: el('revNote'),
   revEmpty: el('revEmpty'),
+  revAddBtn: el('revAddBtn'), revAddForm: el('revAddForm'),
+  revAddOriginal: el('revAddOriginal'), revAddUrdu: el('revAddUrdu'),
+  revAddSaveBtn: el('revAddSaveBtn'), revAddCancelBtn: el('revAddCancelBtn'),
+  revAddNote: el('revAddNote'),
 };
 
 const store = {
@@ -388,6 +396,171 @@ if (ui.revApprove) {
   });
 }
 
+// --------------------------------------------------------------- sidebar
+if (ui.openSidebar) {
+  ui.openSidebar.addEventListener('click', async () => {
+    if (typeof chrome !== 'undefined' && chrome.sidePanel && chrome.sidePanel.open) {
+      try {
+        const w = await chrome.windows.getCurrent();
+        await chrome.sidePanel.open({ windowId: w.id });
+        window.close();
+      } catch {}
+    }
+  });
+}
+
+// --------------------------------------------------------------- manual name override
+if (ui.revAddBtn) {
+  ui.revAddBtn.addEventListener('click', () => {
+    if (!ui.revAddForm) return;
+    const isHidden = ui.revAddForm.classList.contains('hidden');
+    ui.revAddForm.classList.toggle('hidden', !isHidden);
+    ui.revAddBtn.textContent = isHidden ? '− Cancel' : '+ Add override';
+    if (isHidden && ui.revAddOriginal && typeof ui.revAddOriginal.focus === 'function') {
+      ui.revAddOriginal.focus();
+    }
+  });
+}
+
+if (ui.revAddSaveBtn) {
+  ui.revAddSaveBtn.addEventListener('click', async () => {
+    const original = (ui.revAddOriginal && ui.revAddOriginal.value || '').trim();
+    const urdu = (ui.revAddUrdu && ui.revAddUrdu.value || '').trim();
+    if (!original || !urdu) {
+      setNote(ui.revAddNote, 'Both original name/handle and Urdu transliteration are required.', 'warn');
+      return;
+    }
+    ui.revAddSaveBtn.disabled = true;
+    try {
+      const isHandle = original.startsWith('@');
+      const payload = {
+        original,
+        transliteration: urdu,
+        handle: isHandle ? original : null,
+      };
+      const res = await req('/transliterate/override', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (res.ok) {
+        setNote(ui.revAddNote, `Saved override: ${original} → ${urdu}`, 'ok');
+        if (ui.revAddOriginal) ui.revAddOriginal.value = '';
+        if (ui.revAddUrdu) ui.revAddUrdu.value = '';
+        setTimeout(() => {
+          if (ui.revAddForm) ui.revAddForm.classList.add('hidden');
+          if (ui.revAddBtn) ui.revAddBtn.textContent = '+ Add override';
+          setNote(ui.revAddNote, '', 'idle');
+        }, 1500);
+        await refreshReview();
+      } else {
+        setNote(ui.revAddNote, 'Failed to save override: ' + (res.body && res.body.error || 'error'), 'error');
+      }
+    } catch (e) {
+      setNote(ui.revAddNote, 'Error saving override: ' + (e.message || e), 'error');
+    } finally {
+      ui.revAddSaveBtn.disabled = false;
+    }
+  });
+}
+
+if (ui.revAddCancelBtn) {
+  ui.revAddCancelBtn.addEventListener('click', () => {
+    if (ui.revAddForm) ui.revAddForm.classList.add('hidden');
+    if (ui.revAddBtn) ui.revAddBtn.textContent = '+ Add override';
+    setNote(ui.revAddNote, '', 'idle');
+  });
+}
+
+// --------------------------------------------------------------- groq configuration
+async function getGroqConfig() {
+  try {
+    const r = await req('/groq/config');
+    if (r.ok && r.body) return r.body;
+  } catch {}
+  return { configured: false, model: 'qwen/qwen3.8-27b' };
+}
+
+async function refreshGroq() {
+  if (!ui.groqBadge) return;
+  const cfg = await getGroqConfig();
+  if (cfg.configured) {
+    ui.groqBadge.textContent = 'Qwen 3.8 27B Active';
+    if (ui.groqBadge.style) {
+      ui.groqBadge.style.color = '#0f6cbd';
+      ui.groqBadge.style.borderColor = '#1d9bf0';
+    }
+    if (ui.groqKeyInput) {
+      ui.groqKeyInput.placeholder = cfg.maskedKey ? `Saved: ${cfg.maskedKey}` : 'Groq API Key (active)';
+    }
+    if (ui.groqClear) ui.groqClear.classList.remove('hidden');
+    setNote(ui.groqNote, 'Qwen 3.8 27B on Groq is active for Urdu translation.', 'ok');
+  } else {
+    ui.groqBadge.textContent = 'Google Fallback (No Key)';
+    if (ui.groqBadge.style) {
+      ui.groqBadge.style.color = 'var(--muted)';
+      ui.groqBadge.style.borderColor = 'var(--line)';
+    }
+    if (ui.groqKeyInput) {
+      ui.groqKeyInput.placeholder = 'Enter Groq API Key (gsk_...)';
+    }
+    if (ui.groqClear) ui.groqClear.classList.add('hidden');
+    setNote(ui.groqNote, 'Add a Groq API Key to enable natural Qwen 3.8 27B translations. Google Translate is currently used as fallback.', 'idle');
+  }
+}
+
+if (ui.groqSave) {
+  ui.groqSave.addEventListener('click', async () => {
+    const key = (ui.groqKeyInput && ui.groqKeyInput.value || '').trim();
+    if (!key) {
+      setNote(ui.groqNote, 'Please enter a valid Groq API key (starts with gsk_)', 'warn');
+      return;
+    }
+    ui.groqSave.disabled = true;
+    try {
+      setNote(ui.groqNote, 'Saving API key to controller…', 'idle');
+      const r = await req('/groq/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apiKey: key }),
+      });
+      if (r.ok) {
+        if (ui.groqKeyInput) ui.groqKeyInput.value = '';
+        setNote(ui.groqNote, 'Groq API Key saved successfully! Qwen 3.8 27B is now active.', 'ok');
+        await refreshGroq();
+      } else {
+        setNote(ui.groqNote, 'Could not save API key to controller.', 'error');
+      }
+    } catch (e) {
+      setNote(ui.groqNote, 'Error communicating with controller: ' + (e.message || e), 'error');
+    } finally {
+      ui.groqSave.disabled = false;
+    }
+  });
+}
+
+if (ui.groqClear) {
+  ui.groqClear.addEventListener('click', async () => {
+    ui.groqClear.disabled = true;
+    try {
+      const r = await req('/groq/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apiKey: '' }),
+      });
+      if (r.ok) {
+        if (ui.groqKeyInput) ui.groqKeyInput.value = '';
+        setNote(ui.groqNote, 'Groq API Key removed. Using Google Translate fallback.', 'idle');
+        await refreshGroq();
+      }
+    } catch (e) {
+      setNote(ui.groqNote, 'Could not remove key: ' + (e.message || e), 'error');
+    } finally {
+      ui.groqClear.disabled = false;
+    }
+  });
+}
+
 // --------------------------------------------------------------- refresh
 let refreshingPromise = null;
 function refresh() {
@@ -407,6 +580,7 @@ async function doRefresh() {
   // Local and cheap: safe to ask on every tick, unlike a network fetch.
   renderVersion(await versionStatus());
   await refreshReview();
+  await refreshGroq();
 
   if (s.state === 'unavailable') {
     hideQr();
