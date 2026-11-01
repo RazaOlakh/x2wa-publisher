@@ -874,8 +874,12 @@ async function onPostClick(ev, btn, variant) {
       renderButton(btn, 'success', 'Sent');
       rememberSent(post.tweetId, where);
       const count = result.sent ? result.sent.length : 0;
-      showSnackbar('success', where ? 'Posted to ' + where : 'Posted to WhatsApp',
-        count > 1 ? count + ' messages sent.' : 'Your post is in the channel.');
+      let snackDetail = count > 1 ? count + ' messages sent.' : 'Your post is in the channel.';
+      if (result && result.translation && result.translation.provider) {
+        const eng = result.translation.provider === 'groq' ? 'Qwen 3.8 27B' : 'Google Translate';
+        snackDetail += ` (${eng})`;
+      }
+      showSnackbar('success', where ? 'Posted to ' + where : 'Posted to WhatsApp', snackDetail);
       try { xlog('info', 'send-succeeded', { requestId, tweetId: post.tweetId, jobId: result.jobId }); } catch {}
     } else if (result && result.partial) {
       const sentCount = result.sent ? result.sent.length : 0;

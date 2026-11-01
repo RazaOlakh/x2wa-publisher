@@ -241,6 +241,28 @@ async function runAll() {
     ok('Success note displayed', els.revAddNote.textContent.includes('Saved override: OpenAI → اوپن اے آئی'));
   }
 
+  console.log('\n--- 5. Bottom Center Translation Engine Indicator ---');
+  {
+    // A. Fallback state
+    const { els } = await runTestHarness({ groqConfig: { configured: false, model: 'qwen/qwen3.8-27b' } });
+    ok('Bottom center indicator exists', Boolean(els.transEngineText));
+    ok('Shows Google fallback when no key', els.transEngineText.textContent.includes('Google Translate (Fallback)'));
+    eq('Dot color is amber for fallback', els.transEngineDot.style.background, '#e3a008');
+
+    // B. Groq active state
+    const { els: elsGroq } = await runTestHarness({
+      groqConfig: {
+        configured: true,
+        model: 'qwen/qwen3.8-27b',
+        lastTranslation: { provider: 'groq', model: 'qwen/qwen3.8-27b', ts: Date.now() - 60000 },
+      },
+    });
+    ok('Shows Qwen 3.8 27B when Groq active', elsGroq.transEngineText.textContent.includes('Qwen 3.8 27B (Groq)'));
+    eq('Dot color is vibrant green for Groq', elsGroq.transEngineDot.style.background, '#10a37f');
+    ok('Last translation event visible', !elsGroq.transLastEvent.classList.contains('hidden'));
+    ok('Last event details mention Qwen', elsGroq.transLastEvent.textContent.includes('Qwen 3.8 27B'));
+  }
+
   console.log('\nALL POPUP SIDEBAR AND CONFIGURATION TESTS PASSED');
 }
 

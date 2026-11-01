@@ -132,6 +132,7 @@ let channelCache = null;
 const CHANNEL_CACHE_MS = 30000;
 const jobs = new Map();
 let currentJob = null;
+let lastTranslationInfo = null;
 // True while a send is in progress, so the watchdog leaves it alone.
 let jobRunning = false;
 const duplicateLog = new Map();
@@ -700,6 +701,7 @@ async function runSend(body) {
     // preserved. A failure is reported rather than quietly posting the
     // original, which would be the wrong language with nothing to show for it.
     let outText = text;
+    let translationMeta = null;
     if (body.translateTo) {
       const target = String(body.translateTo);
       const t0 = Date.now();
@@ -707,6 +709,13 @@ async function runSend(body) {
       try {
         const translation = await translatePostTextWithMeta(text, target, body.author, { log });
         outText = translation.text;
+        translationMeta = {
+          provider: translation.provider,
+          model: translation.model,
+          target,
+          ts: Date.now(),
+        };
+        lastTranslationInfo = translationMeta;
         log('info','translate-done',{requestId,jobId,target,provider:translation.provider,model:translation.model,charsIn:text.length,charsOut:outText.length,ms:Date.now()-t0});
       } catch (e) {
         duplicateLog.set(key, { ts: now, status: 'failed', jobId });
@@ -770,8 +779,8 @@ async function runSend(body) {
     jobs.set(jobId, { status: ok ? 'completed' : (partial ? 'partial' : 'failed'), sent, failures });
     cleanup(jobDir);
     log('info','send-job-complete',{requestId,jobId,status: ok ? 'completed' : (partial ? 'partial' : 'failed'),sent:sent.length,failed:failures.length});
-    if (ok) return { ok: true, jobId, sent };
-    if (partial) return { ok: false, jobId, sent, partial: true, failures, error: 'partial-send' };
+    if (ok) return { ok: true, jobId, sent, ...(translationMeta ? { translation: translationMeta } : {}) };
+    if (partial) return { ok: false, jobId, sent, partial: true, failures, error: 'partial-send', ...(translationMeta ? { translation: translationMeta } : {}) };
     return { ok: false, jobId, error: failures.length ? failures[failures.length - 1].error : 'send-failed', ...(failures.length ? { failures } : {}) };
   } catch (e) {
     try{ log('error','send-job-error',{requestId,jobId,message:e&&e.message,stack:e&&e.stack}); }catch{}
@@ -799,6 +808,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && url.pathname === '/status') {
       // state reflects the real WhatsApp connection, not just that this
       // HTTP server is answering.
+      const hasGroq = Boolean(process.env.GROQ_API_KEY && process.env.GROQ_API_KEY.trim());
       return json(res, 200, {
         state,
         me: waInfo ? waInfo.wid : null,
@@ -806,6 +816,9 @@ const server = http.createServer(async (req, res) => {
         authRequired: state === 'auth_required' || state === 'qr',
         reconnecting: state === 'reconnecting',
         jobs: Array.from(jobs.entries()).slice(-20),
+        activeEngine: hasGroq ? 'groq' : 'google',
+        activeEngineLabel: hasGroq ? 'Qwen 3.8 27B (Groq)' : 'Google Translate (Fallback)',
+        lastTranslation: lastTranslationInfo,
       });
     }
     if (req.method === 'GET' && url.pathname === '/version') {
@@ -933,6 +946,12 @@ const server = http.createServer(async (req, res) => {
           out = res.text;
           provider = res.provider;
           model = res.model;
+          lastTranslationInfo = {
+            provider,
+            model,
+            target: request.to,
+            ts: Date.now(),
+          };
         } else {
           out = await transliterateText(request.text, request.to, { log });
           provider = 'inputtools';
@@ -953,7 +972,16 @@ const server = http.createServer(async (req, res) => {
       const maskedKey = configured
         ? (apiKey.length > 8 ? `${apiKey.slice(0, 4)}...${apiKey.slice(-4)}` : '••••••••')
         : '';
-      return json(res, 200, { ok: true, configured, model, maskedKey, hasKey: configured });
+      return json(res, 200, {
+        ok: true,
+        configured,
+        model,
+        activeEngine: configured ? 'groq' : 'google',
+        activeEngineLabel: configured ? 'Qwen 3.8 27B (Groq)' : 'Google Translate (Fallback)',
+        lastTranslation: lastTranslationInfo,
+        maskedKey,
+        hasKey: configured,
+      });
     }
     // Set or clear Groq API translation configuration and persist to .env
     if (req.method === 'POST' && url.pathname === '/groq/config') {

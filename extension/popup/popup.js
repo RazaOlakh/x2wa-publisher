@@ -31,6 +31,11 @@ const ui = {
   revAddOriginal: el('revAddOriginal'), revAddUrdu: el('revAddUrdu'),
   revAddSaveBtn: el('revAddSaveBtn'), revAddCancelBtn: el('revAddCancelBtn'),
   revAddNote: el('revAddNote'),
+  // Bottom center translation engine indicator
+  transEngineFooter: el('transEngineFooter'),
+  transEngineDot: el('transEngineDot'),
+  transEngineText: el('transEngineText'),
+  transLastEvent: el('transLastEvent'),
 };
 
 const store = {
@@ -489,9 +494,52 @@ async function getGroqConfig() {
   return { configured: false, model: 'qwen/qwen3.8-27b' };
 }
 
+function formatTimeAgo(ts) {
+  if (!ts) return '';
+  const diffSec = Math.max(0, Math.floor((Date.now() - ts) / 1000));
+  if (diffSec < 45) return 'just now';
+  if (diffSec < 90) return '1 min ago';
+  const min = Math.floor(diffSec / 60);
+  if (min < 60) return `${min} mins ago`;
+  const hours = Math.floor(min / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+function updateEngineFooter(cfg, isOffline) {
+  if (!ui.transEngineText) return;
+  if (isOffline) {
+    ui.transEngineText.textContent = 'Translation: Controller Offline';
+    if (ui.transEngineDot && ui.transEngineDot.style) ui.transEngineDot.style.background = '#e02424';
+    if (ui.transLastEvent) ui.transLastEvent.classList.add('hidden');
+    return;
+  }
+  const isGroq = Boolean(cfg && cfg.configured);
+  if (isGroq) {
+    ui.transEngineText.textContent = 'Translating with: Qwen 3.8 27B (Groq)';
+    if (ui.transEngineDot && ui.transEngineDot.style) ui.transEngineDot.style.background = '#10a37f';
+  } else {
+    ui.transEngineText.textContent = 'Translating with: Google Translate (Fallback)';
+    if (ui.transEngineDot && ui.transEngineDot.style) ui.transEngineDot.style.background = '#e3a008';
+  }
+
+  if (ui.transLastEvent) {
+    const last = cfg && (cfg.lastTranslation || cfg.last);
+    if (last && last.provider) {
+      const provName = last.provider === 'groq' ? 'Qwen 3.8 27B (Groq)' : 'Google Translate';
+      const timeStr = last.ts ? ` · ${formatTimeAgo(last.ts)}` : '';
+      ui.transLastEvent.textContent = `Last post: ${provName}${timeStr}`;
+      ui.transLastEvent.classList.remove('hidden');
+    } else {
+      ui.transLastEvent.classList.add('hidden');
+    }
+  }
+}
+
 async function refreshGroq() {
-  if (!ui.groqBadge) return;
   const cfg = await getGroqConfig();
+  updateEngineFooter(cfg, false);
+  if (!ui.groqBadge) return;
   if (cfg.configured) {
     ui.groqBadge.textContent = 'Qwen 3.8 27B Active';
     if (ui.groqBadge.style) {
@@ -602,6 +650,7 @@ async function doRefresh() {
     ui.disconnect.disabled = true;
     setNote(ui.channelNote, 'Channels are unavailable until the controller runs.', 'idle');
     ui.foot.textContent = 'Controller: offline';
+    updateEngineFooter(null, true);
     return;
   }
 

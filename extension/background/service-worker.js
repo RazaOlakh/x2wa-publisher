@@ -367,7 +367,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           body: JSON.stringify(payload),
         });
         const j = await res.json();
-        if (j && j.ok) return reply(sendResponse, { ok: true, jobId: j.jobId, sent: j.sent });
+        if (j && j.ok) return reply(sendResponse, { ok: true, jobId: j.jobId, sent: j.sent, ...(j.translation ? { translation: j.translation } : {}) });
         if (j && j.partial) {
           return reply(sendResponse, { ok: false, partial: true, jobId: j.jobId, sent: j.sent, failures: j.failures, error: j.error || 'partial-send' });
         }
@@ -490,7 +490,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         body: JSON.stringify(payload),
       });
       const j = await res.json();
-      if (j && j.ok) return reply(sendResponse, { ok: true, jobId: j.jobId, sent: j.sent });
+      if (j && j.ok) return reply(sendResponse, { ok: true, jobId: j.jobId, sent: j.sent, ...(j.translation ? { translation: j.translation } : {}) });
       if (j && j.partial) return reply(sendResponse, { ok: false, partial: true, jobId: j.jobId, sent: j.sent, failures: j.failures, error: j.error || 'partial-send' });
       return reply(sendResponse, { ok: false, error: (j && j.error) || 'send-failed', ...(j && j.failures ? { failures: j.failures } : {}) });
     } catch (e) { reply(sendResponse, { ok: false, error: e.message }); }
