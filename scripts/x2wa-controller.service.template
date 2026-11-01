@@ -8,7 +8,7 @@
 
 [Unit]
 Description=X to WhatsApp Channel Poster controller (local, loopback only)
-Documentation=https://github.com/OWNER/x2wa-publisher
+Documentation=__REPO_URL__
 After=graphical-session.target
 PartOf=graphical-session.target
 

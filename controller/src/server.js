@@ -2,13 +2,25 @@
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
-const { spawn, execFile } = require('child_process');
+const { execSync } = require('child_process');
 const crypto = require('crypto');
 const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 const QRCode = require('qrcode-generator');
-const { sessionDir, tmpRoot, acquireSessionLock, findChromeExecutable } = require('./platform');
+const { sessionDir, tmpRoot, acquireSessionLock, chromePath } = require('./platform');
 const { listPostableChannels, canPostToChannel } = require('./channels');
+const { createHeartbeat, isStartupStuck } = require('./heartbeat');
+const repo = require('./repo');
+const { decodeInlineImage, isInlineImage, MAX_INLINE_BYTES } = require('./inline-media');
+const videoPipeline = require('./video-pipeline');
+const hlsPrefetch = require('./hls-prefetch');
+const duplicate = require('./duplicate-guard');
+const { translateText, readTranslateRequest, transliterateText, translatePostText } = require('./translate');
+const {
+  resolveTransliteration,
+  defaultStore: overridesStore,
+  MAX_NAME_CHARS,
+} = require('./transliterate');
 
 const HOST = '127.0.0.1';
 const PORT = parseInt(process.env.CONTROLLER_PORT || '47825', 10);
@@ -17,6 +29,11 @@ const TMP_ROOT = tmpRoot();
 const MAX_MEDIA_BYTES = 64 * 1024 * 1024;
 const FFMPEG_TIMEOUT_MS = 5 * 60 * 1000;
 const DOWNLOAD_TIMEOUT_MS = 60 * 1000;
+// HLS segment fetching. 8 workers measured 2.24 MB/s against 0.29 MB/s
+// serially on this project's own sources; the cap keeps a large video from
+// opening an unbounded number of sockets.
+const HLS_CONCURRENCY = 8;
+const HLS_RETRIES = 3;
 
 fs.mkdirSync(TMP_ROOT, { recursive: true });
 // Refuse to start a second client against the same session directory.
@@ -28,6 +45,13 @@ try {
 }
 
 let state = 'starting';
+let stateEnteredAt = Date.now();
+function setState(s) {
+  if (state !== s) {
+    state = s;
+    stateEnteredAt = Date.now();
+  }
+}
 let lastQr = null;
 let qrIssuedAt = 0;
 let waInfo = null;
@@ -37,6 +61,8 @@ let channelCache = null;
 const CHANNEL_CACHE_MS = 30000;
 const jobs = new Map();
 let currentJob = null;
+// True while a send is in progress, so the watchdog leaves it alone.
+let jobRunning = false;
 const duplicateLog = new Map();
 
 function log(level,event,data){ const rec={ts:new Date().toISOString(),level,component:'controller',event,...(data||{})}; try{ console.log(JSON.stringify(rec)); }catch{ console.log(`${level} ${event}`); } }
@@ -44,9 +70,15 @@ function log(level,event,data){ const rec={ts:new Date().toISOString(),level,com
 // The dedicated WhatsApp account. LocalAuth keeps the session in
 // SESSION_DIR so the next start reconnects without another QR scan.
 function makeClient() {
+  // The browser is chosen per platform (CHROME_PATH first, then the platform's
+  // usual location). If nothing is found the path is left to puppeteer, which
+  // reports a missing browser far more clearly than a path that never existed.
+  const launch = { headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] };
+  const exe = chromePath();
+  if (exe) launch.executablePath = exe;
   return new Client({
     authStrategy: new LocalAuth({ dataPath: SESSION_DIR }),
-    puppeteer: { headless: true, executablePath: findChromeExecutable(), args: ['--no-sandbox', '--disable-setuid-sandbox'] },
+    puppeteer: launch,
   });
 }
 
@@ -54,21 +86,21 @@ let client = null;
 
 function startClient(reason) {
   if (client) return;
-  state = state === 'ready' ? state : 'starting';
+  setState(state === 'ready' ? state : 'starting');
   log('info','client-start',{ reason, sessionDir: SESSION_DIR });
   client = makeClient();
   client.on('qr', (qr) => {
-    state = 'qr'; lastQr = qr; qrIssuedAt = Date.now();
+    setState('qr'); lastQr = qr; qrIssuedAt = Date.now();
     log('info','qr-state',{status:'waiting-for-user'});
     // Printed for a user working in a terminal; never written to a log file.
     try { qrcode.generate(qr, { small: true }); } catch {}
   });
-  client.on('authenticated', () => { state = 'authenticated'; log('info','authenticated'); });
-  client.on('auth_failure', (m) => { state = 'auth_failure'; log('error','auth-failure',{error:String(m)}); });
+  client.on('authenticated', () => { setState('authenticated'); log('info','authenticated'); });
+  client.on('auth_failure', (m) => { setState('auth_failure'); log('error','auth-failure',{error:String(m)}); });
   // A clean disconnect also rebuilds the client from the saved session.
   client.on('ready', () => {
-    state = 'ready'; waInfo = client.info; lastQr = null; channelCache = null;
-    restartAttempts = 0; restartPending = false;
+    setState('ready'); waInfo = client.info; lastQr = null; channelCache = null;
+    restartAttempts = 0; restartPending = false; beat.reset();
     log('info','ready',{me: waInfo && waInfo.wid && waInfo.wid._serialized});
   });
   client.on('disconnected', (r) => {
@@ -77,6 +109,9 @@ function startClient(reason) {
   });
   client.initialize().catch((e) => {
     log('error','init-error',{error:e && e.message});
+    if (e && e.message && e.message.includes('already running')) {
+      killOrphanedSessionBrowsers();
+    }
     markConnectionStale('init-error');
   });
 }
@@ -87,17 +122,17 @@ function startClient(reason) {
 // being left with a stopped controller and no way forward.
 async function logout(reason) {
   if (!client) {
-    state = 'auth_required';
+    setState('auth_required');
     log('info','logout-noop',{reason});
     startClient('after-logout');
     return { ok: true, alreadyStopped: true };
   }
   const c = client;
-  client = null; lastQr = null; waInfo = null; channelCache = null; state = 'stopped';
+  client = null; lastQr = null; waInfo = null; channelCache = null; setState('stopped');
   try { await c.logout(); } catch (e) { log('warn','logout-error',{error:String((e && e.message) || e)}); }
   try { await c.destroy(); } catch (e) { log('warn','destroy-error',{error:String((e && e.message) || e)}); }
   log('info','logged-out',{reason});
-  state = 'auth_required';
+  setState('auth_required');
   startClient('after-logout');
   return { ok: true };
 }
@@ -112,17 +147,87 @@ let restartTimer = null;
 let restartAttempts = 0;
 let restartPending = false;
 
+// Resolves once the client is connected again (or the wait runs out).
+function waitForReady(timeoutMs) {
+  const deadline = Date.now() + (timeoutMs || 30000);
+  return new Promise((resolve) => {
+    const tick = () => {
+      if (state === 'ready' && client) return resolve(true);
+      if (Date.now() >= deadline) return resolve(false);
+      setTimeout(tick, 500);
+    };
+    tick();
+  });
+}
+
 function restartBackoffMs(attempts) {
   return Math.min(2000 * Math.pow(2, Math.max(0, attempts - 1)), 60000);
+}
+
+// Closing the browser and starting its replacement are not atomic. destroy()
+// only asks Chromium to close; the process can still be shutting down and
+// still holding the session profile when the new browser tries to use it.
+// Losing that race fails the new launch with "The browser is already
+// running...", which then backs off a minute at a time and leaves the
+// controller unusable for several minutes. So wait for the old process to
+// actually be gone before anything tries to take its place.
+const BROWSER_EXIT_WAIT_MS = 10000;
+
+async function stopClient(c) {
+  if (!c) return;
+  let proc = null;
+  try {
+    const b = c.pupBrowser;
+    proc = b && typeof b.process === 'function' ? b.process() : null;
+  } catch { /* nothing to wait on */ }
+  // Arm the waiter first: destroy() may be what makes the process exit.
+  let exited = null;
+  if (proc && proc.exitCode === null && !proc.killed) {
+    exited = new Promise((resolve) => {
+      const timer = setTimeout(resolve, BROWSER_EXIT_WAIT_MS);
+      if (timer.unref) timer.unref();
+      proc.once('exit', () => { clearTimeout(timer); resolve(); });
+    });
+  }
+  try { await c.destroy(); }
+  catch (e) { log('warn', 'destroy-error', { error: String((e && e.message) || e) }); }
+  if (exited) {
+    await exited;
+    log('info', 'browser-stopped', { waited: true, exitCode: proc.exitCode });
+  }
+  if (proc && proc.exitCode === null && !proc.killed) {
+    try {
+      if (process.platform === 'win32') {
+        execSync(`taskkill /pid ${proc.pid} /t /f`, { stdio: 'ignore' });
+      } else {
+        proc.kill('SIGKILL');
+      }
+    } catch {}
+  }
+}
+
+function killOrphanedSessionBrowsers() {
+  if (process.platform === 'win32') {
+    try {
+      const escaped = SESSION_DIR.replace(/'/g, "''");
+      const psScript = `Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -and $_.CommandLine -like '*${escaped}*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`;
+      const encoded = Buffer.from(psScript, 'utf16le').toString('base64');
+      execSync(`powershell -NoProfile -EncodedCommand ${encoded}`, { stdio: 'ignore', timeout: 5000 });
+    } catch {}
+  }
 }
 
 function markConnectionStale(reason) {
   if (restartPending) return;
   restartPending = true;
-  restartAttempts += 1;
+  if (reason && String(reason).startsWith('user-restart')) {
+    restartAttempts = 0;
+  } else {
+    restartAttempts += 1;
+  }
   const delay = restartBackoffMs(restartAttempts);
   // Report the truth while we rebuild, instead of claiming "ready".
-  state = 'reconnecting';
+  setState('reconnecting');
   log('warn', 'connection-stale', { reason, attempt: restartAttempts, retryInMs: delay });
   if (restartTimer) clearTimeout(restartTimer);
   restartTimer = setTimeout(async () => {
@@ -130,18 +235,123 @@ function markConnectionStale(reason) {
     const stale = client;
     client = null;
     lastQr = null; waInfo = null; channelCache = null;
-    if (stale) {
-      try { await stale.destroy(); } catch (e) { /* already gone */ }
-    }
+    await stopClient(stale);
     restartPending = false;
     startClient('recover:' + reason);
   }, delay);
   if (restartTimer.unref) restartTimer.unref();
 }
 
+// --- liveness watchdog ---------------------------------------------------
+// A sleep/resume (or a stopped machine) freezes the WhatsApp page without any
+// 'disconnected' event, so the client goes on saying "ready" while nothing
+// works. The heartbeat asks the page for its own connection state, and notices
+// when it arrives far too late to be an ordinary beat. Either signal rebuilds
+// the client from the same saved session, which reconnects without a new QR.
+const HEARTBEAT_MS = 30000;
+const beat = createHeartbeat({ beatMs: HEARTBEAT_MS });
+let lastBeatAt = Date.now();
+let beatRunning = false;
+
+async function heartbeat() {
+  const now = Date.now();
+  const gap = now - lastBeatAt;
+  lastBeatAt = now;
+
+  if (beat.sleptFor(gap)) {
+    log('warn', 'system-resume', { gapMs: Math.round(gap) });
+    markConnectionStale('system-resume');
+    return;
+  }
+
+  // Startup watchdog: if stuck in 'starting' or 'authenticated' for over 60 seconds,
+  // recover the connection by restarting the client.
+  if (!restartPending && isStartupStuck(state, now - stateEnteredAt)) {
+    log('warn', 'startup-stuck', { state, elapsedMs: now - stateEnteredAt });
+    markConnectionStale('startup-stuck:' + state);
+    return;
+  }
+  // Never rebuild underneath a post that is still running: the send reports
+  // its own failures, and tearing the client down mid-send only adds to them.
+  if (state !== 'ready' || !client || beatRunning || jobRunning) return;
+
+  beatRunning = true;
+  try {
+    const waState = await client.getState();
+    const seen = beat.observe(waState);
+    if (state !== 'ready') return; // went stale while we were asking
+    if (seen.verdict === 'recovered') log('info', 'heartbeat-recovered', { afterMisses: seen.misses });
+    else if (seen.verdict === 'restart') markConnectionStale('heartbeat-' + String(waState));
+  } catch (e) {
+    // The page itself is gone, which is what a sleep/resume looks like.
+    log('warn', 'heartbeat-failed', { error: e && e.message });
+    markConnectionStale('heartbeat-failed');
+  } finally {
+    beatRunning = false;
+  }
+}
+
+setInterval(heartbeat, HEARTBEAT_MS).unref();
+
+// systemd stops the controller with SIGTERM. The WhatsApp browser is a
+// separate process that survives its parent: without shutting it down here,
+// a restart leaves that browser holding the session profile, and the next
+// start cannot launch its own ("The browser is already running...") and
+// spends minutes failing before the lock clears. Closing it on the way out
+// keeps restarts and sleeps fast.
+//
+// These are *prepended*, not appended: acquiring the session lock installs
+// its own SIGTERM handler that releases the lock and calls process.exit()
+// straight away, and a listener registered earlier runs first. Appended,
+// this handler would never get to run -- the process would already be gone,
+// leaving the browser behind as an orphan.
+let shuttingDown = false;
+
+// console.log to a pipe is buffered, and process.exit() below would drop the
+// last line of the most interesting log the controller ever writes. Writing
+// straight to the descriptor keeps it.
+function logSync(level, event, data) {
+  const rec = { ts: new Date().toISOString(), level, component: 'controller', event, ...(data || {}) };
+  try { fs.writeSync(1, JSON.stringify(rec) + '\n'); } catch { /* stdout closed */ }
+}
+
+for (const signal of ['SIGTERM', 'SIGINT']) {
+  process.prependListener(signal, async () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    logSync('info', 'shutdown', { signal });
+    // Never hang here: being killed by systemd's timeout would orphan the
+    // browser again, which is the very thing being avoided.
+    const bail = setTimeout(() => process.exit(0), 8000);
+    if (bail.unref) bail.unref();
+    setState('stopped');
+    const c = client;
+    client = null;
+    // Bounded on purpose: systemd has already signalled the whole process
+    // group, so the browser is on its way out, and destroy() can sit there
+    // waiting for a browser that will never answer. Waiting forever would
+    // just stall the restart.
+    if (c) {
+      try {
+        await Promise.race([stopClient(c), new Promise((r) => setTimeout(r, 3000))]);
+        logSync('info', 'shutdown-complete', { signal });
+      } catch (e) { logSync('warn', 'destroy-error', { error: String((e && e.message) || e) }); }
+    }
+    clearTimeout(bail);
+    process.exit(0);
+  });
+}
+
 startClient('startup');
 
-function json(res, code, obj) { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(obj, null, 1)); }
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Requested-With, *',
+  'Access-Control-Allow-Private-Network': 'true',
+};
+
+function json(res, code, obj) { res.writeHead(code, Object.assign({ 'Content-Type': 'application/json' }, CORS_HEADERS)); res.end(JSON.stringify(obj, null, 1)); }
 
 // Renders the pairing QR as an SVG data URL. The extension displays the
 // image, so the scannable payload itself is never sent to the browser
@@ -182,7 +392,12 @@ function extractionFailures(body) {
 }
 
 function validMedia(m) {
-  return m && ['image', 'video'].includes(m.type) && typeof m.source === 'string' && m.source.length > 0 && m.source.length < 4096;
+  if (!m || !['image', 'video'].includes(m.type)) return false;
+  if (typeof m.source !== 'string' || m.source.length === 0) return false;
+  // A screenshot is sent inline and is far larger than a URL, so it gets a
+  // size bound of its own rather than the URL's character limit.
+  if (isInlineImage(m.source)) return m.type === 'image' && m.source.length <= MAX_INLINE_BYTES;
+  return m.source.length < 4096;
 }
 
 async function download(source, dest, timeoutMs) {
@@ -208,44 +423,13 @@ async function download(source, dest, timeoutMs) {
   });
 }
 
-function ffprobeOk(file) {
-  log('info','media-validate-start',{requestId:currentJob&&currentJob.requestId,jobId:currentJob&&currentJob.jobId,file});
-  return new Promise((resolve) => {
-    execFile('ffprobe', ['-v', 'error', '-show_streams', '-of', 'json', file], { timeout: 30000 }, (err, stdout) => {
-      if (err) { try{ log('error','media-validate-error',{requestId:currentJob&&currentJob.requestId,jobId:currentJob&&currentJob.jobId,error:err&&err.message}); }catch{} return resolve(false); }
-      try {
-        const j = JSON.parse(stdout);
-        const hasVideo = j.streams && j.streams.some((s) => s.codec_type === 'video');
-        const hasAudio = Boolean(j.streams && j.streams.some((s) => s.codec_type === 'audio'));
-        // Log what the delivered file really contains: a muxed HLS master
-        // must yield both a picture and an audio track.
-        log('info','media-validate-streams',{
-          requestId:currentJob&&currentJob.requestId,
-          jobId:currentJob&&currentJob.jobId,
-          hasVideo:Boolean(hasVideo),
-          hasAudio,
-          codecs:(j.streams||[]).map((s) => s.codec_type + ':' + (s.codec_name || '?')),
-        });
-        if (!j.streams || !hasVideo) { log('warn','media-validate-no-video',{requestId:currentJob&&currentJob.requestId,jobId:currentJob&&currentJob.jobId}); }
-        resolve(Boolean(hasVideo));
-      } catch { resolve(false); }
-    });
-  });
-}
-
-function ffmpegMux(input, output) {
-  log('info','media-ffmpeg-start',{requestId:currentJob&&currentJob.requestId,jobId:currentJob&&currentJob.jobId,input});
-  return new Promise((resolve, reject) => {
-    const args = ['-y', '-i', input, '-c:v', 'libx264', '-c:a', 'aac', '-shortest', output];
-    const p = spawn('ffmpeg', args, { stdio: 'ignore' });
-    const t = setTimeout(() => { p.kill('SIGKILL'); log('warn','media-ffmpeg-timeout',{requestId:currentJob&&currentJob.requestId,jobId:currentJob&&currentJob.jobId}); reject(new Error('ffmpeg-timeout')); }, FFMPEG_TIMEOUT_MS);
-    p.on('exit', (code) => {
-      clearTimeout(t);
-      if (code === 0) { log('info','media-ffmpeg-done',{requestId:currentJob&&currentJob.requestId,jobId:currentJob&&currentJob.jobId}); resolve(); }
-      else { try{ log('error','media-ffmpeg-failed',{requestId:currentJob&&currentJob.requestId,jobId:currentJob&&currentJob.jobId,code}); }catch{} reject(new Error('ffmpeg-failed')); }
-    });
-    p.on('error', reject);
-  });
+// X media URLs are signed with query parameters. Those are needed to fetch
+// the media but must not accumulate in logs, so anything logged for a URL is
+// reduced to its origin and path.
+function redactUrl(u) {
+  if (typeof u !== 'string') return u;
+  const i = u.indexOf('?');
+  return i === -1 ? u : `${u.slice(0, i)}?…`;
 }
 
 // X media URLs (e.g. pbs.twimg.com/...?format=webp&name=large)
@@ -280,32 +464,84 @@ async function processMedia(item, jobDir, index) {
   log('info','media-process-start',{requestId:currentJob&&currentJob.requestId,jobId:currentJob&&currentJob.jobId,type:item.type,index:tag});
   if (item.type === 'video') {
     const out = path.join(jobDir, `out-${tag}.mp4`);
-    if (/^https?:\/\//i.test(item.source)) {
-      // For HLS-style sources we feed the URL directly to ffmpeg rather than trying to
-      // download it as a static object.
-      if (/\.m3u8(\?|$)/i.test(item.source)) {
-        await ffmpegMux(item.source, out);
-      } else {
-        const file = path.join(jobDir, `input-${tag}.bin`);
-        await download(item.source, file, DOWNLOAD_TIMEOUT_MS);
-        const stat = fs.statSync(file);
-        if (stat.size > MAX_MEDIA_BYTES) throw new Error('media-too-large');
-        await ffmpegMux(file, out);
+    const t0 = Date.now();
+    let built = null;
+
+    if (/^https?:\/\//i.test(item.source) && /\.m3u8(\?|$)/i.test(item.source)) {
+      // HLS. Fetch the segments concurrently, then remux locally.
+      //
+      // ffmpeg's own HLS demuxer pulls one segment at a time, and each one
+      // costs a round trip: measured on a 5-minute X video it used ~1s of
+      // CPU and ~40-70s of wall clock, so the wait was the network, not the
+      // encoding. Fetching in parallel and handing ffmpeg local files keeps
+      // ffmpeg doing the demux while taking that serial wait out.
+      const dir = path.join(jobDir, `hls-${tag}`);
+      const fp0 = Date.now();
+      let plan = null;
+      try {
+        plan = await hlsPrefetch.prefetch(item.source, dir, {
+          concurrency: HLS_CONCURRENCY,
+          retries: HLS_RETRIES,
+          maxBytes: MAX_MEDIA_BYTES,
+        });
+      } catch (e) {
+        // A prefetch failure is a source failure, not something a re-encode
+        // can repair, so it is reported rather than retried more slowly.
+        log('warn','media-hls-prefetch-failed',{requestId:currentJob&&currentJob.requestId,jobId:currentJob&&currentJob.jobId,index:tag,error:String((e&&e.message)||e)});
+        throw new Error('video-prefetch-failed');
       }
+      const fetchMs = Date.now() - fp0;
+      log('info','media-hls-prefetched',{
+        requestId:currentJob&&currentJob.requestId,jobId:currentJob&&currentJob.jobId,index:tag,
+        fetchMs, videoSegments:plan.videoSegments, audioSegments:plan.audioSegments,
+        bytes:plan.bytes, retries:plan.retries, resolution:plan.variant&&plan.variant.resolution,
+      });
+      built = await videoPipeline.buildVideo(
+        plan.audioPlaylist ? [plan.videoPlaylist, plan.audioPlaylist] : [plan.videoPlaylist],
+        out,
+        { expectsAudio: plan.expectsAudio, localInput: true },
+      );
+    } else if (/^https?:\/\//i.test(item.source)) {
+      const file = path.join(jobDir, `input-${tag}.bin`);
+      await download(item.source, file, DOWNLOAD_TIMEOUT_MS);
+      const stat = fs.statSync(file);
+      if (stat.size > MAX_MEDIA_BYTES) throw new Error('media-too-large');
+      built = await videoPipeline.buildVideo([file], out, {});
     } else if (fs.existsSync(item.source)) {
       const stat = fs.statSync(item.source);
       if (stat.size > MAX_MEDIA_BYTES) throw new Error('media-too-large');
-      await ffmpegMux(item.source, out);
+      built = await videoPipeline.buildVideo([item.source], out, {});
     } else {
       throw new Error('media-source-invalid');
     }
-    if (!(await ffprobeOk(out))) { log('error','media-process-ffprobe-failed',{requestId:currentJob&&currentJob.requestId,jobId:currentJob&&currentJob.jobId,index:tag}); throw new Error('ffprobe-validation-failed'); }
-    log('info','media-process-done',{requestId:currentJob&&currentJob.requestId,jobId:currentJob&&currentJob.jobId,type:item.type,index:tag});
+
+    if (!built || !built.ok) {
+      log('error','media-video-build-failed',{
+        requestId:currentJob&&currentJob.requestId,jobId:currentJob&&currentJob.jobId,index:tag,
+        path:built&&built.path, attempts:built&&built.attempts,
+      });
+      throw new Error((built && built.error) || 'ffmpeg-validation-failed');
+    }
+    const stat = fs.statSync(out);
+    log('info','media-video-built',{
+      requestId:currentJob&&currentJob.requestId,jobId:currentJob&&currentJob.jobId,index:tag,
+      path:built.path, totalMs:Date.now()-t0, size:stat.size,
+      videoCodec:built.info&&built.info.videoCodec, audioCodec:built.info&&built.info.audioCodec,
+      width:built.info&&built.info.width, height:built.info&&built.info.height,
+      duration:built.info&&built.info.duration,
+      attempts:built.attempts.map((a) => ({ path: a.path, ok: a.ok, ms: a.ms, reason: a.reason, skipped: a.skipped })),
+    });
     return out;
   }
 
   const file = path.join(jobDir, `${tag}-` + crypto.randomBytes(6).toString('hex') + '.bin');
-  if (/^https?:\/\//i.test(item.source)) {
+  if (isInlineImage(item.source)) {
+    // A screenshot, captured in the browser and handed over in the request.
+    const decoded = decodeInlineImage(item.source);
+    if (decoded.error) throw new Error(decoded.error);
+    fs.writeFileSync(file, decoded.buffer);
+    log('info','media-inline-write',{requestId:currentJob&&currentJob.requestId,jobId:currentJob&&currentJob.jobId,index:tag,type:decoded.type,size:decoded.buffer.length});
+  } else if (/^https?:\/\//i.test(item.source)) {
     await download(item.source, file, DOWNLOAD_TIMEOUT_MS);
   } else if (fs.existsSync(item.source)) {
     fs.copyFileSync(item.source, file);
@@ -328,6 +564,15 @@ async function processMedia(item, jobDir, index) {
 }
 
 async function sendJob(body) {
+  jobRunning = true;
+  try {
+    return await runSend(body);
+  } finally {
+    jobRunning = false;
+  }
+}
+
+async function runSend(body) {
   const requestId = body.requestId || newJob();
   const { tweetId, tweetUrl, text, media, channelId } = body;
   const key = `${tweetId}|${channelId}`;
@@ -335,7 +580,7 @@ async function sendJob(body) {
   currentJob = { requestId, jobId: null, tweetId, channelId };
   log('info','send-request-received',{requestId,tweetId,channelId,mediaTypes:media&&media.map(m=>m.type)});
   const prev = duplicateLog.get(key);
-  if (prev && now - prev.ts < 120000 && prev.status !== 'failed') {
+  if (duplicate.isDuplicate(prev, now)) {
     log('warn','duplicate-send',{requestId,tweetId,channelId,prior: prev});
     return { ok: false, error: 'duplicate-send', prior: prev };
   }
@@ -351,19 +596,59 @@ async function sendJob(body) {
     if (state !== 'ready' || !client) { jobs.set(jobId, { status: 'failed', error: 'whatsapp-not-ready' }); cleanup(jobDir); log('error','whatsapp-not-ready',{requestId,jobId,tweetId,channelId}); return { ok: false, error: 'whatsapp-not-ready', jobId }; }
     // Re-check posting rights at send time: a channel can lose admin
     // between selection and publish. If it cannot be confirmed, refuse.
-    const permit = await canPostToChannel(client, channelId);
+    // Distinguish "we checked and you may not post" from "we could not
+    // check right now". A transient page fault (a detached frame after the
+    // machine sleeps, say) must not fail the post: the connection is
+    // rebuilt and the check retried once the client is healthy again.
+    let permit = await canPostToChannel(client, channelId);
+    if (!permit.ok && permit.error) {
+      log('warn','permission-check-retry',{requestId,jobId,channelId,error:permit.error});
+      markConnectionStale('permission-probe-failed');
+      const healthy = await waitForReady(45000);
+      log('info','permission-check-recheck',{requestId,jobId,channelId,healthy});
+      if (healthy && client) permit = await canPostToChannel(client, channelId);
+    }
     if (!permit.ok) {
-      jobs.set(jobId, { status: 'failed', error: 'channel-not-permitted' }); cleanup(jobDir);
-      log('warn','channel-not-permitted',{requestId,jobId,tweetId,channelId,role:permit.role,state:permit.state});
-      return { ok: false, error: 'channel-not-permitted', jobId, reason: permit.error || (permit.state === 'terminated' ? 'channel-terminated' : 'insufficient-permission') };
+      const unverifiable = Boolean(permit.error);
+      const code = unverifiable ? 'permission-check-failed' : 'channel-not-permitted';
+      jobs.set(jobId, { status: 'failed', error: code }); cleanup(jobDir);
+      log('warn', unverifiable ? 'permission-check-failed' : 'channel-not-permitted',
+        { requestId, jobId, tweetId, channelId, role: permit.role, state: permit.state, error: permit.error });
+      return {
+        ok: false, error: code, jobId,
+        reason: unverifiable ? 'permission-check-failed'
+          : (permit.state === 'terminated' ? 'channel-terminated' : 'insufficient-permission'),
+        retryable: unverifiable,
+      };
     }
     const mediaFiles = [];
     const sendFailures = [];
+    // The "post in Urdu" button asks for the text to be translated before it
+    // is sent. Only the text goes to the translator; its link stays in place,
+    // so a text-only post's link-first order (and the preview it earns) is
+    // preserved. A failure is reported rather than quietly posting the
+    // original, which would be the wrong language with nothing to show for it.
+    let outText = text;
+    if (body.translateTo) {
+      const target = String(body.translateTo);
+      const t0 = Date.now();
+      log('info','translate-start',{requestId,jobId,channelId,target,chars:text.length});
+      try {
+        outText = await translatePostText(text, target, body.author);
+        log('info','translate-done',{requestId,jobId,target,charsIn:text.length,charsOut:outText.length,ms:Date.now()-t0});
+      } catch (e) {
+        duplicateLog.set(key, { ts: now, status: 'failed', jobId });
+        jobs.set(jobId, { status: 'failed', error: 'translate-failed' });
+        cleanup(jobDir);
+        log('warn','translate-failed',{requestId,jobId,target,error:errMsg(e)});
+        return { ok: false, error: 'translate-failed', jobId, retryable: true };
+      }
+    }
     if (Array.isArray(media) && media.length > 0) {
       for (let i = 0; i < media.length; i++) {
         const m = media[i];
         if (!validMedia(m)) { sendFailures.push({ index: i, type: m && m.type, error: 'bad-media' }); log('error','bad-media',{requestId,jobId,tweetId,index:i}); continue; }
-        try { log('info','media-process-url',{requestId,jobId,type:m.type,index:i,source:m.source}); const f = await processMedia(m, jobDir, i); mediaFiles.push({ type: m.type, file: f, index: i }); }
+        try { log('info','media-process-url',{requestId,jobId,type:m.type,index:i,source:redactUrl(m.source)}); const f = await processMedia(m, jobDir, i); mediaFiles.push({ type: m.type, file: f, index: i, size: fs.existsSync(f) ? fs.statSync(f).size : 0 }); }
         catch (e) { try{ console.log('sendJob media error:', e && e.message, e && e.stack); }catch{} sendFailures.push({ index: i, type: m.type, error: errMsg(e) }); log('error','media-process-failed',{requestId,jobId,tweetId,index:i,error:errMsg(e)}); }
       }
     }
@@ -371,25 +656,35 @@ async function sendJob(body) {
     log('info','whatsapp-send-start',{requestId,jobId,channelId,tweetId});
     const sent = [];
     if (mediaFiles.length === 0) {
-      if (!text) {
+      if (!outText) {
         // Nothing could be processed: report every intended-but-missing item.
         const none = [].concat(extractionFailures(body), sendFailures);
         jobs.set(jobId, { status: 'failed', error: 'empty-post', failures: none }); cleanup(jobDir); log('error','whatsapp-send-empty',{requestId,jobId,tweetId,failed:none.length}); return { ok: false, error: 'empty-post', jobId, ...(none.length ? { failures: none } : {}) };
       }
       log('info','whatsapp-send-text',{requestId,jobId});
       try {
-        const m = await client.sendMessage(channelId, text);
+        const m = await client.sendMessage(channelId, outText);
         sent.push({ type: 'text', id: m && m.id });
       } catch (e) { sendFailures.push({ index: -1, type: 'text', error: errMsg(e) }); log('error','whatsapp-send-text-failed',{requestId,jobId,tweetId,error:errMsg(e)}); }
     } else {
       for (let i = 0; i < mediaFiles.length; i++) {
         const mf = mediaFiles[i];
+        // Timed separately from the processing above: for a large video the
+        // upload can cost more than everything else combined, and "ffmpeg got
+        // faster" is not the same as "the post arrives sooner".
+        const up0 = Date.now();
         try {
+          const read0 = Date.now();
           const msg = MessageMedia.fromFilePath(mf.file);
+          const readMs = Date.now() - read0;
           const m = i === 0
-            ? await client.sendMessage(channelId, msg, { caption: text || undefined })
+            ? await client.sendMessage(channelId, msg, { caption: outText || undefined })
             : await client.sendMessage(channelId, msg);
           sent.push({ type: mf.type, id: m && m.id });
+          log('info','media-upload-timed',{
+            requestId,jobId,index:mf.index,type:mf.type,
+            bytes:mf.size,readMs,uploadMs:Date.now()-up0,totalMs:Date.now()-up0,
+          });
         } catch (e) { sendFailures.push({ index: mf.index, type: mf.type, error: errMsg(e) }); log('error','whatsapp-send-media-failed',{requestId,jobId,tweetId,index:mf.index,error:errMsg(e)}); }
       }
     }
@@ -420,6 +715,10 @@ function cleanup(dir) {
 }
 
 const server = http.createServer(async (req, res) => {
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204, CORS_HEADERS);
+    return res.end();
+  }
   const url = new URL(req.url, `http://${HOST}:${PORT}`);
   try {
     if (req.method === 'GET' && url.pathname === '/health') {
@@ -437,6 +736,55 @@ const server = http.createServer(async (req, res) => {
         jobs: Array.from(jobs.entries()).slice(-20),
       });
     }
+    if (req.method === 'GET' && url.pathname === '/version') {
+      // Local facts only, so opening the popup never waits on the network.
+      return json(res, 200, await repo.status());
+    }
+    if (req.method === 'POST' && url.pathname === '/version/check') {
+      const r = await repo.check();
+      log('info', 'version-check', { ok: r.ok, behind: r.behind, checkFailed: r.checkFailed });
+      return json(res, r.ok ? 200 : 500, r);
+    }
+    if (req.method === 'POST' && (url.pathname === '/update' || url.pathname === '/pull')) {
+      const r = await repo.update();
+      log(r.ok ? 'info' : 'warn', 'update', {
+        ok: r.ok, error: r.error, from: r.from, to: r.to, files: r.files,
+      });
+      if (r.ok && r.restartController) {
+        // Answer first, then restart: the controller restarting is the whole
+        // point, so it happens once this response is on its way. Best
+        // effort - someone running it by hand has no unit to restart.
+        setTimeout(() => {
+          try {
+            const { spawn } = require('child_process');
+            spawn('systemctl', ['--user', 'restart', 'x2wa-controller'], { detached: true, stdio: 'ignore' }).unref();
+          } catch (e) { log('warn', 'restart-failed', { error: String((e && e.message) || e) }); }
+        }, 1500);
+      }
+      return json(res, r.ok ? 200 : 409, r);
+    }
+    if (req.method === 'POST' && url.pathname === '/push') {
+      const r = await repo.push();
+      log(r.ok ? 'info' : 'warn', 'push', {
+        ok: r.ok, error: r.error, branch: r.branch, sha: r.sha,
+      });
+      return json(res, r.ok ? 200 : 409, r);
+    }
+    if (req.method === 'POST' && url.pathname === '/sync') {
+      const r = await repo.sync();
+      log(r.ok ? 'info' : 'warn', 'sync', {
+        ok: r.ok, error: r.error, pulled: r.pulled, pushed: r.pushed, from: r.from, to: r.to, files: r.files,
+      });
+      if (r.ok && r.restartController) {
+        setTimeout(() => {
+          try {
+            const { spawn } = require('child_process');
+            spawn('systemctl', ['--user', 'restart', 'x2wa-controller'], { detached: true, stdio: 'ignore' }).unref();
+          } catch (e) { log('warn', 'restart-failed', { error: String((e && e.message) || e) }); }
+        }, 1500);
+      }
+      return json(res, r.ok ? 200 : 409, r);
+    }
     if (req.method === 'GET' && url.pathname === '/auth/qr') {
       // The QR payload is deliberately short-lived and only ever served to
       // a local requester; it is never logged or persisted.
@@ -445,11 +793,17 @@ const server = http.createServer(async (req, res) => {
       // QR payload off the network and out of any log.
       return json(res, 200, { image: qrImageSvg(lastQr), issuedAt: qrIssuedAt });
     }
-    if (req.method === 'POST' && url.pathname === '/auth/start') {
+    if (req.method === 'POST' && (url.pathname === '/auth/start' || url.pathname === '/auth/reconnect')) {
       // Idempotent: reconnect, or start pairing if there is nothing to
       // reconnect to. Lets the popup recover without a service restart.
-      if (state === 'ready') return json(res, 200, { ok: true, state, alreadyRunning: true });
-      if (!client) startClient('popup-request');
+      const body = await readBody(req).then((b) => { try { return JSON.parse(b || '{}'); } catch { return {}; } });
+      if (state === 'ready' && !body.force) return json(res, 200, { ok: true, state, alreadyRunning: true });
+      if (!client) {
+        startClient('popup-request');
+      } else if (body.force || ((state === 'starting' || state === 'authenticated') && (Date.now() - stateEnteredAt >= 15000))) {
+        log('info', 'auth-restart-requested', { state, elapsedMs: Date.now() - stateEnteredAt });
+        markConnectionStale('user-restart:' + state);
+      }
       return json(res, 200, { ok: true, state });
     }
     if (req.method === 'POST' && url.pathname === '/auth/logout') {
@@ -492,11 +846,119 @@ const server = http.createServer(async (req, res) => {
         return json(res, 500, { error: 'channel-list-failed' });
       }
     }
+    // Translate a short standalone string - the author's name that heads an
+    // Urdu post. The post itself is translated through /send's translateTo;
+    // this is for the small pieces that are translated on their own. It does
+    // not touch WhatsApp, so it is available whenever the controller is.
+    if (req.method === 'POST' && url.pathname === '/translate') {
+      const body = JSON.parse(await readBody(req));
+      const request = readTranslateRequest(body);
+      if (!request.ok) { log('error','translate-rejected-bad-request',{}); return json(res, 400, { error: request.error }); }
+      try {
+        const out = request.mode === 'translate'
+          ? await translateText(request.text, request.to)
+          : await transliterateText(request.text, request.to);
+        log('info','translate-http',{to:request.to,charsIn:request.text.length,charsOut:out.length,mode:request.mode||'transliterate'});
+        return json(res, 200, { ok: true, text: out, to: request.to });
+      } catch (e) {
+        log('warn','translate-http-failed',{to:request.to,error:errMsg(e)});
+        return json(res, 502, { ok: false, error: 'translate-failed' });
+      }
+    }
+    // Phonetic transliteration for author names into Urdu script.
+    // Consults local JSON overrides first, then Google Input Tools, and safely
+    // falls back to the original name if the engine fails. Never semantically translates.
+    if (req.method === 'POST' && url.pathname === '/transliterate') {
+      let body;
+      try { body = JSON.parse(await readBody(req)); }
+      catch { return json(res, 400, { ok: false, error: 'bad-request' }); }
+      if (!body || typeof body !== 'object' || typeof body.text !== 'string') {
+        return json(res, 400, { ok: false, error: 'bad-request' });
+      }
+      if (body.text.length > MAX_NAME_CHARS) {
+        return json(res, 400, { ok: false, error: 'name-too-long' });
+      }
+      try {
+        const result = await resolveTransliteration(body.text, body.handle);
+        log('info', 'transliterate-http', {
+          source: result.source,
+          charsIn: body.text.length,
+          charsOut: result.text.length,
+        });
+        return json(res, 200, result);
+      } catch (e) {
+        log('warn', 'transliterate-http-failed', { error: errMsg(e) });
+        return json(res, 200, {
+          ok: true,
+          text: body.text,
+          source: 'fallback',
+          original: body.text,
+          error: 'transliterate-failed',
+        });
+      }
+    }
+    // Read the persistent JSON overrides dictionary.
+    if (req.method === 'GET' && (url.pathname === '/overrides' || url.pathname === '/transliterate/overrides')) {
+      const data = overridesStore.getAll();
+      return json(res, 200, { ok: true, version: data.version || 1, overrides: data.overrides || {} });
+    }
+    // Save or update an approved/corrected transliteration in the dictionary.
+    if (req.method === 'POST' && (url.pathname === '/overrides' || url.pathname === '/transliterate/override')) {
+      let body;
+      try { body = JSON.parse(await readBody(req)); }
+      catch { return json(res, 400, { ok: false, error: 'bad-request' }); }
+      if (!body || typeof body !== 'object' || typeof body.original !== 'string' || typeof body.transliteration !== 'string') {
+        return json(res, 400, { ok: false, error: 'bad-request' });
+      }
+      if (body.original.length > MAX_NAME_CHARS || body.transliteration.length > MAX_NAME_CHARS) {
+        return json(res, 400, { ok: false, error: 'value-too-long' });
+      }
+      try {
+        const entry = await overridesStore.setOverride(body);
+        log('info', 'override-saved', { key: entry.key, original: entry.original });
+        return json(res, 200, { ok: true, entry });
+      } catch (e) {
+        log('warn', 'override-save-failed', { error: errMsg(e) });
+        return json(res, 500, { ok: false, error: (e && e.message) || 'save-failed' });
+      }
+    }
+    // Delete an override from the dictionary.
+    if (req.method === 'DELETE' && (url.pathname === '/overrides' || url.pathname === '/transliterate/override')) {
+      let body = {};
+      try {
+        const raw = await readBody(req);
+        if (raw && raw.trim()) body = JSON.parse(raw);
+      } catch {}
+      const key = body.key || url.searchParams.get('key');
+      const original = body.original || url.searchParams.get('original');
+      const handle = body.handle || url.searchParams.get('handle');
+      if (!key && !original && !handle) {
+        return json(res, 400, { ok: false, error: 'missing-identifier' });
+      }
+      try {
+        const r = await overridesStore.deleteOverride({ key, original, handle });
+        log('info', 'override-deleted', { key, original, handle, removed: r.removed });
+        return json(res, 200, { ok: true, removed: r.removed });
+      } catch (e) {
+        log('warn', 'override-delete-failed', { error: errMsg(e) });
+        return json(res, 500, { ok: false, error: 'delete-failed' });
+      }
+    }
     if (req.method === 'POST' && url.pathname === '/send') {
       if (state !== 'ready') { log('error','send-rejected-whatsapp-not-ready',{state}); return json(res, 409, { error: 'whatsapp-not-ready', state }); }
       const body = JSON.parse(await readBody(req));
       if (!body || typeof body !== 'object' || !body.tweetId || !body.tweetUrl || !body.channelId || typeof body.text !== 'string' || !Array.isArray(body.media)) {
         log('error','send-rejected-bad-request',{hasTweetId:!!(body&&body.tweetId)});
+        return json(res, 400, { error: 'bad-request' });
+      }
+      // An optional target language for the text; a short code, nothing else,
+      // so a stray value can never reshape the translate request.
+      if (body.translateTo != null && (typeof body.translateTo !== 'string' || body.translateTo.length === 0 || body.translateTo.length > 8)) {
+        log('error','send-rejected-bad-request',{badField:'translateTo'});
+        return json(res, 400, { error: 'bad-request' });
+      }
+      if (body.author != null && (typeof body.author !== 'string' || body.author.length > 200)) {
+        log('error','send-rejected-bad-request',{badField:'author'});
         return json(res, 400, { error: 'bad-request' });
       }
       log('info','send-request-validated',{requestId:body.requestId,tweetId:body.tweetId,mediaTypes:body.media.map(m=>m.type)});

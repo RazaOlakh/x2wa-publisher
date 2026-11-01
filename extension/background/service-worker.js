@@ -1,6 +1,13 @@
 // MV3 service worker: handles messages from the content script and talks to the
 // local controller at http://127.0.0.1:47825. Image source resolution is based on
 // article-scoped references gathered by the content script.
+// video-source.js holds the (testable) rule that names a post's video.
+// shared/clip.js holds the (testable) capture geometry: the page-zoom
+// conversion between the crop's CSS pixels and the capture command's DIP, and
+// the marker that lets a capture re-find the post it was measured from.
+importScripts('video-source.js');
+importScripts('../shared/clip.js');
+
 const CONTROLLER = 'http://127.0.0.1:47825';
 
 function swLog(level,event,data){ const rec={ts:new Date().toISOString(),level,component:'sw',event,...(data||{})}; try{ console.log(JSON.stringify(rec)); }catch{ console.log(`${level} ${event}`); } }
@@ -77,24 +84,169 @@ function resolveVideoSource(videoId, tabId, hints) {
   return { error: 'video-master-unavailable' };
 }
 
-// A video whose poster carries no id (older posts show a plain
-// /media/<id>.jpg thumbnail) can still be named when this post's own
-// document holds exactly one video: one video item maps 1:1 onto one
-// manifest id. With more than one candidate the mapping is ambiguous, so
-// the item is reported instead of guessed.
-function inferVideoId(videoId, hints, usedIds, videoCount) {
-  if (videoId) return videoId;
-  const candidates = Object.keys(hints || {}).filter((id) => hints[id] && hints[id].master);
-  if (videoCount !== 1 || candidates.length !== 1) return null;
-  if (usedIds.has(candidates[0])) return null;
-  return candidates[0];
-}
+// inferVideoId() lives in video-source.js so its ambiguity rule can be
+// tested without a browser; see that file for why it refuses to guess.
 
 function reply(sendResponse, obj) {
   try { sendResponse(obj); } catch {}
 }
 
+// --- screenshot capture --------------------------------------------------
+// A post is captured as an image of that post alone, not of the window or
+// the page. That needs the DevTools capture command with a crop, because
+// chrome.tabs.captureVisibleTab can only ever return the whole viewport, and
+// reaching it would mean asking for <all_urls> - a view of every site the
+// user visits - which is far more than this feature needs.
+//
+// The debugger is attached for the length of one capture and detached again
+// immediately, and only ever to the tab the user just clicked in.
+const CAPTURE_FORMAT = 'jpeg';
+const CAPTURE_QUALITY = 88;
+
+// Read the tagged post back through the debugger and return its box in
+// document CSS pixels - the same space the content script's rectangle was
+// converted into, so the two can be compared directly. A post that is no
+// longer in the document (X re-rendered it) reports an error instead of a box.
+async function inspectTarget(target, marker, metrics) {
+  const selector = markerSelector(marker);
+  if (!selector) return { error: 'capture-node-detached' };
+  try {
+    await chrome.debugger.sendCommand(target, 'DOM.enable');
+    const { root } = await chrome.debugger.sendCommand(target, 'DOM.getDocument', { depth: 0 });
+    const found = await chrome.debugger.sendCommand(target, 'DOM.querySelector', { nodeId: root.nodeId, selector });
+    if (!found || !found.nodeId) return { error: 'capture-node-detached' };
+    const raw = await chrome.debugger.sendCommand(target, 'DOM.getBoxModel', { nodeId: found.nodeId });
+    const model = raw && (raw.model || raw);
+    const q = model && model.border;
+    if (!q || q.length < 8) return { error: 'capture-invalid-clip' };
+    const left = Math.min(q[0], q[2], q[4], q[6]);
+    const top = Math.min(q[1], q[3], q[5], q[7]);
+    const width = Math.max(q[0], q[2], q[4], q[6]) - left;
+    const height = Math.max(q[1], q[3], q[5], q[7]) - top;
+    const vx = (metrics && metrics.cssVisualViewport && metrics.cssVisualViewport.pageX) || 0;
+    const vy = (metrics && metrics.cssVisualViewport && metrics.cssVisualViewport.pageY) || 0;
+    return { rect: { left: left + vx, top: top + vy, width, height } };
+  } catch (e) {
+    return { error: 'capture-node-detached' };
+  }
+}
+
+async function captureClip(tabId, clip, marker, measured) {
+  const target = { tabId };
+  await chrome.debugger.attach(target, '1.3');
+  try {
+    // The page zoom is only visible here, through the debugger: the crop was
+    // measured in CSS pixels, but the capture command addresses DIP, which is
+    // CSS pixels scaled by this factor. Without it the crop is wrong at any
+    // browser zoom other than 100%.
+    const metrics = await chrome.debugger.sendCommand(target, 'Page.getLayoutMetrics');
+
+    // Re-check the post the click pointed at, when one was tagged. A post that
+    // has gone, or that no longer sits where it was measured, is refused here
+    // rather than photographed in the wrong place.
+    if (marker && measured && measured.rect) {
+      const seen = await inspectTarget(target, marker, metrics);
+      if (seen.error) return { error: seen.error };
+      const sx = (measured.scroll && measured.scroll.x) || 0;
+      const sy = (measured.scroll && measured.scroll.y) || 0;
+      const was = {
+        left: measured.rect.left + sx, top: measured.rect.top + sy,
+        width: measured.rect.width, height: measured.rect.height,
+      };
+      if (!rectsAgree(was, seen.rect, 4)) return { error: 'capture-node-moved' };
+    }
+
+    const dip = clipToDip(clip, pageZoom(metrics));
+    if (!dip) return { error: 'capture-invalid-clip' };
+
+    const shot = await chrome.debugger.sendCommand(target, 'Page.captureScreenshot', {
+      format: CAPTURE_FORMAT,
+      quality: CAPTURE_QUALITY,
+      captureBeyondViewport: true,
+      clip: dip,
+    });
+    if (!shot || !shot.data) return { error: 'capture-failed' };
+    return { dataUrl: `data:image/${CAPTURE_FORMAT};base64,${shot.data}` };
+  } finally {
+    // Always detached, including when the capture threw: leaving it
+    // attached would hold a debugging banner over the user's page.
+    try { await chrome.debugger.detach(target); } catch { /* already gone */ }
+  }
+}
+
+async function updateLatestReviewItem(item) {
+  if (!chrome.storage || !chrome.storage.local) return;
+  return new Promise((resolve) => {
+    chrome.storage.local.get(['latestReviewItem'], (res) => {
+      const existing = res && res.latestReviewItem;
+      // Stale guard: if an existing review item is newer than this request, do not overwrite.
+      if (existing && existing.timestamp && existing.timestamp > item.timestamp) {
+        return resolve();
+      }
+      chrome.storage.local.set({ latestReviewItem: item }, () => resolve());
+    });
+  });
+}
+
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  // Transliterate an author's name phonetically into Urdu script.
+  // Checks dictionary overrides first, then Google Input Tools, and falls back
+  // to original text safely on error. Stores latest review item in storage.
+  if (msg && msg.type === 'TRANSLITERATE_NAME' && typeof msg.text === 'string') {
+    (async () => {
+      const originalText = msg.text.trim();
+      const opId = msg.requestId || `rev-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      const requestTimestamp = Date.now();
+      try {
+        const res = await fetch(`${CONTROLLER}/transliterate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: originalText, handle: msg.handle || null }),
+        });
+        const j = await res.json();
+        const transliterated = (j && j.ok && typeof j.text === 'string') ? j.text : originalText;
+        const source = (j && j.source) || 'fallback';
+
+        await updateLatestReviewItem({
+          id: opId,
+          original: (j && j.original) || originalText,
+          handle: (j && j.handle) || msg.handle || null,
+          transliteration: transliterated,
+          source,
+          timestamp: requestTimestamp,
+          status: source === 'override' ? 'saved' : 'pending',
+        });
+
+        return reply(sendResponse, {
+          ok: true,
+          text: transliterated,
+          source,
+          original: originalText,
+          handle: msg.handle || null,
+        });
+      } catch (e) {
+        swLog('warn', 'transliterate-name-failed', { error: e.message });
+        await updateLatestReviewItem({
+          id: opId,
+          original: originalText,
+          handle: msg.handle || null,
+          transliteration: originalText,
+          source: 'fallback',
+          timestamp: requestTimestamp,
+          status: 'pending',
+          error: e.message,
+        });
+        reply(sendResponse, {
+          ok: true,
+          text: originalText,
+          source: 'fallback',
+          original: originalText,
+          handle: msg.handle || null,
+        });
+      }
+    })();
+    return true;
+  }
   // Resolve t.co shortlinks to their canonical destination URLs.
   // The content script cannot read the expanded URL from the DOM (X only
   // exposes the shortlink href), so the resolution happens here where the
@@ -119,8 +271,99 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     })();
     return true;
   }
+  // Translate a short string on its own - the author's name that heads an Urdu
+  // post. The post's own text is translated by the controller as part of the
+  // send; this is the small, separate request for the name.
+  if (msg && msg.type === 'TRANSLATE_TEXT' && typeof msg.text === 'string') {
+    (async () => {
+      try {
+        const res = await fetch(`${CONTROLLER}/translate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: msg.text, to: msg.to || 'ur' }),
+        });
+        const j = await res.json();
+        if (j && j.ok) return reply(sendResponse, { ok: true, text: j.text });
+        return reply(sendResponse, { ok: false, error: (j && j.error) || 'translate-failed' });
+      } catch (e) {
+        swLog('warn', 'translate-text-failed', { error: e.message });
+        reply(sendResponse, { ok: false, error: e.message });
+      }
+    })();
+    return true;
+  }
+  if (msg && msg.type === 'SEND_SCREENSHOT') {
+    swLog('info', 'screenshot-received', { requestId: msg.requestId, tweetId: msg.post && msg.post.tweetId });
+    (async () => {
+      const tabId = _sender && _sender.tab && _sender.tab.id;
+      if (typeof tabId !== 'number') return reply(sendResponse, { ok: false, error: 'no-tab' });
+      const clip = msg.clip;
+      if (!clip || !(clip.width > 0) || !(clip.height > 0)) {
+        return reply(sendResponse, { ok: false, error: 'capture-too-small' });
+      }
+      const channelId = await getDefaultChannel();
+      if (!channelId) return reply(sendResponse, { ok: false, error: 'no-default-channel' });
+
+      let shot;
+      try {
+        shot = await captureClip(tabId, clip, msg.marker, { rect: msg.rect, scroll: msg.scroll });
+      } catch (e) {
+        // Chrome refuses this while Developer Tools is open on the tab, which
+        // is the common cause and worth saying so plainly.
+        const reason = String((e && e.message) || e);
+        const error = /devtools/i.test(reason) ? 'capture-unavailable' : 'capture-failed';
+        swLog('warn', 'screenshot-capture-failed', { requestId: msg.requestId, error, reason: reason.slice(0, 120) });
+        return reply(sendResponse, { ok: false, error, reason });
+      }
+      if (shot.error) return reply(sendResponse, { ok: false, error: shot.error });
+
+      // The screenshot is deduplicated under its own key, so photographing a
+      // post neither trips nor is tripped by that post's own guard. The
+      // prefix is re-checked rather than trusted, so a stray value cannot
+      // quietly become the post's real id and make a screenshot block the
+      // post it was taken from.
+      const shotId = typeof msg.dedupeKey === 'string' && msg.dedupeKey.indexOf('shot:') === 0
+        ? msg.dedupeKey
+        : `shot:${msg.requestId || Date.now()}`;
+
+      // Sent through exactly the same endpoint and pipeline as a normal
+      // post, so authentication, channel eligibility, media handling,
+      // duplicate protection and error reporting are all the ones already
+      // in use.
+      const payload = {
+        tweetId: shotId,
+        tweetUrl: (msg.post && msg.post.tweetUrl) || null,
+        text: (msg.post && msg.post.text) || '',
+        media: [{ type: 'image', source: shot.dataUrl }],
+        mediaFailures: [],
+        channelId,
+        kind: 'screenshot',
+      };
+      // The "post in Urdu" button asks the controller to translate the text
+      // before sending it - including the caption that travels with a
+      // quote-tweet's picture. Forwarded as-is; the controller validates it.
+      if (msg.translateTo) payload.translateTo = msg.translateTo;
+      swLog('info', 'screenshot-controller-request', { requestId: msg.requestId, bytes: shot.dataUrl.length });
+      try {
+        const res = await fetch(`${CONTROLLER}/send`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const j = await res.json();
+        if (j && j.ok) return reply(sendResponse, { ok: true, jobId: j.jobId, sent: j.sent });
+        if (j && j.partial) {
+          return reply(sendResponse, { ok: false, partial: true, jobId: j.jobId, sent: j.sent, failures: j.failures, error: j.error || 'partial-send' });
+        }
+        return reply(sendResponse, { ok: false, error: (j && j.error) || 'send-failed', ...(j && j.failures ? { failures: j.failures } : {}) });
+      } catch (e) {
+        reply(sendResponse, { ok: false, error: String((e && e.message) || e) });
+      }
+    })();
+    return true;
+  }
   if (!msg || msg.type !== 'SEND_POST') return false;
-  swLog('info','received-message',{requestId:msg.requestId,type:msg.type,tweetId:msg.post&&msg.post.tweetId,mediaTypes:(msg.post&&msg.post.mediaItems||[]).map((m)=>m.type),hasImage:msg.post&&msg.post.hasImage,hasVideo:msg.post&&msg.post.hasVideo});
+  swLog('info','received-message',{requestId:msg.requestId,type:msg.type,tweetId:msg.post&&msg.post.tweetId,translateTo:msg.translateTo||null,mediaTypes:(msg.post&&msg.post.mediaItems||[]).map((m)=>m.type),hasImage:msg.post&&msg.post.hasImage,hasVideo:msg.post&&msg.post.hasVideo});
   (async () => {
     try {
       const p = msg.post;
@@ -159,7 +402,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           if (r.source && !usedSources.has(r.source)) {
             usedSources.add(r.source);
             media.push({ type: 'video', source: r.source });
-            swLog('info','media-resolved',{requestId:msg.requestId,type:'video',index:i,videoId:videoId,via:r.via,inferred:!it.videoId,source:r.source.slice(0,70)});
+            // Only the origin and path are logged: the playlist query carries
+            // signed parameters that should not sit in logs.
+            swLog('info','media-resolved',{requestId:msg.requestId,type:'video',index:i,videoId:videoId,via:r.via,inferred:!it.videoId,source:r.source.split('?')[0]});
           } else {
             const error = usedSources.has(r.source) ? 'video-source-already-used' : (r.error || 'video-source-unavailable');
             mediaFailures.push({ index: i, type: 'video', videoId: videoId || it.videoId || null, error });
@@ -202,6 +447,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       const payload = {
         tweetId: p.tweetId,
         tweetUrl: p.tweetUrl,
+        author: p.author || null,
         text: p.text,
         media: media.filter((m) => m.source),
         mediaFailures,
@@ -209,6 +455,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         imageFailures: mediaFailures,
         channelId: await getDefaultChannel(),
       };
+      // The "post in Urdu" button asks the controller to translate the text
+      // before sending it. Forwarded as-is; the controller validates it.
+      if (msg.translateTo) payload.translateTo = msg.translateTo;
 
       if (!payload.channelId) {
         return reply(sendResponse, { ok: false, error: 'no-default-channel' });

@@ -1,7 +1,7 @@
 node_modules/
 *.log
 .DS_Store
-controller/.wwebjs_cache/
+.wwebjs_cache/
 tmp/
 deps/
 ~/

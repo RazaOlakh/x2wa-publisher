@@ -12,6 +12,17 @@ const ui = {
   select: el('channelSelect'), channelNote: el('channelNote'),
   refresh: el('refreshBtn'), disconnect: el('disconnectBtn'),
   foot: el('footState'),
+  verCard: el('versionCard'), verDot: el('verDot'), verTitle: el('verTitle'),
+  verDetail: el('verDetail'), verNote: el('verNote'),
+  checkUpd: el('checkUpdBtn'), update: el('updateBtn'),
+  pull: el('updateBtn'), push: el('pushBtn'), sync: el('syncBtn'),
+  // Author name transliteration review
+  revCard: el('reviewCard'), revBadge: el('revBadge'), revContent: el('revContent'),
+  revOriginal: el('revOriginal'), revHandle: el('revHandle'), revUrdu: el('revUrdu'),
+  revApprove: el('revApproveBtn'), revEdit: el('revEditBtn'), revRemove: el('revRemoveBtn'),
+  revDismiss: el('revDismissBtn'), revEditor: el('revEditor'), revInput: el('revInput'),
+  revSave: el('revSaveBtn'), revCancel: el('revCancelBtn'), revNote: el('revNote'),
+  revEmpty: el('revEmpty'),
 };
 
 const store = {
@@ -147,8 +158,33 @@ ui.disconnect.addEventListener('click', async () => {
   }
 });
 
-ui.refresh.addEventListener('click', () => refresh());
-ui.check.addEventListener('click', () => refresh());
+ui.refresh.addEventListener('click', async () => {
+  ui.refresh.disabled = true;
+  const original = ui.refresh.textContent;
+  ui.refresh.textContent = 'Reloading…';
+  await refresh();
+  ui.refresh.disabled = false;
+  ui.refresh.textContent = original;
+});
+ui.check.addEventListener('click', async () => {
+  ui.check.disabled = true;
+  const isRetry = ui.check.textContent === 'Retry';
+  ui.check.textContent = isRetry ? 'Connecting…' : 'Checking…';
+  setStatus('busy', isRetry ? 'Connecting to controller…' : 'Checking connection…', 'Attempting to reach local controller on 127.0.0.1:47825…');
+  try {
+    const s = await status();
+    if (s && (s.state === 'starting' || s.state === 'authenticated')) {
+      await req('/auth/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ force: true }),
+      });
+    }
+  } catch {}
+  await new Promise((r) => setTimeout(r, 400));
+  await refresh();
+  ui.check.disabled = false;
+});
 ui.connect.addEventListener('click', async () => {
   ui.connect.disabled = true;
   setStatus('busy', 'Waiting for authentication…', '');
@@ -164,14 +200,218 @@ ui.connect.addEventListener('click', async () => {
   }
 });
 
+function setBadge(text, kind) {
+  if (!ui.revBadge) return;
+  ui.revBadge.textContent = text || '';
+  ui.revBadge.className = `badge ${kind || 'idle'}`;
+  if (ui.revBadge.style) {
+    if (kind === 'ok') ui.revBadge.style.color = 'var(--green-dark)';
+    else if (kind === 'warn') ui.revBadge.style.color = 'var(--amber)';
+    else ui.revBadge.style.color = 'var(--muted)';
+  }
+}
+
+// ------------------------------------------------ author transliteration
+let currentReviewItem = null;
+
+async function refreshReview() {
+  if (!ui.revCard) return;
+  let item = null;
+  try {
+    const data = await store.get(['latestReviewItem']);
+    item = data && data.latestReviewItem;
+  } catch {}
+
+  if (!item || !item.original) {
+    currentReviewItem = null;
+    ui.revContent.classList.add('hidden');
+    ui.revEmpty.classList.remove('hidden');
+    setBadge('None', 'idle');
+    return;
+  }
+
+  currentReviewItem = item;
+  ui.revEmpty.classList.add('hidden');
+  ui.revContent.classList.remove('hidden');
+  ui.revOriginal.textContent = item.original || '—';
+  ui.revHandle.textContent = item.handle ? item.handle : '';
+  ui.revUrdu.textContent = item.transliteration || '—';
+
+  // Check if this item is currently overridden in the dictionary
+  let isOverridden = item.source === 'override';
+  try {
+    const res = await req('/overrides');
+    if (res.ok && res.body && res.body.overrides) {
+      const overrides = res.body.overrides;
+      const normName = String(item.original).normalize('NFC').replace(/\s+/g, ' ').trim().toLowerCase();
+      const normHandle = item.handle ? String(item.handle).trim().toLowerCase() : null;
+
+      if (normHandle && (overrides[`handle:${normHandle}`] || overrides[normHandle])) {
+        const found = overrides[`handle:${normHandle}`] || overrides[normHandle];
+        isOverridden = true;
+        ui.revUrdu.textContent = found.transliteration;
+      } else if (overrides[`name:${normName}`] || overrides[normName]) {
+        const found = overrides[`name:${normName}`] || overrides[normName];
+        isOverridden = true;
+        ui.revUrdu.textContent = found.transliteration;
+      }
+    }
+  } catch {}
+
+  if (isOverridden) {
+    setBadge('Saved override', 'ok');
+    ui.revApprove.classList.add('hidden');
+    ui.revRemove.classList.remove('hidden');
+    ui.revEdit.textContent = 'Edit spelling';
+  } else {
+    if (item.source === 'inputtools') {
+      setBadge('Google Input Tools', 'idle');
+    } else if (item.source === 'original') {
+      setBadge('Urdu original', 'idle');
+    } else {
+      setBadge('Unchanged fallback', 'warn');
+    }
+    ui.revApprove.classList.remove('hidden');
+    ui.revRemove.classList.add('hidden');
+    ui.revEdit.textContent = 'Edit spelling';
+  }
+}
+
+if (ui.revApprove) {
+  ui.revApprove.addEventListener('click', async () => {
+    if (!currentReviewItem) return;
+    ui.revApprove.disabled = true;
+    setNote(ui.revNote, 'Saving to dictionary…', 'idle');
+    try {
+      const res = await req('/transliterate/override', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          original: currentReviewItem.original,
+          transliteration: currentReviewItem.transliteration,
+          handle: currentReviewItem.handle,
+        }),
+      });
+      if (!res.ok) throw new Error((res.body && res.body.error) || 'Failed to save');
+      setNote(ui.revNote, 'Saved! Future occurrences will use this spelling.', 'ok');
+      currentReviewItem.source = 'override';
+      currentReviewItem.status = 'saved';
+      await store.set({ latestReviewItem: currentReviewItem });
+      await refreshReview();
+    } catch (e) {
+      setNote(ui.revNote, 'Could not save override: ' + (e.message || e), 'error');
+    } finally {
+      ui.revApprove.disabled = false;
+    }
+  });
+
+  ui.revEdit.addEventListener('click', () => {
+    if (!currentReviewItem) return;
+    ui.revEditor.classList.remove('hidden');
+    ui.revInput.value = currentReviewItem.transliteration || '';
+    ui.revInput.focus();
+  });
+
+  ui.revCancel.addEventListener('click', () => {
+    ui.revEditor.classList.add('hidden');
+    setNote(ui.revNote, '', 'idle');
+  });
+
+  ui.revSave.addEventListener('click', async () => {
+    if (!currentReviewItem) return;
+    const corrected = ui.revInput.value.trim();
+    if (!corrected) {
+      setNote(ui.revNote, 'Urdu transliteration cannot be empty.', 'warn');
+      return;
+    }
+    ui.revSave.disabled = true;
+    setNote(ui.revNote, 'Saving correction…', 'idle');
+    try {
+      const res = await req('/transliterate/override', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          original: currentReviewItem.original,
+          transliteration: corrected,
+          handle: currentReviewItem.handle,
+        }),
+      });
+      if (!res.ok) throw new Error((res.body && res.body.error) || 'Failed to save');
+      ui.revUrdu.textContent = corrected;
+      ui.revEditor.classList.add('hidden');
+      setNote(ui.revNote, 'Correction saved to dictionary!', 'ok');
+      currentReviewItem.transliteration = corrected;
+      currentReviewItem.source = 'override';
+      currentReviewItem.status = 'saved';
+      await store.set({ latestReviewItem: currentReviewItem });
+      await refreshReview();
+    } catch (e) {
+      setNote(ui.revNote, 'Could not save correction: ' + (e.message || e), 'error');
+    } finally {
+      ui.revSave.disabled = false;
+    }
+  });
+
+  ui.revDismiss.addEventListener('click', async () => {
+    await store.remove(['latestReviewItem']);
+    currentReviewItem = null;
+    ui.revContent.classList.add('hidden');
+    ui.revEmpty.classList.remove('hidden');
+    setBadge('None', 'idle');
+    setNote(ui.revNote, '', 'idle');
+  });
+
+  ui.revRemove.addEventListener('click', async () => {
+    if (!currentReviewItem) return;
+    ui.revRemove.disabled = true;
+    setNote(ui.revNote, 'Removing override…', 'idle');
+    try {
+      const res = await req('/transliterate/override', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          original: currentReviewItem.original,
+          handle: currentReviewItem.handle,
+        }),
+      });
+      if (!res.ok) throw new Error((res.body && res.body.error) || 'Failed to delete');
+      setNote(ui.revNote, 'Override removed. The engine will transliterate fresh next time.', 'ok');
+      currentReviewItem.source = 'inputtools';
+      currentReviewItem.status = 'pending';
+      await store.set({ latestReviewItem: currentReviewItem });
+      await refreshReview();
+    } catch (e) {
+      setNote(ui.revNote, 'Could not remove override: ' + (e.message || e), 'error');
+    } finally {
+      ui.revRemove.disabled = false;
+    }
+  });
+}
+
 // --------------------------------------------------------------- refresh
-async function refresh() {
+let refreshingPromise = null;
+function refresh() {
+  if (refreshingPromise) return refreshingPromise;
+  refreshingPromise = (async () => {
+    try {
+      await doRefresh();
+    } finally {
+      refreshingPromise = null;
+    }
+  })();
+  return refreshingPromise;
+}
+
+async function doRefresh() {
   const s = await status();
+  // Local and cheap: safe to ask on every tick, unlike a network fetch.
+  renderVersion(await versionStatus());
+  await refreshReview();
 
   if (s.state === 'unavailable') {
     hideQr();
     setStatus('err', 'Controller not running',
-      'The local controller is not reachable on 127.0.0.1:47825. It normally starts with your user session — if it does not, start it and press Refresh.');
+      'The local controller is not reachable on 127.0.0.1:47825. Ensure it is started via the Desktop shortcut “Rerun X2WA Connection” or startup script, then click Retry.');
     ui.connect.classList.add('hidden');
     ui.check.textContent = 'Retry';
     ui.select.disabled = true;
@@ -317,6 +557,373 @@ async function refresh() {
       return;
   }
 }
+
+// ---------------------------------------------------------------- version
+// Whether this checkout still matches the remote, and a way to bring it
+// forward. Reading the status is local and cheap, so it can ride along with
+// every refresh; only "Check for updates" goes to the network.
+let updateArmed = false;
+let pushArmed = false;
+let syncArmed = false;
+let disarmTimer = null;
+
+function disarmAllActions() {
+  if (disarmTimer) { clearTimeout(disarmTimer); disarmTimer = null; }
+  updateArmed = false;
+  pushArmed = false;
+  syncArmed = false;
+  if (ui.update) {
+    ui.update.classList.remove("confirm");
+    ui.update.textContent = "Pull";
+  }
+  if (ui.push) {
+    ui.push.classList.remove("confirm");
+    ui.push.textContent = "Push";
+  }
+  if (ui.sync) {
+    ui.sync.classList.remove("confirm");
+    ui.sync.textContent = "Sync";
+  }
+}
+
+function setButtonsDisabled(disabled) {
+  if (ui.checkUpd) ui.checkUpd.disabled = disabled;
+  if (ui.sync) ui.sync.disabled = disabled;
+  if (ui.update) ui.update.disabled = disabled;
+  if (ui.push) ui.push.disabled = disabled;
+}
+
+function ago(ts) {
+  if (!ts) return "";
+  const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.round(s / 60)} min ago`;
+  if (s < 86400) return `${Math.round(s / 3600)} h ago`;
+  return `${Math.round(s / 86400)} d ago`;
+}
+
+function setVer(dotClass, title, detail) {
+  ui.verDot.className = `dot ${dotClass}`;
+  ui.verTitle.textContent = title;
+  ui.verDetail.textContent = detail || "";
+  ui.verDetail.classList.toggle("hidden", !detail);
+}
+
+// The popup re-reads the status every couple of seconds, which is what keeps
+// "Connecting…" resolving on its own. That must not wipe the answer to
+// something the user just did, so a note written by an action is held for a
+// while and the polling stops overwriting it.
+let verNoteLockUntil = 0;
+const holdVerNote = (ms) => { verNoteLockUntil = Date.now() + (ms || 12000); };
+const verNote = (text, kind) => {
+  if (Date.now() < verNoteLockUntil) return;
+  setNote(ui.verNote, text, kind);
+};
+
+function renderVersion(v) {
+  if (!v) {
+    setVer("", "Version unknown", "");
+    setButtonsDisabled(true);
+    return;
+  }
+  if (v.ok === false && v.error === "not-a-repo") {
+    setVer("err", "Not a git checkout", "The controller could not find the project files.");
+    setButtonsDisabled(true);
+    return;
+  }
+
+  const where = `${v.branch || "?"} · ${(v.sha || "?").slice(0, 7)}`;
+  const checked = v.checkedAt ? ` · checked ${ago(v.checkedAt)}` : "";
+
+  setButtonsDisabled(false);
+
+  // Clear primary emphasis by default
+  if (ui.sync) ui.sync.classList.remove("primary");
+  if (ui.update) ui.update.classList.remove("primary");
+  if (ui.push) ui.push.classList.remove("primary");
+
+  // Reset base button labels if not currently armed
+  if (!updateArmed && ui.update) ui.update.textContent = "Pull";
+  if (!pushArmed && ui.push) ui.push.textContent = "Push";
+  if (!syncArmed && ui.sync) ui.sync.textContent = "Sync";
+
+  if (v.dirty) {
+    // Uncommitted edits: pull or sync would be refused to avoid clobbering work
+    if (ui.sync) ui.sync.disabled = true;
+    if (ui.update) ui.update.disabled = true;
+    if (ui.push) ui.push.disabled = true;
+    setVer("wait", "Local changes", `${where} · uncommitted`);
+    verNote("You have uncommitted edits. Commit or stash them before syncing, pulling, or pushing.", "warn");
+    return;
+  }
+  if (v.checkFailed === "unreachable") {
+    setVer("wait", "Could not reach the remote", where + checked);
+    verNote("The repository could not be reached, so this is the last known result rather than a fresh one.", "warn");
+    return;
+  }
+  if (v.behind === null || v.behind === undefined) {
+    setVer("", "Update status unknown", where + checked);
+    if (!v.upstream) verNote("This checkout has no upstream branch to compare with.", "warn");
+    else verNote("Press Check for updates to ask the remote.", "idle");
+    return;
+  }
+
+  const behind = Number(v.behind) || 0;
+  const ahead = Number(v.ahead) || 0;
+
+  if (behind > 0 && ahead > 0) {
+    setVer("wait", `${behind} behind, ${ahead} ahead`, where + checked);
+    if (ui.sync) {
+      ui.sync.classList.add("primary");
+      if (!syncArmed) ui.sync.textContent = `Sync (${behind}↓ ${ahead}↑)`;
+    }
+    if (!updateArmed && ui.update) ui.update.textContent = `Pull (${behind})`;
+    if (!pushArmed && ui.push) ui.push.textContent = `Push (${ahead})`;
+    verNote("Checkout has diverged from remote. Press Sync to pull updates and push commits.", "idle");
+    return;
+  }
+  if (behind > 0) {
+    setVer("wait", `${behind} update${behind === 1 ? "" : "s"} available`, where + checked);
+    if (ui.update) {
+      ui.update.classList.add("primary");
+      if (!updateArmed) ui.update.textContent = `Pull (${behind})`;
+    }
+    verNote("Updates fast-forward this checkout to the latest commit on the remote.", "idle");
+    return;
+  }
+  if (ahead > 0) {
+    setVer("", `${ahead} local commit${ahead === 1 ? "" : "s"} ahead`, where + checked);
+    if (ui.push) {
+      ui.push.classList.add("primary");
+      if (!pushArmed) ui.push.textContent = `Push (${ahead})`;
+    }
+    verNote("Your checkout has commits the remote has not seen.", "idle");
+    return;
+  }
+
+  setVer("on", "Up to date", where + checked);
+  verNote("", "idle");
+}
+
+async function versionStatus() {
+  try {
+    const r = await req("/version");
+    return r.ok ? r.body : null;
+  } catch {
+    return null;
+  }
+}
+
+function disarmUpdate() {
+  disarmAllActions();
+}
+
+ui.checkUpd.addEventListener("click", async () => {
+  setButtonsDisabled(true);
+  disarmAllActions();
+  setVer("busy", "Checking…", "");
+  setNote(ui.verNote, "Asking the remote what it has.", "idle");
+  holdVerNote();
+  try {
+    const r = await req("/version/check", { method: "POST" });
+    renderVersion(r.ok ? r.body : null);
+  } catch {
+    renderVersion(null);
+    setNote(ui.verNote, "Lost contact with the controller.", "error");
+  }
+  setButtonsDisabled(false);
+});
+
+ui.update.addEventListener("click", async () => {
+  if (!updateArmed) {
+    disarmAllActions();
+    updateArmed = true;
+    ui.update.textContent = "Confirm pull";
+    ui.update.classList.add("confirm");
+    holdVerNote();
+    setNote(ui.verNote,
+      "This fast-forwards your checkout to the latest commit on the remote. Uncommitted edits are never touched, and untracked files do not block it.",
+      "warn");
+    disarmTimer = setTimeout(disarmAllActions, 6000);
+    return;
+  }
+  disarmAllActions();
+  holdVerNote();
+  setButtonsDisabled(true);
+  setVer("busy", "Pulling…", "");
+  setNote(ui.verNote, "Fast-forwarding to the latest commit.", "idle");
+
+  let r;
+  try { r = await req("/update", { method: "POST" }); }
+  catch {
+    setButtonsDisabled(false);
+    setVer("err", "Pull failed", "");
+    setNote(ui.verNote, "Lost contact with the controller.", "error");
+    return;
+  }
+
+  const body = r.body || {};
+  if (!r.ok) {
+    setButtonsDisabled(false);
+    if (body.error === "local-changes") {
+      setVer("err", "Pull refused", "You have uncommitted edits.");
+      setNote(ui.verNote, "Commit or stash your work first — the pull will not touch it.", "warn");
+    } else {
+      setVer("err", "Pull failed", "");
+      setNote(ui.verNote, body.detail || body.error || "The pull could not be applied.", "error");
+    }
+    return;
+  }
+
+  if (!body.updated) {
+    setButtonsDisabled(false);
+    setVer("on", "Up to date", "");
+    setNote(ui.verNote, "Already on the latest commit.", "ok");
+    renderVersion(await versionStatus());
+    return;
+  }
+
+  // Reloading closes the popup, so leave the result where it can be read
+  // next time it opens.
+  const message = `Pulled ${body.from} → ${body.to}${body.restartController ? ". The controller is restarting." : ""}`;
+  await store.set({ updateNotice: { text: message, at: Date.now(), reloadExtension: Boolean(body.reloadExtension) } });
+  setVer("on", "Pulled", `${body.to.slice(0, 7)}`);
+  setNote(ui.verNote, message, "ok");
+  setButtonsDisabled(false);
+  renderVersion(await versionStatus());
+
+  if (body.reloadExtension) {
+    // The extension on disk changed, but the running copy is the old one
+    // until it is reloaded.
+    setTimeout(() => chrome.runtime.reload(), 900);
+  }
+});
+
+if (ui.push) {
+  ui.push.addEventListener("click", async () => {
+    if (!pushArmed) {
+      disarmAllActions();
+      pushArmed = true;
+      ui.push.textContent = "Confirm push";
+      ui.push.classList.add("confirm");
+      holdVerNote();
+      setNote(ui.verNote,
+        "This pushes your local commits to the remote repository.",
+        "warn");
+      disarmTimer = setTimeout(disarmAllActions, 6000);
+      return;
+    }
+    disarmAllActions();
+    holdVerNote();
+    setButtonsDisabled(true);
+    setVer("busy", "Pushing…", "");
+    setNote(ui.verNote, "Pushing local commits to remote.", "idle");
+
+    let r;
+    try { r = await req("/push", { method: "POST" }); }
+    catch {
+      setButtonsDisabled(false);
+      setVer("err", "Push failed", "");
+      setNote(ui.verNote, "Lost contact with the controller.", "error");
+      return;
+    }
+
+    const body = r.body || {};
+    if (!r.ok) {
+      setButtonsDisabled(false);
+      if (body.error === "push-rejected-behind") {
+        setVer("err", "Push rejected", "Remote has newer commits.");
+        setNote(ui.verNote, "Remote has changes you do not have. Pull or Sync first.", "warn");
+      } else {
+        setVer("err", "Push failed", "");
+        setNote(ui.verNote, body.detail || body.error || "The push could not be completed.", "error");
+      }
+      return;
+    }
+
+    setButtonsDisabled(false);
+    setVer("on", "Pushed", (body.sha || "").slice(0, 7));
+    setNote(ui.verNote, "Successfully pushed commits to remote.", "ok");
+    renderVersion(await versionStatus());
+  });
+}
+
+if (ui.sync) {
+  ui.sync.addEventListener("click", async () => {
+    if (!syncArmed) {
+      disarmAllActions();
+      syncArmed = true;
+      ui.sync.textContent = "Confirm sync";
+      ui.sync.classList.add("confirm");
+      holdVerNote();
+      setNote(ui.verNote,
+        "This synchronizes your checkout with remote: pulling updates and pushing your commits.",
+        "warn");
+      disarmTimer = setTimeout(disarmAllActions, 6000);
+      return;
+    }
+    disarmAllActions();
+    holdVerNote();
+    setButtonsDisabled(true);
+    setVer("busy", "Syncing…", "");
+    setNote(ui.verNote, "Synchronizing with remote repository.", "idle");
+
+    let r;
+    try { r = await req("/sync", { method: "POST" }); }
+    catch {
+      setButtonsDisabled(false);
+      setVer("err", "Sync failed", "");
+      setNote(ui.verNote, "Lost contact with the controller.", "error");
+      return;
+    }
+
+    const body = r.body || {};
+    if (!r.ok) {
+      setButtonsDisabled(false);
+      if (body.error === "local-changes") {
+        setVer("err", "Sync refused", "You have uncommitted edits.");
+        setNote(ui.verNote, "Commit or stash your work first — sync will not touch it.", "warn");
+      } else if (body.error === "sync-conflict") {
+        setVer("err", "Sync conflict", "Merge conflict detected.");
+        setNote(ui.verNote, body.detail || "Rebase conflict detected. Rebase was aborted to protect your code.", "error");
+      } else {
+        setVer("err", "Sync failed", "");
+        setNote(ui.verNote, body.detail || body.error || "Sync could not be completed.", "error");
+      }
+      return;
+    }
+
+    setButtonsDisabled(false);
+    let msg = "Checkout synchronized.";
+    if (body.pulled && body.pushed) {
+      msg = `Synced: pulled ${body.from} → ${body.to} and pushed commits.`;
+    } else if (body.pulled) {
+      msg = `Synced: pulled ${body.from} → ${body.to}.`;
+    } else if (body.pushed) {
+      msg = "Synced: pushed local commits to remote.";
+    } else {
+      msg = "Already fully synchronized with remote.";
+    }
+
+    if (body.restartController) msg += " The controller is restarting.";
+    if (body.reloadExtension) {
+      await store.set({ updateNotice: { text: msg, at: Date.now(), reloadExtension: true } });
+      setTimeout(() => chrome.runtime.reload(), 900);
+    }
+
+    setVer("on", "Synchronized", (body.to || body.sha || "").slice(0, 7));
+    setNote(ui.verNote, msg, "ok");
+    renderVersion(await versionStatus());
+  });
+}
+
+// Shown once, on the next open, so a reload cannot swallow the result.
+(async () => {
+  const { updateNotice } = await store.get(['updateNotice']);
+  if (!updateNotice) return;
+  await store.remove(['updateNotice']);
+  setNote(ui.verNote, updateNotice.text + (updateNotice.reloadExtension ? ' The extension was reloaded.' : ''), 'ok');
+})();
 
 document.addEventListener('DOMContentLoaded', refresh);
 // Re-check while the popup is open so "Connecting…" resolves on its own.
