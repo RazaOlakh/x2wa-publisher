@@ -309,7 +309,7 @@ console.log('the translation request');
     });
     eq('Groq translates text correctly', res.text, 'ہیلو دنیا بذریعہ قوین');
     eq('Groq provider is reported', res.provider, 'groq');
-    eq('Groq model is reported', res.model, 'qwen/qwen3.8-27b');
+    eq('Groq model is reported', res.model, 'openai/gpt-oss-120b');
   }
   {
     // Groq failure falls back to Google Translate

@@ -18,7 +18,11 @@ const ui = {
   pull: el('updateBtn'), push: el('pushBtn'), sync: el('syncBtn'),
   openSidebar: el('openSidebarBtn'),
   // Groq Translation
-  groqCard: el('groqCard'), groqBadge: el('groqBadge'), groqKeyInput: el('groqKeyInput'),
+  groqCard: el('groqCard'), groqBadge: el('groqBadge'),
+  groqModelSelect: el('groqModelSelect'),
+  groqCustomModelWrap: el('groqCustomModelWrap'),
+  groqCustomModelInput: el('groqCustomModelInput'),
+  groqKeyInput: el('groqKeyInput'),
   groqSave: el('groqSaveBtn'), groqClear: el('groqClearBtn'), groqNote: el('groqNote'),
   // Author name transliteration review
   revCard: el('reviewCard'), revBadge: el('revBadge'), revContent: el('revContent'),
@@ -506,6 +510,38 @@ function formatTimeAgo(ts) {
   return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
+function formatModelShort(modelId) {
+  if (!modelId) return 'AI';
+  if (modelId === 'openai/gpt-oss-120b') return 'GPT-OSS 120B';
+  if (modelId === 'qwen/qwen3.8-27b') return 'Qwen 3.8 27B';
+  if (modelId === 'openai/gpt-oss-20b') return 'GPT-OSS 20B';
+  if (modelId === 'allam-2-7b') return 'Allam 2 7B';
+  if (modelId.includes('/')) return modelId.split('/')[1];
+  return modelId;
+}
+
+function getSelectedGroqModel() {
+  if (!ui.groqModelSelect) return 'openai/gpt-oss-120b';
+  const val = ui.groqModelSelect.value;
+  if (val === 'custom') {
+    return (ui.groqCustomModelInput && ui.groqCustomModelInput.value || '').trim() || 'openai/gpt-oss-120b';
+  }
+  return val || 'openai/gpt-oss-120b';
+}
+
+function syncGroqModelUI(modelId) {
+  if (!ui.groqModelSelect) return;
+  const standard = ['openai/gpt-oss-120b', 'qwen/qwen3.8-27b', 'openai/gpt-oss-20b', 'allam-2-7b'];
+  if (standard.includes(modelId)) {
+    ui.groqModelSelect.value = modelId;
+    if (ui.groqCustomModelWrap) ui.groqCustomModelWrap.classList.add('hidden');
+  } else if (modelId) {
+    ui.groqModelSelect.value = 'custom';
+    if (ui.groqCustomModelWrap) ui.groqCustomModelWrap.classList.remove('hidden');
+    if (ui.groqCustomModelInput) ui.groqCustomModelInput.value = modelId;
+  }
+}
+
 function updateEngineFooter(cfg, isOffline) {
   if (!ui.transEngineText) return;
   if (isOffline) {
@@ -515,8 +551,9 @@ function updateEngineFooter(cfg, isOffline) {
     return;
   }
   const isGroq = Boolean(cfg && cfg.configured);
+  const modelName = formatModelShort(cfg && (cfg.modelName || cfg.model));
   if (isGroq) {
-    ui.transEngineText.textContent = 'Translating with: Qwen 3.8 27B (Groq)';
+    ui.transEngineText.textContent = `Translating with: ${modelName} (Groq)`;
     if (ui.transEngineDot && ui.transEngineDot.style) ui.transEngineDot.style.background = '#10a37f';
   } else {
     ui.transEngineText.textContent = 'Translating with: Google Translate (Fallback)';
@@ -526,7 +563,8 @@ function updateEngineFooter(cfg, isOffline) {
   if (ui.transLastEvent) {
     const last = cfg && (cfg.lastTranslation || cfg.last);
     if (last && last.provider) {
-      const provName = last.provider === 'groq' ? 'Qwen 3.8 27B (Groq)' : 'Google Translate';
+      const lastMod = formatModelShort(last.model);
+      const provName = last.provider === 'groq' ? (lastMod ? `${lastMod} (Groq)` : 'Groq AI') : 'Google Translate';
       const timeStr = last.ts ? ` · ${formatTimeAgo(last.ts)}` : '';
       ui.transLastEvent.textContent = `Last post: ${provName}${timeStr}`;
       ui.transLastEvent.classList.remove('hidden');
@@ -539,9 +577,11 @@ function updateEngineFooter(cfg, isOffline) {
 async function refreshGroq() {
   const cfg = await getGroqConfig();
   updateEngineFooter(cfg, false);
+  syncGroqModelUI(cfg.model);
   if (!ui.groqBadge) return;
+  const modelName = formatModelShort(cfg.modelName || cfg.model);
   if (cfg.configured) {
-    ui.groqBadge.textContent = 'Qwen 3.8 27B Active';
+    ui.groqBadge.textContent = `${modelName} Active`;
     if (ui.groqBadge.style) {
       ui.groqBadge.style.color = '#0f6cbd';
       ui.groqBadge.style.borderColor = '#1d9bf0';
@@ -550,7 +590,7 @@ async function refreshGroq() {
       ui.groqKeyInput.placeholder = cfg.maskedKey ? `Saved: ${cfg.maskedKey}` : 'Groq API Key (active)';
     }
     if (ui.groqClear) ui.groqClear.classList.remove('hidden');
-    setNote(ui.groqNote, 'Qwen 3.8 27B on Groq is active for Urdu translation.', 'ok');
+    setNote(ui.groqNote, `${modelName} on Groq is active for Urdu translation.`, 'ok');
   } else {
     ui.groqBadge.textContent = 'Google Fallback (No Key)';
     if (ui.groqBadge.style) {
@@ -561,32 +601,64 @@ async function refreshGroq() {
       ui.groqKeyInput.placeholder = 'Enter Groq API Key (gsk_...)';
     }
     if (ui.groqClear) ui.groqClear.classList.add('hidden');
-    setNote(ui.groqNote, 'Add a Groq API Key to enable natural Qwen 3.8 27B translations. Google Translate is currently used as fallback.', 'idle');
+    setNote(ui.groqNote, `Add a Groq API Key to enable natural ${modelName} translations. Google Translate is currently used as fallback.`, 'idle');
   }
+}
+
+if (ui.groqModelSelect) {
+  ui.groqModelSelect.addEventListener('change', async () => {
+    const val = ui.groqModelSelect.value;
+    if (val === 'custom') {
+      if (ui.groqCustomModelWrap) ui.groqCustomModelWrap.classList.remove('hidden');
+      if (ui.groqCustomModelInput) ui.groqCustomModelInput.focus();
+      return;
+    }
+    if (ui.groqCustomModelWrap) ui.groqCustomModelWrap.classList.add('hidden');
+    try {
+      setNote(ui.groqNote, 'Switching model…', 'idle');
+      const r = await req('/groq/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: val }),
+      });
+      if (r.ok) {
+        await refreshGroq();
+        const activeName = formatModelShort(r.body && r.body.model);
+        setNote(ui.groqNote, `Model switched to ${activeName}!`, 'ok');
+      }
+    } catch (e) {
+      setNote(ui.groqNote, formatFetchError(e, 'Error changing model'), 'error');
+    }
+  });
 }
 
 if (ui.groqSave) {
   ui.groqSave.addEventListener('click', async () => {
     const key = (ui.groqKeyInput && ui.groqKeyInput.value || '').trim();
-    if (!key) {
+    const model = getSelectedGroqModel();
+    const cfg = await getGroqConfig();
+    if (!key && !cfg.configured) {
       setNote(ui.groqNote, 'Please enter a valid Groq API key (starts with gsk_)', 'warn');
       return;
     }
     ui.groqSave.disabled = true;
     try {
-      setNote(ui.groqNote, 'Saving API key to controller…', 'idle');
+      setNote(ui.groqNote, 'Saving settings to controller…', 'idle');
+      const payload = { model };
+      if (key) payload.apiKey = key;
       const r = await req('/groq/config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ apiKey: key }),
+        body: JSON.stringify(payload),
       });
       if (r.ok) {
         if (ui.groqKeyInput) ui.groqKeyInput.value = '';
         await refreshGroq();
-        setNote(ui.groqNote, 'Groq API Key saved successfully! Qwen 3.8 27B is now active.', 'ok');
+        const activeName = formatModelShort(r.body && r.body.model);
+        setNote(ui.groqNote, `Saved! ${activeName} on Groq is now active.`, 'ok');
       } else {
         const detail = (r.body && r.body.error) ? ` (${r.body.error})` : (r.status ? ` (HTTP ${r.status})` : '');
-        setNote(ui.groqNote, `Could not save API key to controller${detail}.`, 'error');
+        setNote(ui.groqNote, `Could not save settings to controller${detail}.`, 'error');
       }
     } catch (e) {
       setNote(ui.groqNote, formatFetchError(e, 'Error communicating with controller'), 'error');

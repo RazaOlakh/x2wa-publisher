@@ -92,6 +92,11 @@ const {
   defaultStore: overridesStore,
   MAX_NAME_CHARS,
 } = require('./transliterate');
+const {
+  DEFAULT_MODEL: GROQ_DEFAULT_MODEL,
+  SUPPORTED_MODELS: GROQ_SUPPORTED_MODELS,
+  formatModelDisplayName: formatGroqModelDisplayName,
+} = require('./groq');
 
 const HOST = '127.0.0.1';
 const PORT = parseInt(process.env.CONTROLLER_PORT || '47825', 10);
@@ -809,6 +814,8 @@ const server = http.createServer(async (req, res) => {
       // state reflects the real WhatsApp connection, not just that this
       // HTTP server is answering.
       const hasGroq = Boolean(process.env.GROQ_API_KEY && process.env.GROQ_API_KEY.trim());
+      const curModel = process.env.GROQ_MODEL || GROQ_DEFAULT_MODEL;
+      const modelName = formatGroqModelDisplayName(curModel);
       return json(res, 200, {
         state,
         me: waInfo ? waInfo.wid : null,
@@ -817,7 +824,7 @@ const server = http.createServer(async (req, res) => {
         reconnecting: state === 'reconnecting',
         jobs: Array.from(jobs.entries()).slice(-20),
         activeEngine: hasGroq ? 'groq' : 'google',
-        activeEngineLabel: hasGroq ? 'Qwen 3.8 27B (Groq)' : 'Google Translate (Fallback)',
+        activeEngineLabel: hasGroq ? `${modelName} (Groq)` : 'Google Translate (Fallback)',
         lastTranslation: lastTranslationInfo,
       });
     }
@@ -968,7 +975,8 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && url.pathname === '/groq/config') {
       const apiKey = process.env.GROQ_API_KEY || '';
       const configured = typeof apiKey === 'string' && apiKey.trim().length > 0;
-      const model = process.env.GROQ_MODEL || 'qwen/qwen3.8-27b';
+      const model = process.env.GROQ_MODEL || GROQ_DEFAULT_MODEL;
+      const modelName = formatGroqModelDisplayName(model);
       const maskedKey = configured
         ? (apiKey.length > 8 ? `${apiKey.slice(0, 4)}...${apiKey.slice(-4)}` : '••••••••')
         : '';
@@ -976,8 +984,10 @@ const server = http.createServer(async (req, res) => {
         ok: true,
         configured,
         model,
+        modelName,
+        availableModels: GROQ_SUPPORTED_MODELS,
         activeEngine: configured ? 'groq' : 'google',
-        activeEngineLabel: configured ? 'Qwen 3.8 27B (Groq)' : 'Google Translate (Fallback)',
+        activeEngineLabel: configured ? `${modelName} (Groq)` : 'Google Translate (Fallback)',
         lastTranslation: lastTranslationInfo,
         maskedKey,
         hasKey: configured,
@@ -1009,11 +1019,17 @@ const server = http.createServer(async (req, res) => {
         }
       }
       const isConfigured = Boolean(process.env.GROQ_API_KEY && process.env.GROQ_API_KEY.trim());
-      log('info', 'groq-config-updated', { configured: isConfigured, model: process.env.GROQ_MODEL || 'qwen/qwen3.8-27b' });
+      const curModel = process.env.GROQ_MODEL || GROQ_DEFAULT_MODEL;
+      const modelName = formatGroqModelDisplayName(curModel);
+      log('info', 'groq-config-updated', { configured: isConfigured, model: curModel });
       return json(res, 200, {
         ok: true,
         configured: isConfigured,
-        model: process.env.GROQ_MODEL || 'qwen/qwen3.8-27b',
+        model: curModel,
+        modelName,
+        availableModels: GROQ_SUPPORTED_MODELS,
+        activeEngine: isConfigured ? 'groq' : 'google',
+        activeEngineLabel: isConfigured ? `${modelName} (Groq)` : 'Google Translate (Fallback)',
       });
     }
     // Phonetic transliteration for author names into Urdu script.

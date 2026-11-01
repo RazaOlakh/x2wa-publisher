@@ -26,13 +26,13 @@ function eq(msg, actual, expected) {
 
 async function testGroqModule() {
   console.log('Groq configuration and defaults');
-  eq('default model is qwen/qwen3.8-27b', DEFAULT_MODEL, 'qwen/qwen3.8-27b');
+  eq('default model is openai/gpt-oss-120b', DEFAULT_MODEL, 'openai/gpt-oss-120b');
   eq('default base url is official Groq endpoint', DEFAULT_BASE_URL, 'https://api.groq.com/openai/v1');
   eq('default timeout is 30s', DEFAULT_TIMEOUT_MS, 30000);
 
   const emptyCfg = getGroqConfig({}, {});
   eq('reads empty key when unset', emptyCfg.apiKey, '');
-  eq('falls back to default model', emptyCfg.model, 'qwen/qwen3.8-27b');
+  eq('falls back to default model', emptyCfg.model, 'openai/gpt-oss-120b');
   eq('falls back to default baseUrl', emptyCfg.baseUrl, 'https://api.groq.com/openai/v1');
   eq('falls back to default timeout', emptyCfg.timeoutMs, 30000);
 
@@ -154,11 +154,11 @@ async function testGroqModule() {
   eq('authorization header present', capturedOpts.headers.Authorization, 'Bearer gsk_test_secret');
   eq('content-type is json', capturedOpts.headers['Content-Type'], 'application/json');
   const parsedBody = JSON.parse(capturedOpts.body);
-  eq('model is qwen/qwen3.8-27b', parsedBody.model, 'qwen/qwen3.8-27b');
+  eq('model is openai/gpt-oss-120b', parsedBody.model, 'openai/gpt-oss-120b');
   eq('user content passed', parsedBody.messages[1].content, 'Hello world');
   eq('result text cleaned and stripped of think tags', successRes.text, 'ہیلو دنیا');
   eq('provider is groq', successRes.provider, 'groq');
-  eq('model is qwen/qwen3.8-27b', successRes.model, 'qwen/qwen3.8-27b');
+  eq('model is openai/gpt-oss-120b', successRes.model, 'openai/gpt-oss-120b');
 
   // 3. HTTP 401 error
   const mockFetch401 = async () => ({

@@ -11,13 +11,28 @@
 // Credentials: Read from process.env.GROQ_API_KEY on the local controller only.
 // Never exposed in browser extensions, client-side storage, or logs.
 
-const DEFAULT_MODEL = 'qwen/qwen3.8-27b';
+const DEFAULT_MODEL = 'openai/gpt-oss-120b';
 const DEFAULT_BASE_URL = 'https://api.groq.com/openai/v1';
 const DEFAULT_TIMEOUT_MS = 30000;
-// Groq's on-demand rate limit for Qwen 3.8 27B enforces 1,000 output tokens per minute (OTPM).
+// Groq's on-demand rate limit for Qwen 3.8 27B / GPT-OSS enforces 1,000 output tokens per minute (OTPM).
 // Setting max_tokens ensures requests do not exceed this limit.
 const DEFAULT_MAX_TOKENS = 800;
 const USER_AGENT = 'x-whatsapp-poster-controller/1.0';
+
+const SUPPORTED_MODELS = [
+  { id: 'openai/gpt-oss-120b', label: 'GPT-OSS 120B (Recommended · High Quality Urdu)', name: 'GPT-OSS 120B' },
+  { id: 'qwen/qwen3.8-27b', label: 'Qwen 3.8 27B (Fast / Lightweight)', name: 'Qwen 3.8 27B' },
+  { id: 'openai/gpt-oss-20b', label: 'GPT-OSS 20B (OpenAI Reasoning 20B)', name: 'GPT-OSS 20B' },
+  { id: 'allam-2-7b', label: 'Allam 2 7B (SDAIA Regional)', name: 'Allam 2 7B' },
+];
+
+function formatModelDisplayName(modelId) {
+  if (!modelId) return 'AI Model';
+  const found = SUPPORTED_MODELS.find((m) => m.id === modelId);
+  if (found) return found.name;
+  if (modelId.includes('/')) return modelId.split('/')[1];
+  return modelId;
+}
 
 const SYSTEM_PROMPT = `You are a professional English-to-Urdu translator specialising in natural Pakistani Urdu.
 
@@ -195,6 +210,8 @@ module.exports = {
   DEFAULT_MODEL,
   DEFAULT_BASE_URL,
   DEFAULT_TIMEOUT_MS,
+  SUPPORTED_MODELS,
+  formatModelDisplayName,
   SYSTEM_PROMPT,
   getGroqConfig,
   isGroqConfigured,

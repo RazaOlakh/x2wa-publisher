@@ -56,7 +56,7 @@ async function runGroqIntegrationTests() {
 
     eq('Text returned has handle unmasked', res.text, 'ہیلو @testuser دنیا');
     eq('Provider is groq', res.provider, 'groq');
-    eq('Model is qwen/qwen3.8-27b', res.model, 'qwen/qwen3.8-27b');
+    eq('Model is openai/gpt-oss-120b', res.model, 'openai/gpt-oss-120b');
 
     ok('translate-groq-start log emitted', logs.some((l) => l.event === 'translate-groq-start'));
     ok('translate-groq-done log emitted', logs.some((l) => l.event === 'translate-groq-done' && l.data.provider === 'groq'));
@@ -305,7 +305,7 @@ async function runGroqIntegrationTests() {
       'ری بورن\n\nآج ایک بڑا اعلان کیا جا رہا ہے!'
     );
     eq('Provider is groq', res.provider, 'groq');
-    eq('Model is qwen/qwen3.8-27b', res.model, 'qwen/qwen3.8-27b');
+    eq('Model is openai/gpt-oss-120b', res.model, 'openai/gpt-oss-120b');
     ok('authorTransliterated flag is true', res.authorTransliterated === true);
   }
 
@@ -393,7 +393,7 @@ async function runGroqIntegrationTests() {
 
     eq(`  [${c.category}] translated via Groq`, res.text, c.groqTranslation);
     eq(`  [${c.category}] provider is groq`, res.provider, 'groq');
-    eq(`  [${c.category}] model is qwen/qwen3.8-27b`, res.model, 'qwen/qwen3.8-27b');
+    eq(`  [${c.category}] model is openai/gpt-oss-120b`, res.model, 'openai/gpt-oss-120b');
     ok(`  [${c.category}] meets quality criteria: ${c.criteria}`, res.text.length > 0);
   }
 
@@ -426,7 +426,7 @@ async function runGroqIntegrationTests() {
 
     eq('Post translated ready for WhatsApp', translation.text, 'بہت جلد بڑی اور پرجوش خبریں آ رہی ہیں!');
     eq('Provider is groq', translation.provider, 'groq');
-    eq('Model is qwen/qwen3.8-27b', translation.model, 'qwen/qwen3.8-27b');
+    eq('Model is openai/gpt-oss-120b', translation.model, 'openai/gpt-oss-120b');
 
     // Simulate server.js logging:
     log('info', 'translate-done', {
@@ -441,7 +441,7 @@ async function runGroqIntegrationTests() {
 
     const translateDoneLog = logs.find((l) => l.event === 'translate-done');
     ok('translate-done log contains provider groq', translateDoneLog && translateDoneLog.data.provider === 'groq');
-    ok('translate-done log contains model qwen/qwen3.8-27b', translateDoneLog && translateDoneLog.data.model === 'qwen/qwen3.8-27b');
+    ok('translate-done log contains model openai/gpt-oss-120b', translateDoneLog && translateDoneLog.data.model === 'openai/gpt-oss-120b');
   }
 
   console.log('\nALL GROQ TRANSLATION INTEGRATION TESTS PASSED');

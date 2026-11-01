@@ -133,10 +133,23 @@
       <span class="badge" id="groqBadge" style="font-size:11px; padding:2px 7px; border-radius:12px; background:var(--panel); border:1px solid var(--line); color:var(--muted);">Checking…</span>
     </div>
     <div id="groqForm">
+      <label class="field" for="groqModelSelect" style="font-size:11.5px;">Translation Model</label>
+      <select id="groqModelSelect" style="width:100%; font-size:12px; padding:6px 8px; border-radius:6px; border:1px solid var(--line); margin-top:3px; margin-bottom:6px; background:var(--panel); color:var(--ink);">
+        <option value="openai/gpt-oss-120b">GPT-OSS 120B (Recommended · Natural Urdu)</option>
+        <option value="qwen/qwen3.8-27b">Qwen 3.8 27B (Fast / Lightweight)</option>
+        <option value="openai/gpt-oss-20b">GPT-OSS 20B (OpenAI Reasoning 20B)</option>
+        <option value="allam-2-7b">Allam 2 7B (SDAIA Regional)</option>
+        <option value="custom">Custom model ID…</option>
+      </select>
+      <div id="groqCustomModelWrap" class="hidden" style="margin-bottom:6px;">
+        <label class="field" for="groqCustomModelInput" style="font-size:11px;">Custom Model ID</label>
+        <input type="text" id="groqCustomModelInput" placeholder="e.g. meta-llama/llama-3.3-70b-instruct" style="width:100%; font-size:12px; padding:5px 8px; border-radius:6px; border:1px solid var(--line); margin-top:2px;" />
+      </div>
+
       <label class="field" for="groqKeyInput" style="font-size:11.5px;">Groq API Key</label>
       <input type="password" id="groqKeyInput" placeholder="Enter Groq API Key (gsk_...)" autocomplete="off" style="width:100%; font-size:12.5px; padding:6px 8px; border-radius:6px; border:1px solid var(--line); margin-top:3px; margin-bottom:6px;" />
       <div class="row" style="margin-top:0;">
-        <button id="groqSaveBtn" class="primary">Save Key</button>
+        <button id="groqSaveBtn" class="primary">Save Settings</button>
         <button id="groqClearBtn" class="danger hidden">Remove Key</button>
       </div>
     </div>

@@ -100,14 +100,27 @@ async function runTestHarness({ groqConfig = { configured: false, model: 'qwen/q
     if (u.pathname === '/groq/config') {
       if (opts.method === 'POST') {
         const body = JSON.parse(opts.body);
-        if (body.apiKey) {
-          currentGroqConfig.configured = true;
-          currentGroqConfig.maskedKey = body.apiKey.slice(0, 4) + '...' + body.apiKey.slice(-4);
-        } else {
-          currentGroqConfig.configured = false;
-          currentGroqConfig.maskedKey = '';
+        if (body.apiKey !== undefined) {
+          if (body.apiKey) {
+            currentGroqConfig.configured = true;
+            currentGroqConfig.maskedKey = body.apiKey.slice(0, 4) + '...' + body.apiKey.slice(-4);
+          } else {
+            currentGroqConfig.configured = false;
+            currentGroqConfig.maskedKey = '';
+          }
         }
-        return { ok: true, status: 200, json: async () => ({ ok: true, configured: currentGroqConfig.configured }) };
+        if (body.model) {
+          currentGroqConfig.model = body.model;
+        }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            ok: true,
+            configured: currentGroqConfig.configured,
+            model: currentGroqConfig.model,
+          }),
+        };
       }
       return { ok: true, status: 200, json: async () => currentGroqConfig };
     }
@@ -188,28 +201,36 @@ async function runAll() {
     ok('Clicking sidebar button triggers chrome.sidePanel.open', wasSidebarOpened());
   }
 
-  console.log('\n--- 3. Groq API Key Configuration in Popup ---');
+  console.log('\n--- 3. Groq API Key and Model Configuration in Popup ---');
   {
     const { els, fetchCalls } = await runTestHarness({
-      groqConfig: { configured: false, model: 'qwen/qwen3.8-27b' },
+      groqConfig: { configured: false, model: 'openai/gpt-oss-120b' },
     });
 
     ok('Initial badge indicates fallback', els.groqBadge.textContent.includes('Google Fallback'));
     ok('Remove key button is hidden initially', els.groqClearBtn.classList.contains('hidden'));
+    ok('Model selector exists', Boolean(els.groqModelSelect));
+    eq('Model selector defaults to openai/gpt-oss-120b', els.groqModelSelect.value, 'openai/gpt-oss-120b');
 
     // Enter a Groq API key
     els.groqKeyInput.value = 'gsk_test_api_key_12345';
     await els.groqSaveBtn._on_click();
 
-    // Verify POST /groq/config was called with key
+    // Verify POST /groq/config was called with key and model
     const postCall = fetchCalls.find((c) => c.url.includes('/groq/config') && c.opts.method === 'POST');
     ok('POST /groq/config called', Boolean(postCall));
     const sentBody = JSON.parse(postCall.opts.body);
     eq('API key sent to controller', sentBody.apiKey, 'gsk_test_api_key_12345');
+    eq('Model sent to controller', sentBody.model, 'openai/gpt-oss-120b');
 
-    // Badge updates to Qwen 3.8 27B Active
-    ok('Badge reflects active Qwen model', els.groqBadge.textContent.includes('Qwen 3.8 27B Active'));
+    // Badge updates to GPT-OSS 120B Active
+    ok('Badge reflects active GPT-OSS 120B model', els.groqBadge.textContent.includes('GPT-OSS 120B Active'));
     ok('Remove button becomes visible', !els.groqClearBtn.classList.contains('hidden'));
+
+    // Switch model to Qwen via select dropdown
+    els.groqModelSelect.value = 'qwen/qwen3.8-27b';
+    await els.groqModelSelect._on_change();
+    ok('Badge updates to Qwen 3.8 27B Active', els.groqBadge.textContent.includes('Qwen 3.8 27B Active'));
 
     // Click remove key
     await els.groqClearBtn._on_click();
@@ -249,18 +270,18 @@ async function runAll() {
     ok('Shows Google fallback when no key', els.transEngineText.textContent.includes('Google Translate (Fallback)'));
     eq('Dot color is amber for fallback', els.transEngineDot.style.background, '#e3a008');
 
-    // B. Groq active state
+    // B. Groq active state (GPT-OSS 120B)
     const { els: elsGroq } = await runTestHarness({
       groqConfig: {
         configured: true,
-        model: 'qwen/qwen3.8-27b',
-        lastTranslation: { provider: 'groq', model: 'qwen/qwen3.8-27b', ts: Date.now() - 60000 },
+        model: 'openai/gpt-oss-120b',
+        lastTranslation: { provider: 'groq', model: 'openai/gpt-oss-120b', ts: Date.now() - 60000 },
       },
     });
-    ok('Shows Qwen 3.8 27B when Groq active', elsGroq.transEngineText.textContent.includes('Qwen 3.8 27B (Groq)'));
+    ok('Shows GPT-OSS 120B when Groq active', elsGroq.transEngineText.textContent.includes('GPT-OSS 120B (Groq)'));
     eq('Dot color is vibrant green for Groq', elsGroq.transEngineDot.style.background, '#10a37f');
     ok('Last translation event visible', !elsGroq.transLastEvent.classList.contains('hidden'));
-    ok('Last event details mention Qwen', elsGroq.transLastEvent.textContent.includes('Qwen 3.8 27B'));
+    ok('Last event details mention GPT-OSS 120B', elsGroq.transLastEvent.textContent.includes('GPT-OSS 120B'));
   }
 
   console.log('\nALL POPUP SIDEBAR AND CONFIGURATION TESTS PASSED');
