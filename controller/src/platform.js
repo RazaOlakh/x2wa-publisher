@@ -97,7 +97,31 @@ function acquireSessionLock(dir) {
 }
 
 function isAlive(pid) {
-  try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
+  if (!pid || typeof pid !== 'number' || isNaN(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+  } catch (e) {
+    if (process.platform !== 'win32' && e.code === 'EPERM') return true;
+    return false;
+  }
+  try {
+    if (process.platform === 'win32') {
+      const { execSync } = require('child_process');
+      const out = execSync(`tasklist /fi "PID eq ${pid}" /fo csv /nh`, {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+        timeout: 2000,
+      });
+      return out.toLowerCase().includes('node.exe');
+    }
+    if (process.platform === 'linux') {
+      const comm = fs.readFileSync(`/proc/${pid}/comm`, 'utf8').trim();
+      return comm.startsWith('node');
+    }
+  } catch {
+    return true;
+  }
+  return true;
 }
 
 module.exports = { userDataRoot, sessionDir, tmpRoot, acquireSessionLock, isAlive, chromePath };

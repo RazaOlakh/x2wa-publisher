@@ -101,6 +101,12 @@ console.log('second controller cannot share a session directory');
   try { acquireSessionLock(dir); tookOver = fs.readFileSync(lockPath, 'utf8') === String(process.pid); } catch (e) { tookOver = false; }
   check('takes over a stale lock', tookOver);
 
+  // A stale lock naming a non-node process (or system process) must also be taken over.
+  fs.writeFileSync(lockPath, '1'); // PID 1 is system/non-node
+  let tookOverNonNode = false;
+  try { acquireSessionLock(dir); tookOverNonNode = fs.readFileSync(lockPath, 'utf8') === String(process.pid); } catch (e) { tookOverNonNode = false; }
+  check('takes over a lock owned by a non-node process', tookOverNonNode);
+
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
