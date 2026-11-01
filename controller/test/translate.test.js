@@ -9,8 +9,8 @@
 //
 //   node controller/test/translate.test.js
 const {
-  translateText, chunkText, readTranslation, isTranslatable, readTranslateRequest, MAX_CHUNK, ENDPOINT,
-  maskHandles, unmaskHandles, transliterateText, translatePostText, readTransliteration, isUrduScript,
+  translateText, translateTextWithMeta, chunkText, readTranslation, isTranslatable, readTranslateRequest, MAX_CHUNK, ENDPOINT,
+  maskHandles, unmaskHandles, transliterateText, translatePostText, translatePostTextWithMeta, readTransliteration, isUrduScript,
 } = require('../src/translate');
 
 let failures = 0;
@@ -288,6 +288,47 @@ console.log('the translation request');
     ]);
     const out = await translatePostText('Hello world', 'ur', null, { fetchImpl, retryDelayMs: 0 });
     eq('plain post without author header translates normally', out, 'ہیلو دنیا');
+  }
+
+  console.log('Groq primary translation and Google Translate fallback with metadata');
+  {
+    // Groq success path
+    const fetchImpl = async (url, opts) => {
+      eq('Groq chat completions endpoint is targeted', url, 'https://api.groq.com/openai/v1/chat/completions');
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          choices: [{ message: { role: 'assistant', content: 'ہیلو دنیا بذریعہ قوین' } }],
+        }),
+      };
+    };
+    const res = await translateTextWithMeta('Hello world via Qwen', 'ur', {
+      apiKey: 'gsk_test',
+      fetchImpl,
+    });
+    eq('Groq translates text correctly', res.text, 'ہیلو دنیا بذریعہ قوین');
+    eq('Groq provider is reported', res.provider, 'groq');
+    eq('Groq model is reported', res.model, 'qwen/qwen3.8-27b');
+  }
+  {
+    // Groq failure falls back to Google Translate
+    const fetchImpl = async (url) => {
+      if (url.includes('api.groq.com')) {
+        return { ok: false, status: 500, json: async () => ({ error: { message: 'Server down' } }) };
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => [['گوگل فال بیک', 'en']],
+      };
+    };
+    const res = await translateTextWithMeta('Hello fallback', 'ur', {
+      apiKey: 'gsk_test',
+      fetchImpl,
+    });
+    eq('Fallback to Google succeeds', res.text, 'گوگل فال بیک');
+    eq('Google provider is reported on fallback', res.provider, 'google');
   }
 
   console.log(failures ? `\n${failures} FAILURE(S)` : '\nALL TRANSLATE TESTS PASSED');

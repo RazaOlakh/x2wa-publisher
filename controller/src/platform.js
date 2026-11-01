@@ -101,8 +101,7 @@ function isAlive(pid) {
   try {
     process.kill(pid, 0);
   } catch (e) {
-    if (process.platform !== 'win32' && e.code === 'EPERM') return true;
-    return false;
+    if (process.platform === 'win32' || e.code !== 'EPERM') return false;
   }
   try {
     if (process.platform === 'win32') {

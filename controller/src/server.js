@@ -1,7 +1,42 @@
 // X → WhatsApp Channel Poster — production local controller
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 const http = require('http');
+
+// Load environment variables from .env files if present (zero-dependency)
+function loadEnv() {
+  const envCandidates = [
+    path.join(__dirname, '..', '.env'),
+    path.join(__dirname, '..', '..', '.env'),
+    path.join(os.homedir(), '.config', 'x-whatsapp-poster', 'env'),
+    path.join(os.homedir(), '.config', 'x2wa', 'env'),
+  ];
+  for (const envPath of envCandidates) {
+    try {
+      if (fs.existsSync(envPath)) {
+        const content = fs.readFileSync(envPath, 'utf8');
+        for (const line of content.split('\n')) {
+          const trimmed = line.trim();
+          if (!trimmed || trimmed.startsWith('#')) continue;
+          const eqIdx = trimmed.indexOf('=');
+          if (eqIdx > 0) {
+            const key = trimmed.slice(0, eqIdx).trim();
+            let val = trimmed.slice(eqIdx + 1).trim();
+            if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+              val = val.slice(1, -1);
+            }
+            if (key && process.env[key] === undefined) {
+              process.env[key] = val;
+            }
+          }
+        }
+      }
+    } catch {}
+  }
+}
+loadEnv();
+
 const { execSync } = require('child_process');
 const crypto = require('crypto');
 const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
@@ -15,7 +50,14 @@ const { decodeInlineImage, isInlineImage, MAX_INLINE_BYTES } = require('./inline
 const videoPipeline = require('./video-pipeline');
 const hlsPrefetch = require('./hls-prefetch');
 const duplicate = require('./duplicate-guard');
-const { translateText, readTranslateRequest, transliterateText, translatePostText } = require('./translate');
+const {
+  translateText,
+  translateTextWithMeta,
+  readTranslateRequest,
+  transliterateText,
+  translatePostText,
+  translatePostTextWithMeta,
+} = require('./translate');
 const {
   resolveTransliteration,
   defaultStore: overridesStore,
@@ -634,8 +676,9 @@ async function runSend(body) {
       const t0 = Date.now();
       log('info','translate-start',{requestId,jobId,channelId,target,chars:text.length});
       try {
-        outText = await translatePostText(text, target, body.author);
-        log('info','translate-done',{requestId,jobId,target,charsIn:text.length,charsOut:outText.length,ms:Date.now()-t0});
+        const translation = await translatePostTextWithMeta(text, target, body.author, { log });
+        outText = translation.text;
+        log('info','translate-done',{requestId,jobId,target,provider:translation.provider,model:translation.model,charsIn:text.length,charsOut:outText.length,ms:Date.now()-t0});
       } catch (e) {
         duplicateLog.set(key, { ts: now, status: 'failed', jobId });
         jobs.set(jobId, { status: 'failed', error: 'translate-failed' });
@@ -855,11 +898,19 @@ const server = http.createServer(async (req, res) => {
       const request = readTranslateRequest(body);
       if (!request.ok) { log('error','translate-rejected-bad-request',{}); return json(res, 400, { error: request.error }); }
       try {
-        const out = request.mode === 'translate'
-          ? await translateText(request.text, request.to)
-          : await transliterateText(request.text, request.to);
-        log('info','translate-http',{to:request.to,charsIn:request.text.length,charsOut:out.length,mode:request.mode||'transliterate'});
-        return json(res, 200, { ok: true, text: out, to: request.to });
+        let out, provider, model;
+        if (request.mode === 'translate') {
+          const res = await translateTextWithMeta(request.text, request.to, { log });
+          out = res.text;
+          provider = res.provider;
+          model = res.model;
+        } else {
+          out = await transliterateText(request.text, request.to, { log });
+          provider = 'inputtools';
+          model = null;
+        }
+        log('info','translate-http',{to:request.to,charsIn:request.text.length,charsOut:out.length,mode:request.mode||'transliterate',provider,model});
+        return json(res, 200, { ok: true, text: out, to: request.to, provider, model });
       } catch (e) {
         log('warn','translate-http-failed',{to:request.to,error:errMsg(e)});
         return json(res, 502, { ok: false, error: 'translate-failed' });

@@ -435,25 +435,60 @@ icon — that has the post's **text translated to Urdu** before it is sent. A po
 with media is translated too: the text becomes the caption, in Urdu, and the
 images or video go with it unchanged.
 
-The translation happens in the **controller**, not the browser: it is a small
-request to Google's keyless translate endpoint (the same one a dictionary
-lookup uses), made from the local controller so it is not subject to the page's
-origin rules and so the request and its outcome are logged in one place. Only
-the post's **text** is sent to it. A URL in the text is left exactly as it is, so
-a text post's link-first order — and the preview card it earns — still works,
-and the words around it arrive in Urdu.
+The translation happens in the **controller**, not the browser:
+- **Primary Engine:** **Qwen 3.8 27B hosted on Groq** (`qwen/qwen3.8-27b`). It specializes in natural, fluent Pakistani Urdu rather than stiff literal translation. It preserves paragraph breaks, author tone, humour, sarcasm, and leaves URLs, hashtags, numbers, dates, and usernames intact.
+- **Fallback Engine:** Google Translate (`translate_a/t`). If Groq is unconfigured, rate-limited, times out, or encounters an API error, the controller automatically falls back to Google Translate without failing the post send or requiring user intervention.
+- **Author-Name Transliteration:** If an author name heads an Urdu post, it is phonetically transliterated via Google Input Tools and local dictionary overrides (`name-overrides.json`), never semantically translated.
 
-If the translation cannot be fetched, the post is **not** sent in the wrong
-language: the button reports `Could not translate this post just now` and the
-post can be tried again.
+#### Configuring Groq API Key
 
-This endpoint is Google's and is not an official, supported API. It is used
-because it needs no key and no setup, but it is a network request that leaves
-your machine, and it is the one part of this tool that sends post content
-anywhere other than WhatsApp. See
-[Security / isolation](#security--isolation). To use a different translator,
-change `translateText` in `controller/src/translate.js`; it is the only place
-translation happens.
+To enable Qwen 3.8 27B via Groq:
+
+1. Obtain a Groq API key from [console.groq.com](https://console.groq.com/).
+2. Provide the key using any of the following methods:
+
+**Method A: Local `.env` file (recommended)**
+Create `controller/.env` or `.env` in the repository root:
+```bash
+GROQ_API_KEY="gsk_your_groq_api_key_here"
+# Optional overrides:
+# GROQ_MODEL="qwen/qwen3.8-27b"
+# GROQ_TIMEOUT_MS="30000"
+```
+
+**Method B: Environment variable / Systemd on Linux**
+Add to `~/.config/x-whatsapp-poster/env`:
+```bash
+GROQ_API_KEY=gsk_your_groq_api_key_here
+```
+Or export directly in shell before starting:
+```bash
+export GROQ_API_KEY="gsk_your_groq_api_key_here"
+```
+
+**Method C: Windows User Environment Variable**
+```powershell
+[System.Environment]::SetEnvironmentVariable('GROQ_API_KEY', 'gsk_your_groq_api_key_here', 'User')
+```
+
+#### Restarting the Controller
+
+After configuring `GROQ_API_KEY`, restart the controller service:
+
+- **Linux (systemd):**
+  ```bash
+  systemctl --user restart x2wa-controller
+  # or: ./scripts/install-startup.sh restart
+  ```
+- **Manual / Development:**
+  ```bash
+  cd controller
+  npm start
+  ```
+- **Windows:**
+  Restart the terminal running `supervisor.js` or reboot/log out.
+
+If the translation cannot be fetched from both Groq and Google Translate, the post is **not** sent in the wrong language: the button reports `Could not translate this post just now` and the post can be tried again.
 
 ### Sending a screenshot of the post
 
@@ -899,6 +934,8 @@ node extension/test/video-source.test.js     # an ambiguous video mapping is ref
 node extension/test/link-first.test.js       # a text-only post's link moves to the top, media posts untouched
 node extension/test/author-header.test.js    # the author's name is read cleanly, written in the post's language, and put above the post
 node controller/test/translate.test.js       # the Urdu button: the split, the endpoint's shapes, the request, standalone name requests
+node controller/test/groq.test.js            # Groq Qwen 3.8 27B client, system prompt, and response sanitization
+node controller/test/translate-groq.test.js  # Groq translation, Google fallback, 8 real-world categories comparison
 node extension/test/post-variant.test.js     # each send button's variant: name, glyph, author, translate
 node extension/test/quote-tweet.test.js       # a quote-tweet sends a picture of the quoted post, captioned with the outer words; ordinary posts unchanged
 node extension/test/quote-button.test.js       # the same, driven through the real click handlers: the camera button and the three send buttons agree

@@ -5,6 +5,9 @@ node_modules/
 tmp/
 deps/
 ~/
+home/
+.env
+.env.*
 spike/
 spike2/
 spike3/

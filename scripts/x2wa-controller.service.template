@@ -22,6 +22,8 @@ Environment=SESSION_DIR=__SESSION_DIR__
 Environment=TMP_ROOT=__TMP_ROOT__
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
 Environment=CHROME_PATH=__CHROME__
+EnvironmentFile=-%h/.config/x-whatsapp-poster/env
+EnvironmentFile=-%h/.config/x2wa/env
 Restart=on-failure
 RestartSec=5s
 StartLimitIntervalSec=120
