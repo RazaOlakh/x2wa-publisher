@@ -180,5 +180,18 @@ console.log('create-desktop-shortcut.ps1 contract');
   check('uses Chrome icon if available', /chrome\.exe/.test(shortcut) && /IconLocation/.test(shortcut));
 }
 
+
+console.log('tray companion integration contract');
+{
+  check('resolves tray.ps1 path', /\$TrayScript\s*=/.test(src));
+  check('launches tray.ps1 hidden from VBScript wrapper', /powershell\.exe.*\$TrayScript/.test(src));
+  check('defines Get-TrayProcess helper', /function Get-TrayProcess/.test(src));
+  check('defines Start-Tray helper', /function Start-Tray/.test(src));
+  check('defines Stop-Tray helper', /function Stop-Tray/.test(src));
+  check('uninstall stops the tray companion', /'uninstall'[\s\S]*?Stop-Tray/.test(src));
+  check('restart restarts the tray companion', /'restart'[\s\S]*?Stop-Tray[\s\S]*?Start-Tray/.test(src));
+  check('status reports tray companion status', /'status'[\s\S]*?Get-TrayProcess/.test(src));
+}
+
 console.log(failures ? `\n${failures} FAILURE(S)` : '\nWINDOWS STARTUP STATIC CHECKS PASSED');
 process.exit(failures ? 1 : 0);

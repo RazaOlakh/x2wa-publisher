@@ -39,6 +39,8 @@ $LogFile         = Join-Path $DataRoot 'controller.log'
 $CmdLauncherPath = Join-Path $DataRoot "$ServiceName.cmd"
 $VbsLauncherPath = Join-Path $StartupDir "$ServiceName.vbs"
 $LegacyCmdPath   = Join-Path $StartupDir "$ServiceName.cmd"
+$TrayScript       = Join-Path $PSScriptRoot 'tray.ps1'
+if (Test-Path -LiteralPath $TrayScript) { $TrayScript = (Resolve-Path -LiteralPath $TrayScript).Path }
 
 function Write-Step($msg) { Write-Host "==> $msg" -ForegroundColor Cyan }
 
@@ -63,6 +65,29 @@ function Get-ControllerProcess {
 function Get-SessionChromeProcesses {
   Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" -ErrorAction SilentlyContinue |
     Where-Object { $_.CommandLine -and $_.CommandLine -like "*$SessionDir*" }
+}
+
+function Get-TrayProcess {
+  Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+    Where-Object { ($_.Name -eq 'powershell.exe' -or $_.Name -eq 'pwsh.exe') -and $_.CommandLine -and $_.CommandLine -like "*tray.ps1*" }
+}
+
+function Start-Tray {
+  if (Get-TrayProcess) { return }
+  if (Test-Path -LiteralPath $TrayScript) {
+    try {
+      $cmd = "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$TrayScript`""
+      Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $cmd } -ErrorAction Stop | Out-Null
+    } catch {
+      Start-Process powershell.exe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$TrayScript`"" -WindowStyle Hidden | Out-Null
+    }
+  }
+}
+
+function Stop-Tray {
+  foreach ($p in (Get-TrayProcess)) {
+    Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
+  }
 }
 
 function Test-Prerequisites {
@@ -137,6 +162,7 @@ ping 127.0.0.1 -n 9 >nul
 Set WshShell = CreateObject("WScript.Shell")
 WshShell.CurrentDirectory = "$ControllerDir"
 WshShell.Run """$CmdLauncherPath""", 0, False
+WshShell.Run "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File """ & "$TrayScript" & """", 0, False
 "@
   Set-Content -LiteralPath $VbsLauncherPath -Value $vbs -Encoding ASCII
   if (Test-Path -LiteralPath $LegacyCmdPath) { Remove-Item -LiteralPath $LegacyCmdPath -Force }
@@ -152,6 +178,7 @@ switch ($Action) {
     Test-Prerequisites
     if (-not (Test-Path -LiteralPath $StartupDir)) { throw "Startup folder not found: $StartupDir" }
     New-Launcher
+    Start-Tray
     Write-Step "Silent startup launcher installed at $VbsLauncherPath"
     Write-Host "    Runner    : $CmdLauncherPath"
     Write-Host "    Node      : $((Get-Command node).Source)"
@@ -173,6 +200,7 @@ switch ($Action) {
       Write-Step "Stopping session browser pid $($p.ProcessId)"
       Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
     }
+    Stop-Tray
     $lockFile = Join-Path $SessionDir 'controller.lock'
     if (Test-Path -LiteralPath $lockFile) { Remove-Item -LiteralPath $lockFile -Force -ErrorAction SilentlyContinue }
     Write-Host "Your WhatsApp session in $SessionDir was left untouched."
@@ -181,6 +209,9 @@ switch ($Action) {
     $procs = Get-ControllerProcess
     if ($procs) { foreach ($p in $procs) { Write-Host "running  pid $($p.ProcessId)" -ForegroundColor Green } }
     else { Write-Host "not running" -ForegroundColor Yellow }
+    $tray = Get-TrayProcess
+    if ($tray) { foreach ($t in $tray) { Write-Host "tray companion   : running pid $($t.ProcessId)" -ForegroundColor Green } }
+    else { Write-Host "tray companion   : not running" -ForegroundColor Yellow }
     try {
       $s = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/status" -TimeoutSec 3
       Write-Host "controller state: $($s.state)  session: $($s.sessionDir)"
@@ -194,6 +225,7 @@ switch ($Action) {
   'restart' {
     foreach ($p in (Get-ControllerProcess)) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }
     foreach ($p in (Get-SessionChromeProcesses)) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }
+    Stop-Tray
     for ($i = 0; $i -lt 10; $i++) {
       if (-not (Get-ControllerProcess)) { break }
       Start-Sleep -Seconds 1
@@ -210,10 +242,12 @@ switch ($Action) {
     } catch {
       Start-Process -FilePath $toStart | Out-Null
     }
+    Start-Tray
     Start-Sleep -Seconds 12
     & $PSCommandPath status
   }
   'start' {
+    Start-Tray
     if (Get-ControllerProcess) {
       Write-Host "already running" -ForegroundColor Yellow
       & $PSCommandPath status

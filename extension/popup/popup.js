@@ -171,6 +171,16 @@ ui.check.addEventListener('click', async () => {
   const isRetry = ui.check.textContent === 'Retry';
   ui.check.textContent = isRetry ? 'Connecting…' : 'Checking…';
   setStatus('busy', isRetry ? 'Connecting to controller…' : 'Checking connection…', 'Attempting to reach local controller on 127.0.0.1:47825…');
+  try {
+    const s = await status();
+    if (s && (s.state === 'starting' || s.state === 'authenticated')) {
+      await req('/auth/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ force: true }),
+      });
+    }
+  } catch {}
   await new Promise((r) => setTimeout(r, 400));
   await refresh();
   ui.check.disabled = false;

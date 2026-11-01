@@ -27,6 +27,14 @@ param()
 
 $ErrorActionPreference = 'Stop'
 
+# Prevent duplicate tray icon instances
+$currentPid = $PID
+$existing = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+  Where-Object { ($_.Name -eq 'powershell.exe' -or $_.Name -eq 'pwsh.exe') -and $_.ProcessId -ne $currentPid -and $_.CommandLine -and $_.CommandLine -like "*tray.ps1*" }
+if ($existing) {
+  exit 0
+}
+
 $Port = 47825
 $StatusUri = "http://127.0.0.1:$Port/status"
 $DataRoot = Join-Path $env:LOCALAPPDATA 'x-whatsapp-poster'
@@ -104,7 +112,9 @@ function Open-Settings {
 function Get-StateColor {
   param([string]$state)
   switch ($state) {
-    'ready'        { return [System.Drawing.Color]::FromArgb(90, 200, 90) }
+    'ready'         { return [System.Drawing.Color]::FromArgb(90, 200, 90) }
+    'starting'      { return [System.Drawing.Color]::FromArgb(240, 180, 40) }
+    'authenticated' { return [System.Drawing.Color]::FromArgb(240, 180, 40) }
     'qr'           { return [System.Drawing.Color]::FromArgb(240, 180, 40) }
     'reconnecting' { return [System.Drawing.Color]::FromArgb(240, 180, 40) }
     default        { return [System.Drawing.Color]::FromArgb(220, 60, 60) }

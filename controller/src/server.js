@@ -9,7 +9,7 @@ const qrcode = require('qrcode-terminal');
 const QRCode = require('qrcode-generator');
 const { sessionDir, tmpRoot, acquireSessionLock, chromePath } = require('./platform');
 const { listPostableChannels, canPostToChannel } = require('./channels');
-const { createHeartbeat } = require('./heartbeat');
+const { createHeartbeat, isStartupStuck } = require('./heartbeat');
 const repo = require('./repo');
 const { decodeInlineImage, isInlineImage, MAX_INLINE_BYTES } = require('./inline-media');
 const videoPipeline = require('./video-pipeline');
@@ -45,6 +45,13 @@ try {
 }
 
 let state = 'starting';
+let stateEnteredAt = Date.now();
+function setState(s) {
+  if (state !== s) {
+    state = s;
+    stateEnteredAt = Date.now();
+  }
+}
 let lastQr = null;
 let qrIssuedAt = 0;
 let waInfo = null;
@@ -79,20 +86,20 @@ let client = null;
 
 function startClient(reason) {
   if (client) return;
-  state = state === 'ready' ? state : 'starting';
+  setState(state === 'ready' ? state : 'starting');
   log('info','client-start',{ reason, sessionDir: SESSION_DIR });
   client = makeClient();
   client.on('qr', (qr) => {
-    state = 'qr'; lastQr = qr; qrIssuedAt = Date.now();
+    setState('qr'); lastQr = qr; qrIssuedAt = Date.now();
     log('info','qr-state',{status:'waiting-for-user'});
     // Printed for a user working in a terminal; never written to a log file.
     try { qrcode.generate(qr, { small: true }); } catch {}
   });
-  client.on('authenticated', () => { state = 'authenticated'; log('info','authenticated'); });
-  client.on('auth_failure', (m) => { state = 'auth_failure'; log('error','auth-failure',{error:String(m)}); });
+  client.on('authenticated', () => { setState('authenticated'); log('info','authenticated'); });
+  client.on('auth_failure', (m) => { setState('auth_failure'); log('error','auth-failure',{error:String(m)}); });
   // A clean disconnect also rebuilds the client from the saved session.
   client.on('ready', () => {
-    state = 'ready'; waInfo = client.info; lastQr = null; channelCache = null;
+    setState('ready'); waInfo = client.info; lastQr = null; channelCache = null;
     restartAttempts = 0; restartPending = false; beat.reset();
     log('info','ready',{me: waInfo && waInfo.wid && waInfo.wid._serialized});
   });
@@ -115,17 +122,17 @@ function startClient(reason) {
 // being left with a stopped controller and no way forward.
 async function logout(reason) {
   if (!client) {
-    state = 'auth_required';
+    setState('auth_required');
     log('info','logout-noop',{reason});
     startClient('after-logout');
     return { ok: true, alreadyStopped: true };
   }
   const c = client;
-  client = null; lastQr = null; waInfo = null; channelCache = null; state = 'stopped';
+  client = null; lastQr = null; waInfo = null; channelCache = null; setState('stopped');
   try { await c.logout(); } catch (e) { log('warn','logout-error',{error:String((e && e.message) || e)}); }
   try { await c.destroy(); } catch (e) { log('warn','destroy-error',{error:String((e && e.message) || e)}); }
   log('info','logged-out',{reason});
-  state = 'auth_required';
+  setState('auth_required');
   startClient('after-logout');
   return { ok: true };
 }
@@ -213,10 +220,14 @@ function killOrphanedSessionBrowsers() {
 function markConnectionStale(reason) {
   if (restartPending) return;
   restartPending = true;
-  restartAttempts += 1;
+  if (reason && String(reason).startsWith('user-restart')) {
+    restartAttempts = 0;
+  } else {
+    restartAttempts += 1;
+  }
   const delay = restartBackoffMs(restartAttempts);
   // Report the truth while we rebuild, instead of claiming "ready".
-  state = 'reconnecting';
+  setState('reconnecting');
   log('warn', 'connection-stale', { reason, attempt: restartAttempts, retryInMs: delay });
   if (restartTimer) clearTimeout(restartTimer);
   restartTimer = setTimeout(async () => {
@@ -250,6 +261,14 @@ async function heartbeat() {
   if (beat.sleptFor(gap)) {
     log('warn', 'system-resume', { gapMs: Math.round(gap) });
     markConnectionStale('system-resume');
+    return;
+  }
+
+  // Startup watchdog: if stuck in 'starting' or 'authenticated' for over 60 seconds,
+  // recover the connection by restarting the client.
+  if (!restartPending && isStartupStuck(state, now - stateEnteredAt)) {
+    log('warn', 'startup-stuck', { state, elapsedMs: now - stateEnteredAt });
+    markConnectionStale('startup-stuck:' + state);
     return;
   }
   // Never rebuild underneath a post that is still running: the send reports
@@ -305,7 +324,7 @@ for (const signal of ['SIGTERM', 'SIGINT']) {
     // browser again, which is the very thing being avoided.
     const bail = setTimeout(() => process.exit(0), 8000);
     if (bail.unref) bail.unref();
-    state = 'stopped';
+    setState('stopped');
     const c = client;
     client = null;
     // Bounded on purpose: systemd has already signalled the whole process
@@ -774,11 +793,17 @@ const server = http.createServer(async (req, res) => {
       // QR payload off the network and out of any log.
       return json(res, 200, { image: qrImageSvg(lastQr), issuedAt: qrIssuedAt });
     }
-    if (req.method === 'POST' && url.pathname === '/auth/start') {
+    if (req.method === 'POST' && (url.pathname === '/auth/start' || url.pathname === '/auth/reconnect')) {
       // Idempotent: reconnect, or start pairing if there is nothing to
       // reconnect to. Lets the popup recover without a service restart.
-      if (state === 'ready') return json(res, 200, { ok: true, state, alreadyRunning: true });
-      if (!client) startClient('popup-request');
+      const body = await readBody(req).then((b) => { try { return JSON.parse(b || '{}'); } catch { return {}; } });
+      if (state === 'ready' && !body.force) return json(res, 200, { ok: true, state, alreadyRunning: true });
+      if (!client) {
+        startClient('popup-request');
+      } else if (body.force || ((state === 'starting' || state === 'authenticated') && (Date.now() - stateEnteredAt >= 15000))) {
+        log('info', 'auth-restart-requested', { state, elapsedMs: Date.now() - stateEnteredAt });
+        markConnectionStale('user-restart:' + state);
+      }
       return json(res, 200, { ok: true, state });
     }
     if (req.method === 'POST' && url.pathname === '/auth/logout') {

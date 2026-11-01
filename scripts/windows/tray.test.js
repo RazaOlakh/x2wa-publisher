@@ -39,6 +39,8 @@ console.log('state colour mapping');
 {
   check('ready is green', /'ready'\s*\{ return \[System\.Drawing\.Color\]::FromArgb\(90, 200, 90\) \}/.test(src));
   check('qr / reconnecting is amber', /'qr'/.test(src) && /'reconnecting'/.test(src) && /FromArgb\(240, 180, 40\)/.test(src));
+  check('starting / authenticated is amber', /'starting'/.test(src) && /'authenticated'/.test(src));
+  check('single instance check prevents duplicate tray icons', /Win32_Process.*tray\.ps1/s.test(src));
   check('any other state is red', /default\s*\{ return \[System\.Drawing\.Color\]::FromArgb\(220, 60, 60\) \}/.test(src));
 }
 
