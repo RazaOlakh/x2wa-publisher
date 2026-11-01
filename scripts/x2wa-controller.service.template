@@ -11,6 +11,8 @@ Description=X to WhatsApp Channel Poster controller (local, loopback only)
 Documentation=__REPO_URL__
 After=graphical-session.target
 PartOf=graphical-session.target
+StartLimitIntervalSec=120
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -26,8 +28,6 @@ EnvironmentFile=-%h/.config/x-whatsapp-poster/env
 EnvironmentFile=-%h/.config/x2wa/env
 Restart=on-failure
 RestartSec=5s
-StartLimitIntervalSec=120
-StartLimitBurst=5
 
 # Operational logs: stdout/stderr go to the journal, which records the
 # connection state and job ids but never QR payloads, cookies or session

@@ -14,6 +14,9 @@
 const DEFAULT_MODEL = 'qwen/qwen3.8-27b';
 const DEFAULT_BASE_URL = 'https://api.groq.com/openai/v1';
 const DEFAULT_TIMEOUT_MS = 30000;
+// Groq's on-demand rate limit for Qwen 3.8 27B enforces 1,000 output tokens per minute (OTPM).
+// Setting max_tokens ensures requests do not exceed this limit.
+const DEFAULT_MAX_TOKENS = 800;
 const USER_AGENT = 'x-whatsapp-poster-controller/1.0';
 
 const SYSTEM_PROMPT = `You are a professional English-to-Urdu translator specialising in natural Pakistani Urdu.
@@ -45,7 +48,14 @@ function getGroqConfig(env = process.env, overrides = {}) {
     const parsed = parseInt(env.GROQ_TIMEOUT_MS, 10);
     if (Number.isFinite(parsed) && parsed > 0) timeoutMs = parsed;
   }
-  return { apiKey, model, baseUrl, timeoutMs };
+  let maxTokens = DEFAULT_MAX_TOKENS;
+  if (overrides && overrides.maxTokens != null) {
+    maxTokens = overrides.maxTokens;
+  } else if (env.GROQ_MAX_TOKENS) {
+    const parsed = parseInt(env.GROQ_MAX_TOKENS, 10);
+    if (Number.isFinite(parsed) && parsed > 0) maxTokens = parsed;
+  }
+  return { apiKey, model, baseUrl, timeoutMs, maxTokens };
 }
 
 // Checks if Groq is configured with an API key.
@@ -86,8 +96,8 @@ function readGroqTranslation(data) {
 }
 
 // Constructs Chat Completions payload for Groq.
-function buildGroqPayload(text, model = DEFAULT_MODEL, temperature = 0.3) {
-  return {
+function buildGroqPayload(text, model = DEFAULT_MODEL, temperature = 0.3, maxTokens = DEFAULT_MAX_TOKENS) {
+  const payload = {
     model,
     messages: [
       { role: 'system', content: SYSTEM_PROMPT },
@@ -95,6 +105,10 @@ function buildGroqPayload(text, model = DEFAULT_MODEL, temperature = 0.3) {
     ],
     temperature,
   };
+  if (maxTokens != null && Number.isFinite(maxTokens) && maxTokens > 0) {
+    payload.max_tokens = maxTokens;
+  }
+  return payload;
 }
 
 // Translates `text` using Groq's official Chat Completions API with Qwen 3.8 27B.
@@ -117,10 +131,11 @@ async function translateWithGroq(text, options, deps) {
   const baseUrl = (options && options.baseUrl) || config.baseUrl;
   const timeoutMs = (options && options.timeoutMs != null) ? options.timeoutMs : config.timeoutMs;
   const temperature = (options && options.temperature != null) ? options.temperature : 0.3;
+  const maxTokens = (options && options.maxTokens != null) ? options.maxTokens : config.maxTokens;
   const fetchImpl = (deps && deps.fetchImpl) || fetch;
 
   const url = `${baseUrl.replace(/\/+$/, '')}/chat/completions`;
-  const payload = buildGroqPayload(text, model, temperature);
+  const payload = buildGroqPayload(text, model, temperature, maxTokens);
 
   const controller = new AbortController();
   const timer = setTimeout(() => {

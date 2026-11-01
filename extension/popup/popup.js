@@ -66,6 +66,14 @@ function setNote(node, text, kind) {
   node.className = `note ${kind || 'idle'}`;
 }
 
+function formatFetchError(e, prefix) {
+  const isNetwork = e && (e.message === 'Failed to fetch' || (typeof e.message === 'string' && e.message.includes('fetch')) || e.name === 'TypeError');
+  if (isNetwork) {
+    return 'Controller unreachable on 127.0.0.1:47825. Ensure x2wa-controller is running.';
+  }
+  return (prefix ? `${prefix}: ` : '') + (e && e.message || e);
+}
+
 function setStatus(dotClass, title, detail) {
   ui.dot.className = `dot ${dotClass}`;
   ui.title.textContent = title;
@@ -307,7 +315,7 @@ if (ui.revApprove) {
       await store.set({ latestReviewItem: currentReviewItem });
       await refreshReview();
     } catch (e) {
-      setNote(ui.revNote, 'Could not save override: ' + (e.message || e), 'error');
+      setNote(ui.revNote, formatFetchError(e, 'Could not save override'), 'error');
     } finally {
       ui.revApprove.disabled = false;
     }
@@ -354,7 +362,7 @@ if (ui.revApprove) {
       await store.set({ latestReviewItem: currentReviewItem });
       await refreshReview();
     } catch (e) {
-      setNote(ui.revNote, 'Could not save correction: ' + (e.message || e), 'error');
+      setNote(ui.revNote, formatFetchError(e, 'Could not save correction'), 'error');
     } finally {
       ui.revSave.disabled = false;
     }
@@ -389,7 +397,7 @@ if (ui.revApprove) {
       await store.set({ latestReviewItem: currentReviewItem });
       await refreshReview();
     } catch (e) {
-      setNote(ui.revNote, 'Could not remove override: ' + (e.message || e), 'error');
+      setNote(ui.revNote, formatFetchError(e, 'Could not remove override'), 'error');
     } finally {
       ui.revRemove.disabled = false;
     }
@@ -457,7 +465,7 @@ if (ui.revAddSaveBtn) {
         setNote(ui.revAddNote, 'Failed to save override: ' + (res.body && res.body.error || 'error'), 'error');
       }
     } catch (e) {
-      setNote(ui.revAddNote, 'Error saving override: ' + (e.message || e), 'error');
+      setNote(ui.revAddNote, formatFetchError(e, 'Error saving override'), 'error');
     } finally {
       ui.revAddSaveBtn.disabled = false;
     }
@@ -526,13 +534,14 @@ if (ui.groqSave) {
       });
       if (r.ok) {
         if (ui.groqKeyInput) ui.groqKeyInput.value = '';
-        setNote(ui.groqNote, 'Groq API Key saved successfully! Qwen 3.8 27B is now active.', 'ok');
         await refreshGroq();
+        setNote(ui.groqNote, 'Groq API Key saved successfully! Qwen 3.8 27B is now active.', 'ok');
       } else {
-        setNote(ui.groqNote, 'Could not save API key to controller.', 'error');
+        const detail = (r.body && r.body.error) ? ` (${r.body.error})` : (r.status ? ` (HTTP ${r.status})` : '');
+        setNote(ui.groqNote, `Could not save API key to controller${detail}.`, 'error');
       }
     } catch (e) {
-      setNote(ui.groqNote, 'Error communicating with controller: ' + (e.message || e), 'error');
+      setNote(ui.groqNote, formatFetchError(e, 'Error communicating with controller'), 'error');
     } finally {
       ui.groqSave.disabled = false;
     }
@@ -554,7 +563,7 @@ if (ui.groqClear) {
         await refreshGroq();
       }
     } catch (e) {
-      setNote(ui.groqNote, 'Could not remove key: ' + (e.message || e), 'error');
+      setNote(ui.groqNote, formatFetchError(e, 'Could not remove key'), 'error');
     } finally {
       ui.groqClear.disabled = false;
     }

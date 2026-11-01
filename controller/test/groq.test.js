@@ -103,6 +103,7 @@ async function testGroqModule() {
   const payload = buildGroqPayload('Hello Pakistan', 'qwen/qwen3.8-27b', 0.3);
   eq('payload model matches', payload.model, 'qwen/qwen3.8-27b');
   eq('payload temperature matches', payload.temperature, 0.3);
+  eq('payload max_tokens matches default', payload.max_tokens, 800);
   eq('payload has 2 messages', payload.messages.length, 2);
   eq('first message is system role', payload.messages[0].role, 'system');
   eq('first message has system prompt', payload.messages[0].content, SYSTEM_PROMPT);
