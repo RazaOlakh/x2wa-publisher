@@ -156,6 +156,22 @@
     <div class="note idle" id="groqNote"></div>
   </section>
 
+  <!-- Model Translation Analysis (Pure) -->
+  <section class="card" id="compareCard">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+      <span class="status-title" style="font-size:12.5px;">Test & Analyze Models</span>
+      <span class="badge" id="compareBadge" style="font-size:11px; padding:2px 7px; border-radius:12px; background:var(--panel); border:1px solid var(--line); color:var(--muted);">Pure Translation</span>
+    </div>
+    <div style="font-size:11.5px; color:var(--muted); margin-bottom:8px;">
+      Generate pure, unmodified Urdu translations with each model to compare and analyze what each model is responding.
+    </div>
+    <textarea id="compareInputText" rows="2" style="width:100%; font-size:12px; padding:6px 8px; border-radius:6px; border:1px solid var(--line); margin-bottom:6px; box-sizing:border-box; resize:vertical; font-family:inherit;" placeholder="Enter or paste text to test across models…">OpenAI announced GPT-5 with revolutionary multimodal capabilities. Sam Altman said it is smarter than any human.</textarea>
+    <div class="row" style="margin-top:2px;">
+      <button id="compareRunBtn" class="primary" style="width:100%;">🔬 Test All Models in Center Window</button>
+    </div>
+    <div id="compareResultsWrap" class="hidden" style="margin-top:10px; display:flex; flex-direction:column; gap:10px;"></div>
+  </section>
+
   <!-- Author name transliteration review (optional) -->
   <section class="card" id="reviewCard">
     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">

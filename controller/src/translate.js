@@ -25,7 +25,7 @@ const CLIENT = 'dict-chrome-ex';
 const USER_AGENT =
   'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
 
-const { translateWithGroq, isGroqConfigured, getGroqConfig } = require('./groq');
+const { translateWithGroq, isGroqConfigured, getGroqConfig, formatModelDisplayName } = require('./groq');
 
 function getLogger(deps) {
   if (deps && typeof deps.log === 'function') return deps.log;
@@ -188,14 +188,16 @@ function unmaskHandles(text, tokens) {
 // Primary engine: Qwen 3.8 27B on Groq for Urdu translation.
 // Fallback engine: Keyless Google Translate endpoint.
 // Handles are masked out of the request and restored on the way back, so a username is
-// never translated into some other word.
+// never translated into some other word. If `deps.pure === true`, masks and splits are bypassed
+// to provide a pure, unmodified translation.
 async function translateTextWithMeta(text, target, deps) {
   if (!isTranslatable(text)) return { text: '', provider: 'none', model: null };
   const lang = target || 'ur';
   const log = getLogger(deps);
-  const { text: masked, tokens } = maskHandles(text);
+  const isPure = Boolean(deps && deps.pure);
+  const { text: masked, tokens } = isPure ? { text, tokens: [] } : maskHandles(text);
 
-  // 1. Primary path: Qwen 3.8 27B on Groq for Urdu translation
+  // 1. Primary path: Qwen 3.8 27B / GPT-OSS on Groq for Urdu translation
   const disableGroq = deps && deps.disableGroq === true;
   const isUrdu = lang === 'ur';
   if (isUrdu && !disableGroq) {
@@ -204,12 +206,17 @@ async function translateTextWithMeta(text, target, deps) {
       log('info', 'translate-groq-skipped', { reason: 'no-api-key', fallback: 'google' });
     } else {
       const cfg = getGroqConfig(deps && deps.env, deps);
-      log('info', 'translate-groq-start', { model: cfg.model, charsIn: text.length });
+      const chosenModel = (deps && deps.model) || cfg.model;
+      log('info', 'translate-groq-start', { model: chosenModel, charsIn: text.length });
       const t0 = Date.now();
       try {
-        const groqRes = await translateWithGroq(masked, { target: lang }, deps);
+        const groqRes = await translateWithGroq(isPure ? text : masked, {
+          target: lang,
+          model: chosenModel,
+          pure: isPure,
+        }, deps);
         if (groqRes && typeof groqRes.text === 'string' && groqRes.text.trim().length > 0) {
-          const out = unmaskHandles(groqRes.text, tokens);
+          const out = isPure ? groqRes.text : unmaskHandles(groqRes.text, tokens);
           log('info', 'translate-groq-done', {
             provider: 'groq',
             model: groqRes.model,
@@ -217,13 +224,19 @@ async function translateTextWithMeta(text, target, deps) {
             charsOut: out.length,
             ms: Date.now() - t0,
           });
-          return { text: out, provider: 'groq', model: groqRes.model };
+          return {
+            text: out,
+            provider: 'groq',
+            model: groqRes.model,
+            reasoning: groqRes.reasoning || null,
+            durationMs: groqRes.durationMs || (Date.now() - t0),
+          };
         }
         throw new Error('groq-empty-response');
       } catch (e) {
         log('warn', 'translate-groq-failed', {
           provider: 'groq',
-          model: cfg.model,
+          model: chosenModel,
           error: (e && e.message) || String(e),
           status: e && e.status,
           fallback: 'google',
@@ -234,13 +247,14 @@ async function translateTextWithMeta(text, target, deps) {
 
   // 2. Fallback path: Google Translate (or primary for non-Urdu targets)
   const t0 = Date.now();
-  const { chunks, seps } = chunkText(masked, (deps && deps.maxChunk) || MAX_CHUNK);
+  const inputToChunk = isPure ? text : masked;
+  const { chunks, seps } = chunkText(inputToChunk, (deps && deps.maxChunk) || MAX_CHUNK);
   let googleOut = '';
   for (let i = 0; i < chunks.length; i++) {
     googleOut += await requestChunkRetrying(chunks[i], lang, deps);
     googleOut += seps[i];
   }
-  const out = unmaskHandles(googleOut, tokens);
+  const out = isPure ? googleOut : unmaskHandles(googleOut, tokens);
   log('info', 'translate-google-done', {
     provider: 'google',
     target: lang,
@@ -248,7 +262,13 @@ async function translateTextWithMeta(text, target, deps) {
     charsOut: out.length,
     ms: Date.now() - t0,
   });
-  return { text: out, provider: 'google', model: null };
+  return {
+    text: out,
+    provider: 'google',
+    model: null,
+    reasoning: null,
+    durationMs: Date.now() - t0,
+  };
 }
 
 async function translateText(text, target, deps) {
@@ -379,6 +399,88 @@ async function translatePostText(text, target, author, deps) {
   return res.text;
 }
 
+async function compareTranslations(text, options = {}, deps = {}) {
+  if (!isTranslatable(text)) {
+    return { ok: false, error: 'empty-text', results: [] };
+  }
+  const cleanText = text.trim();
+  const requestedModels = options && Array.isArray(options.models) && options.models.length > 0
+    ? options.models
+    : [
+        'openai/gpt-oss-120b',
+        'qwen/qwen3.8-27b',
+        'openai/gpt-oss-20b',
+        'allam-2-7b',
+        'google',
+      ];
+  const isPure = options.pure !== false;
+
+  const promises = requestedModels.map(async (modelId) => {
+    const t0 = Date.now();
+    if (modelId === 'google') {
+      try {
+        const res = await translateTextWithMeta(cleanText, 'ur', {
+          ...(deps || {}),
+          disableGroq: true,
+          pure: isPure,
+        });
+        return {
+          model: 'google',
+          modelName: 'Google Translate',
+          provider: 'google',
+          text: res.text,
+          reasoning: null,
+          durationMs: Date.now() - t0,
+          ok: true,
+        };
+      } catch (e) {
+        return {
+          model: 'google',
+          modelName: 'Google Translate',
+          provider: 'google',
+          error: (e && e.message) || String(e),
+          durationMs: Date.now() - t0,
+          ok: false,
+        };
+      }
+    }
+
+    try {
+      const groqRes = await translateWithGroq(cleanText, {
+        model: modelId,
+        pure: isPure,
+        temperature: options.temperature || 0.2,
+      }, deps);
+      return {
+        model: modelId,
+        modelName: formatModelDisplayName(modelId),
+        provider: 'groq',
+        text: groqRes.text,
+        reasoning: groqRes.reasoning || null,
+        durationMs: groqRes.durationMs || (Date.now() - t0),
+        ok: true,
+      };
+    } catch (e) {
+      return {
+        model: modelId,
+        modelName: formatModelDisplayName(modelId),
+        provider: 'groq',
+        error: (e && e.message) || String(e),
+        durationMs: Date.now() - t0,
+        ok: false,
+      };
+    }
+  });
+
+  const results = await Promise.all(promises);
+  return {
+    ok: true,
+    original: cleanText,
+    pure: isPure,
+    results,
+  };
+}
+
 // The standalone translation request (a short string, e.g. an author's name
 // that heads an Urdu post). Validate it here so a stray value can never reshape
 // the translate call, whatever the caller sent.
@@ -401,6 +503,7 @@ module.exports = {
   transliterateText,
   translatePostText,
   translatePostTextWithMeta,
+  compareTranslations,
   readTransliteration,
   isUrduScript,
   chunkText,

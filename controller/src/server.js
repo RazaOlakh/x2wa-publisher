@@ -86,6 +86,7 @@ const {
   transliterateText,
   translatePostText,
   translatePostTextWithMeta,
+  compareTranslations,
 } = require('./translate');
 const {
   resolveTransliteration,
@@ -938,6 +939,37 @@ const server = http.createServer(async (req, res) => {
         return json(res, 500, { error: 'channel-list-failed' });
       }
     }
+    // Compare translations across multiple models (pure translation analysis)
+    if (req.method === 'POST' && url.pathname === '/translate/compare') {
+      let body;
+      try {
+        body = JSON.parse(await readBody(req));
+      } catch {
+        log('error', 'translate-compare-bad-json', {});
+        return json(res, 400, { ok: false, error: 'bad-json' });
+      }
+      if (!body || typeof body.text !== 'string' || !body.text.trim()) {
+        log('error', 'translate-compare-bad-request', {});
+        return json(res, 400, { ok: false, error: 'missing-text' });
+      }
+      try {
+        log('info', 'translate-compare-start', { charsIn: body.text.length, models: body.models || 'default' });
+        const comparison = await compareTranslations(body.text, {
+          models: body.models,
+          pure: body.pure !== false,
+          temperature: body.temperature,
+        }, { log });
+        log('info', 'translate-compare-done', {
+          charsIn: body.text.length,
+          modelCount: comparison.results.length,
+          successCount: comparison.results.filter((r) => r.ok).length,
+        });
+        return json(res, 200, comparison);
+      } catch (e) {
+        log('warn', 'translate-compare-failed', { error: errMsg(e) });
+        return json(res, 502, { ok: false, error: 'translate-compare-failed' });
+      }
+    }
     // Translate a short standalone string - the author's name that heads an
     // Urdu post. The post itself is translated through /send's translateTo;
     // this is for the small pieces that are translated on their own. It does
@@ -949,7 +981,11 @@ const server = http.createServer(async (req, res) => {
       try {
         let out, provider, model;
         if (request.mode === 'translate') {
-          const res = await translateTextWithMeta(request.text, request.to, { log });
+          const res = await translateTextWithMeta(request.text, request.to, {
+            log,
+            model: body.model,
+            pure: Boolean(body.pure),
+          });
           out = res.text;
           provider = res.provider;
           model = res.model;

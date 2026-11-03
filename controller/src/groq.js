@@ -34,6 +34,9 @@ function formatModelDisplayName(modelId) {
   return modelId;
 }
 
+const PURE_SYSTEM_PROMPT =
+  'You are an accurate English-to-Urdu translator. Translate the following text into Urdu faithfully and naturally. Output ONLY the pure translated Urdu text without any notes, explanations, commentary, or markdown formatting.';
+
 const SYSTEM_PROMPT = `You are a professional English-to-Urdu translator specialising in natural Pakistani Urdu.
 
 Translate the supplied social media post into fluent, natural Urdu.
@@ -111,11 +114,13 @@ function readGroqTranslation(data) {
 }
 
 // Constructs Chat Completions payload for Groq.
-function buildGroqPayload(text, model = DEFAULT_MODEL, temperature = 0.3, maxTokens = DEFAULT_MAX_TOKENS) {
+function buildGroqPayload(text, model = DEFAULT_MODEL, temperature = 0.3, maxTokens = DEFAULT_MAX_TOKENS, options = {}) {
+  const isPure = options && options.pure;
+  const prompt = (options && options.systemPrompt) || (isPure ? PURE_SYSTEM_PROMPT : SYSTEM_PROMPT);
   const payload = {
     model,
     messages: [
-      { role: 'system', content: SYSTEM_PROMPT },
+      { role: 'system', content: prompt },
       { role: 'user', content: text },
     ],
     temperature,
@@ -126,11 +131,11 @@ function buildGroqPayload(text, model = DEFAULT_MODEL, temperature = 0.3, maxTok
   return payload;
 }
 
-// Translates `text` using Groq's official Chat Completions API with Qwen 3.8 27B.
-// Returns { text, provider: 'groq', model } or throws an error.
+// Translates `text` using Groq's official Chat Completions API.
+// Returns { text, provider: 'groq', model, reasoning, durationMs } or throws an error.
 async function translateWithGroq(text, options, deps) {
   if (typeof text !== 'string' || text.trim().length === 0) {
-    return { text: '', provider: 'groq', model: DEFAULT_MODEL };
+    return { text: '', provider: 'groq', model: DEFAULT_MODEL, reasoning: null, durationMs: 0 };
   }
 
   const env = (deps && deps.env) || process.env;
@@ -147,16 +152,18 @@ async function translateWithGroq(text, options, deps) {
   const timeoutMs = (options && options.timeoutMs != null) ? options.timeoutMs : config.timeoutMs;
   const temperature = (options && options.temperature != null) ? options.temperature : 0.3;
   const maxTokens = (options && options.maxTokens != null) ? options.maxTokens : config.maxTokens;
+  const isPure = Boolean(options && options.pure);
   const fetchImpl = (deps && deps.fetchImpl) || fetch;
 
   const url = `${baseUrl.replace(/\/+$/, '')}/chat/completions`;
-  const payload = buildGroqPayload(text, model, temperature, maxTokens);
+  const payload = buildGroqPayload(text, model, temperature, maxTokens, { pure: isPure, systemPrompt: options && options.systemPrompt });
 
   const controller = new AbortController();
   const timer = setTimeout(() => {
     try { controller.abort(); } catch {}
   }, timeoutMs);
 
+  const t0 = Date.now();
   try {
     const res = await fetchImpl(url, {
       method: 'POST',
@@ -182,6 +189,7 @@ async function translateWithGroq(text, options, deps) {
 
     const data = await res.json();
     const translated = readGroqTranslation(data);
+    const firstChoice = (data && Array.isArray(data.choices) && data.choices[0] && data.choices[0].message) || {};
     if (!translated) {
       const err = new Error('groq-empty-response');
       err.retryable = false;
@@ -190,8 +198,11 @@ async function translateWithGroq(text, options, deps) {
 
     return {
       text: translated,
+      raw: firstChoice.content || '',
+      reasoning: firstChoice.reasoning || null,
       provider: 'groq',
       model,
+      durationMs: Date.now() - t0,
     };
   } catch (e) {
     const isAbort = e && (e.name === 'AbortError' || /abort|timeout/i.test(e.message));
@@ -213,6 +224,7 @@ module.exports = {
   SUPPORTED_MODELS,
   formatModelDisplayName,
   SYSTEM_PROMPT,
+  PURE_SYSTEM_PROMPT,
   getGroqConfig,
   isGroqConfigured,
   cleanGroqResponse,

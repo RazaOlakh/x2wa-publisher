@@ -296,14 +296,59 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         const res = await fetch(`${CONTROLLER}/translate`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text: msg.text, to: msg.to || 'ur' }),
+          body: JSON.stringify({
+            text: msg.text,
+            to: msg.to || 'ur',
+            model: msg.model,
+            pure: msg.pure,
+          }),
         });
         const j = await res.json();
-        if (j && j.ok) return reply(sendResponse, { ok: true, text: j.text });
+        if (j && j.ok) return reply(sendResponse, { ok: true, text: j.text, provider: j.provider, model: j.model });
         return reply(sendResponse, { ok: false, error: (j && j.error) || 'translate-failed' });
       } catch (e) {
         swLog('warn', 'translate-text-failed', { error: e.message });
         reply(sendResponse, { ok: false, error: e.message });
+      }
+    })();
+    return true;
+  }
+  // Compare pure translations across all available models
+  if (msg && msg.type === 'COMPARE_MODELS' && typeof msg.text === 'string') {
+    (async () => {
+      try {
+        const res = await fetch(`${CONTROLLER}/translate/compare`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            text: msg.text,
+            models: msg.models,
+            pure: msg.pure !== false,
+          }),
+        });
+        const j = await res.json();
+        return reply(sendResponse, j);
+      } catch (e) {
+        swLog('warn', 'compare-models-failed', { error: e.message });
+        return reply(sendResponse, { ok: false, error: e.message });
+      }
+    })();
+    return true;
+  }
+  // Set active Groq translation model
+  if (msg && msg.type === 'SET_ACTIVE_MODEL' && typeof msg.model === 'string') {
+    (async () => {
+      try {
+        const res = await fetch(`${CONTROLLER}/groq/config`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model: msg.model }),
+        });
+        const j = await res.json();
+        return reply(sendResponse, j);
+      } catch (e) {
+        swLog('warn', 'set-active-model-failed', { error: e.message });
+        return reply(sendResponse, { ok: false, error: e.message });
       }
     })();
     return true;

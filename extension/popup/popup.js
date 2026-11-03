@@ -24,6 +24,12 @@ const ui = {
   groqCustomModelInput: el('groqCustomModelInput'),
   groqKeyInput: el('groqKeyInput'),
   groqSave: el('groqSaveBtn'), groqClear: el('groqClearBtn'), groqNote: el('groqNote'),
+  // Model Comparison
+  compareCard: el('compareCard'),
+  compareBadge: el('compareBadge'),
+  compareInputText: el('compareInputText'),
+  compareRunBtn: el('compareRunBtn'),
+  compareResultsWrap: el('compareResultsWrap'),
   // Author name transliteration review
   revCard: el('reviewCard'), revBadge: el('revBadge'), revContent: el('revContent'),
   revOriginal: el('revOriginal'), revHandle: el('revHandle'), revUrdu: el('revUrdu'),
@@ -686,6 +692,101 @@ if (ui.groqClear) {
       setNote(ui.groqNote, formatFetchError(e, 'Could not remove key'), 'error');
     } finally {
       ui.groqClear.disabled = false;
+    }
+  });
+}
+
+if (ui.compareRunBtn) {
+  ui.compareRunBtn.addEventListener('click', async () => {
+    const text = (ui.compareInputText && ui.compareInputText.value ? ui.compareInputText.value : '').trim();
+    if (!text) {
+      if (ui.compareInputText) ui.compareInputText.focus();
+      return;
+    }
+
+    ui.compareRunBtn.disabled = true;
+    ui.compareRunBtn.textContent = 'Testing models…';
+    if (ui.compareResultsWrap) {
+      ui.compareResultsWrap.classList.remove('hidden');
+      ui.compareResultsWrap.innerHTML = '<div style="font-size:12px; color:var(--muted); text-align:center; padding:10px;">Connecting to controller & querying models…</div>';
+    }
+
+    // Also attempt to open in the active tab if on Twitter/X
+    try {
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (tabs && tabs[0] && tabs[0].id) {
+          chrome.tabs.sendMessage(tabs[0].id, { type: 'OPEN_COMPARE_MODAL', text }, () => {
+            if (chrome.runtime.lastError) { /* ignore if not on page */ }
+          });
+        }
+      });
+    } catch {}
+
+    try {
+      const res = await req('/translate/compare', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, pure: true }),
+      });
+
+      if (!res.ok || !res.body || !res.body.ok || !Array.isArray(res.body.results)) {
+        throw new Error((res.body && res.body.error) || 'Failed to compare models');
+      }
+
+      if (ui.compareResultsWrap) {
+        ui.compareResultsWrap.innerHTML = '';
+        for (const item of res.body.results) {
+          const itemCard = document.createElement('div');
+          itemCard.style.cssText = 'background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:10px; font-size:12px;';
+
+          const topRow = document.createElement('div');
+          topRow.style.cssText = 'display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;';
+          const nameSpan = document.createElement('strong');
+          nameSpan.textContent = item.modelName || item.model;
+          const durSpan = document.createElement('span');
+          durSpan.textContent = item.ok ? `⚡ ${((item.durationMs || 0) / 1000).toFixed(2)}s` : 'Failed';
+          durSpan.style.color = item.ok ? 'var(--ok, #10a37f)' : 'var(--err, #e0245e)';
+          topRow.appendChild(nameSpan);
+          topRow.appendChild(durSpan);
+          itemCard.appendChild(topRow);
+
+          const textDiv = document.createElement('div');
+          textDiv.dir = 'rtl';
+          textDiv.style.cssText = 'font-size:14px; line-height:1.7; padding:8px; background:var(--bg, #000); border-radius:6px; color:var(--ink); font-family:"Noto Nastaliq Urdu", Arial, sans-serif; white-space:pre-wrap;';
+          textDiv.textContent = item.ok ? item.text : (item.error || 'Failed');
+          itemCard.appendChild(textDiv);
+
+          if (item.ok && item.provider === 'groq') {
+            const actRow = document.createElement('div');
+            actRow.style.cssText = 'display:flex; justify-content:flex-end; gap:6px; margin-top:6px;';
+            const setActBtn = document.createElement('button');
+            setActBtn.textContent = 'Set Active';
+            setActBtn.style.cssText = 'font-size:11px; padding:2px 8px; border-radius:4px;';
+            setActBtn.addEventListener('click', async () => {
+              setActBtn.disabled = true;
+              setActBtn.textContent = 'Saving…';
+              await req('/groq/config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ model: item.model }),
+              });
+              setActBtn.textContent = '✓ Active';
+              await refreshGroq();
+            });
+            actRow.appendChild(setActBtn);
+            itemCard.appendChild(actRow);
+          }
+
+          ui.compareResultsWrap.appendChild(itemCard);
+        }
+      }
+    } catch (e) {
+      if (ui.compareResultsWrap) {
+        ui.compareResultsWrap.innerHTML = `<div style="font-size:12px; color:var(--err, #e0245e); padding:8px;">${e.message || String(e)}</div>`;
+      }
+    } finally {
+      ui.compareRunBtn.disabled = false;
+      ui.compareRunBtn.textContent = '🔬 Test All Models in Center Window';
     }
   });
 }

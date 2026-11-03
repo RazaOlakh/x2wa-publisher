@@ -87,6 +87,18 @@ function globeIcon() {
   ]);
 }
 
+function compareIcon() {
+  // Two side-by-side cards with lines: marks comparison and analysis of models
+  return lineIcon([
+    ['rect', { x: '3', y: '4', width: '7', height: '16', rx: '1.5' }],
+    ['rect', { x: '14', y: '4', width: '7', height: '16', rx: '1.5' }],
+    ['line', { x1: '5.5', y1: '8', x2: '7.5', y2: '8' }],
+    ['line', { x1: '5.5', y1: '12', x2: '7.5', y2: '12' }],
+    ['line', { x1: '16.5', y1: '8', x2: '18.5', y2: '8' }],
+    ['line', { x1: '16.5', y1: '12', x2: '18.5', y2: '12' }],
+  ]);
+}
+
 // Which idle glyph each variant wears (see post-variant.js). Every other state
 // is shared, so a variant is only ever told apart by this mark and by its
 // action name.
@@ -912,6 +924,408 @@ async function onPostClick(ev, btn, variant) {
   }
 }
 
+// Build the "Test & Compare Model Translations" button for the toolbar.
+function createCompareButton(article) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.setAttribute('data-xwap-action', 'compare-models');
+  btn.title = 'Test & Compare Model Translations (Pure)';
+  btn.setAttribute('aria-label', 'Test & Compare Model Translations in Center Modal');
+  btn.style.cssText = [
+    'background:transparent', 'border:0', 'padding:0', 'cursor:pointer',
+    'color:#536471', 'display:flex', 'align-items:center', 'justify-content:center',
+    'width:34px', 'height:34px', 'border-radius:9999px',
+    'transition:background 0.15s, color 0.15s',
+  ].join(';') + ';';
+
+  btn.appendChild(compareIcon());
+
+  btn.addEventListener('mouseenter', () => {
+    btn.style.color = '#1d9bf0';
+    btn.style.background = 'rgba(29, 155, 240, 0.1)';
+  });
+  btn.addEventListener('mouseleave', () => {
+    btn.style.color = '#536471';
+    btn.style.background = 'transparent';
+  });
+
+  btn.addEventListener('click', async (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    let text = '';
+    try {
+      const post = await window.__xwapExtractPostAsync(article);
+      if (post && post.text) text = post.text;
+    } catch {}
+    if (!text) {
+      const tweetEl = article.querySelector('[data-testid="tweetText"]');
+      if (tweetEl) text = tweetEl.innerText || tweetEl.textContent || '';
+    }
+    if (!text || !text.trim()) {
+      showSnackbar('info', 'No text to translate', 'This post does not contain any readable text.');
+      return;
+    }
+    openModelComparisonModal(text.trim());
+  });
+
+  return btn;
+}
+
+// Modal pop-up in the center of the window to analyze and compare each model's pure response.
+function openModelComparisonModal(initialText) {
+  const existing = document.getElementById('__xwap-compare-modal-root');
+  if (existing) {
+    try { existing.remove(); } catch {}
+  }
+
+  const root = document.createElement('div');
+  root.id = '__xwap-compare-modal-root';
+  root.style.cssText = [
+    'position:fixed', 'inset:0', 'background:rgba(0,0,0,0.78)',
+    'backdrop-filter:blur(6px)', '-webkit-backdrop-filter:blur(6px)',
+    'z-index:2147483647', 'display:flex', 'align-items:center', 'justify-content:center',
+    'padding:16px', 'box-sizing:border-box',
+    'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif',
+  ].join(';') + ';';
+
+  const modal = document.createElement('div');
+  modal.style.cssText = [
+    'background:#15202b', 'color:#f7f9f9', 'border:1px solid #38444d',
+    'border-radius:16px', 'width:100%', 'max-width:840px', 'max-height:88vh',
+    'display:flex', 'flex-direction:column', 'box-shadow:0 25px 65px rgba(0,0,0,0.75)',
+    'overflow:hidden',
+  ].join(';') + ';';
+
+  // 1. Header
+  const header = document.createElement('div');
+  header.style.cssText = [
+    'display:flex', 'align-items:center', 'justify-content:space-between',
+    'padding:16px 20px', 'border-bottom:1px solid #273340', 'background:#15202b',
+    'flex:0 0 auto',
+  ].join(';') + ';';
+
+  const titleWrap = document.createElement('div');
+  titleWrap.style.cssText = 'display:flex; align-items:center; gap:10px;';
+
+  const iconSpan = document.createElement('span');
+  iconSpan.style.cssText = 'color:#1d9bf0; display:flex;';
+  iconSpan.appendChild(compareIcon());
+
+  const titles = document.createElement('div');
+  const h2 = document.createElement('div');
+  h2.textContent = 'Translation Model Analysis';
+  h2.style.cssText = 'font-weight:700; font-size:16px; color:#ffffff;';
+  const subtitle = document.createElement('div');
+  subtitle.textContent = 'Pure Urdu translation with each model · Raw unmodified output';
+  subtitle.style.cssText = 'font-size:12px; color:#8b98a5; margin-top:2px;';
+  titles.appendChild(h2);
+  titles.appendChild(subtitle);
+  titleWrap.appendChild(iconSpan);
+  titleWrap.appendChild(titles);
+
+  const headerActions = document.createElement('div');
+  headerActions.style.cssText = 'display:flex; align-items:center; gap:10px;';
+
+  const rerunBtn = document.createElement('button');
+  rerunBtn.textContent = '🔄 Re-test';
+  rerunBtn.style.cssText = [
+    'background:#192734', 'color:#1d9bf0', 'border:1px solid #273340',
+    'padding:6px 12px', 'border-radius:9999px', 'font-size:12px', 'font-weight:600',
+    'cursor:pointer',
+  ].join(';') + ';';
+
+  const closeBtn = document.createElement('button');
+  closeBtn.textContent = '×';
+  closeBtn.setAttribute('aria-label', 'Close dialog');
+  closeBtn.style.cssText = [
+    'background:transparent', 'color:#8b98a5', 'border:none',
+    'font-size:24px', 'line-height:1', 'cursor:pointer', 'padding:0 4px',
+  ].join(';') + ';';
+  closeBtn.addEventListener('click', () => root.remove());
+
+  headerActions.appendChild(rerunBtn);
+  headerActions.appendChild(closeBtn);
+  header.appendChild(titleWrap);
+  header.appendChild(headerActions);
+  modal.appendChild(header);
+
+  // 2. Scrollable Body
+  const body = document.createElement('div');
+  body.style.cssText = [
+    'flex:1 1 auto', 'overflow-y:auto', 'padding:18px 20px',
+    'display:flex', 'flex-direction:column', 'gap:16px',
+  ].join(';') + ';';
+
+  // Original English Post
+  const origCard = document.createElement('div');
+  origCard.style.cssText = [
+    'background:#192734', 'border:1px solid #273340', 'border-radius:10px',
+    'padding:12px 14px', 'font-size:13px',
+  ].join(';') + ';';
+
+  const origHeader = document.createElement('div');
+  origHeader.style.cssText = 'display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;';
+  const origTitle = document.createElement('span');
+  origTitle.textContent = 'Original English Post';
+  origTitle.style.cssText = 'font-weight:600; font-size:11.5px; color:#8b98a5; text-transform:uppercase; letter-spacing:0.5px;';
+
+  const origCopyBtn = document.createElement('button');
+  origCopyBtn.textContent = 'Copy text';
+  origCopyBtn.style.cssText = 'background:none; border:none; color:#1d9bf0; font-size:11.5px; cursor:pointer; padding:0;';
+  origCopyBtn.addEventListener('click', () => {
+    try {
+      navigator.clipboard.writeText(initialText).then(() => {
+        origCopyBtn.textContent = 'Copied!';
+        setTimeout(() => { origCopyBtn.textContent = 'Copy text'; }, 1500);
+      });
+    } catch {}
+  });
+
+  origHeader.appendChild(origTitle);
+  origHeader.appendChild(origCopyBtn);
+  origCard.appendChild(origHeader);
+
+  const origContent = document.createElement('div');
+  origContent.textContent = initialText;
+  origContent.style.cssText = 'color:#e7e9ea; line-height:1.5; white-space:pre-wrap; font-size:13.5px;';
+  origCard.appendChild(origContent);
+  body.appendChild(origCard);
+
+  // Results Container
+  const resultsWrap = document.createElement('div');
+  resultsWrap.style.cssText = 'display:flex; flex-direction:column; gap:14px;';
+  body.appendChild(resultsWrap);
+  modal.appendChild(body);
+
+  // 3. Footer
+  const footer = document.createElement('div');
+  footer.style.cssText = [
+    'display:flex', 'align-items:center', 'justify-content:space-between',
+    'padding:12px 20px', 'border-top:1px solid #273340', 'background:#15202b',
+    'font-size:12px', 'color:#8b98a5', 'flex:0 0 auto',
+  ].join(';') + ';';
+
+  const footerNote = document.createElement('span');
+  footerNote.textContent = 'Zero modification: raw text sent directly to each engine.';
+  const footerCloseBtn = document.createElement('button');
+  footerCloseBtn.textContent = 'Close';
+  footerCloseBtn.style.cssText = [
+    'background:#192734', 'color:#e7e9ea', 'border:1px solid #38444d',
+    'padding:6px 16px', 'border-radius:9999px', 'font-size:12.5px',
+    'font-weight:600', 'cursor:pointer',
+  ].join(';') + ';';
+  footerCloseBtn.addEventListener('click', () => root.remove());
+
+  footer.appendChild(footerNote);
+  footer.appendChild(footerCloseBtn);
+  modal.appendChild(footer);
+
+  root.appendChild(modal);
+  (document.body || document.documentElement).appendChild(root);
+
+  // Backdrop click & Escape key dismiss
+  root.addEventListener('click', (ev) => {
+    if (ev.target === root) root.remove();
+  });
+  const onKeyDown = (ev) => {
+    if (ev.key === 'Escape') {
+      root.remove();
+      window.removeEventListener('keydown', onKeyDown);
+    }
+  };
+  window.addEventListener('keydown', onKeyDown);
+
+  // Run the comparison across models
+  const modelSpecs = [
+    { id: 'openai/gpt-oss-120b', name: 'GPT-OSS 120B', badge: 'Recommended · Quality Urdu', isAi: true },
+    { id: 'qwen/qwen3.8-27b', name: 'Qwen 3.8 27B', badge: 'Fast / Lightweight', isAi: true },
+    { id: 'openai/gpt-oss-20b', name: 'GPT-OSS 20B', badge: 'Reasoning Model', isAi: true },
+    { id: 'allam-2-7b', name: 'Allam 2 7B', badge: 'Regional / Arabic-Urdu', isAi: true },
+    { id: 'google', name: 'Google Translate', badge: 'Reference / Fallback', isAi: false },
+  ];
+
+  async function runComparison(text) {
+    resultsWrap.innerHTML = '';
+
+    // Render skeleton placeholders
+    const cards = {};
+    for (const spec of modelSpecs) {
+      const card = document.createElement('div');
+      card.style.cssText = [
+        'background:#192734', 'border:1px solid #273340', 'border-radius:12px',
+        'padding:14px 16px', 'display:flex', 'flex-direction:column', 'gap:8px',
+      ].join(';') + ';';
+
+      const ch = document.createElement('div');
+      ch.style.cssText = 'display:flex; justify-content:space-between; align-items:center;';
+
+      const left = document.createElement('div');
+      left.style.cssText = 'display:flex; align-items:center; gap:8px;';
+      const name = document.createElement('strong');
+      name.textContent = spec.name;
+      name.style.cssText = 'font-size:14px; color:#ffffff;';
+      const badge = document.createElement('span');
+      badge.textContent = spec.badge;
+      badge.style.cssText = 'font-size:11px; padding:2px 7px; border-radius:9999px; background:#22303c; color:#8b98a5; border:1px solid #38444d;';
+      left.appendChild(name);
+      left.appendChild(badge);
+
+      const status = document.createElement('span');
+      status.textContent = 'Translating…';
+      status.style.cssText = 'font-size:12px; color:#1d9bf0; font-weight:500;';
+
+      ch.appendChild(left);
+      ch.appendChild(status);
+      card.appendChild(ch);
+
+      const textEl = document.createElement('div');
+      textEl.textContent = 'Waiting for engine response…';
+      textEl.style.cssText = 'color:#8b98a5; font-style:italic; font-size:13px; padding:10px 0;';
+      card.appendChild(textEl);
+
+      resultsWrap.appendChild(card);
+      cards[spec.id] = { card, status, textEl, spec };
+    }
+
+    try {
+      const res = await chrome.runtime.sendMessage({
+        type: 'COMPARE_MODELS',
+        text,
+        models: modelSpecs.map((m) => m.id),
+        pure: true,
+      });
+
+      if (!res || !res.ok || !Array.isArray(res.results)) {
+        throw new Error((res && res.error) || 'Failed to compare models');
+      }
+
+      for (const item of res.results) {
+        const entry = cards[item.model];
+        if (!entry) continue;
+        const dur = item.durationMs ? `${(item.durationMs / 1000).toFixed(2)}s` : '';
+
+        if (!item.ok) {
+          entry.status.textContent = `Error: ${item.error || 'Failed'}`;
+          entry.status.style.color = '#e0245e';
+          entry.textEl.textContent = `Could not generate translation: ${item.error || 'Unknown error'}`;
+          entry.textEl.style.color = '#e0245e';
+          entry.textEl.style.fontStyle = 'normal';
+          continue;
+        }
+
+        entry.status.textContent = `⚡ ${dur}`;
+        entry.status.style.color = '#00ba7c';
+
+        // Add action buttons on top right of card
+        const cardHeader = entry.card.firstElementChild;
+        const existingActions = cardHeader.querySelector('.__xwap-card-actions');
+        if (existingActions) existingActions.remove();
+
+        const actions = document.createElement('div');
+        actions.className = '__xwap-card-actions';
+        actions.style.cssText = 'display:flex; align-items:center; gap:8px;';
+
+        const copyUrduBtn = document.createElement('button');
+        copyUrduBtn.textContent = 'Copy Urdu';
+        copyUrduBtn.style.cssText = [
+          'background:#22303c', 'color:#e7e9ea', 'border:1px solid #38444d',
+          'padding:3px 9px', 'border-radius:6px', 'font-size:11.5px', 'cursor:pointer',
+        ].join(';') + ';';
+        copyUrduBtn.addEventListener('click', () => {
+          try {
+            navigator.clipboard.writeText(item.text).then(() => {
+              copyUrduBtn.textContent = 'Copied!';
+              setTimeout(() => { copyUrduBtn.textContent = 'Copy Urdu'; }, 1500);
+            });
+          } catch {}
+        });
+        actions.appendChild(copyUrduBtn);
+
+        if (entry.spec.isAi) {
+          const setActiveBtn = document.createElement('button');
+          setActiveBtn.textContent = 'Set Active';
+          setActiveBtn.style.cssText = [
+            'background:#1d9bf0', 'color:#ffffff', 'border:none',
+            'padding:3px 9px', 'border-radius:6px', 'font-size:11.5px', 'cursor:pointer', 'font-weight:600',
+          ].join(';') + ';';
+          setActiveBtn.addEventListener('click', async () => {
+            setActiveBtn.disabled = true;
+            setActiveBtn.textContent = 'Saving…';
+            try {
+              await chrome.runtime.sendMessage({ type: 'SET_ACTIVE_MODEL', model: item.model });
+              setActiveBtn.textContent = '✓ Active Model';
+              setActiveBtn.style.background = '#00ba7c';
+            } catch {
+              setActiveBtn.disabled = false;
+              setActiveBtn.textContent = 'Set Active';
+            }
+          });
+          actions.appendChild(setActiveBtn);
+        }
+
+        cardHeader.appendChild(actions);
+
+        // Display pure Urdu translation
+        entry.textEl.textContent = item.text;
+        entry.textEl.style.cssText = [
+          'direction:rtl', 'text-align:right',
+          'font-family:"Noto Nastaliq Urdu","Urdu Typesetting","Jameel Noori Nastaleeq",-apple-system,Arial,sans-serif',
+          'font-size:16.5px', 'line-height:1.85', 'color:#ffffff',
+          'background:#15202b', 'border:1px solid #273340', 'border-radius:8px',
+          'padding:12px 14px', 'margin-top:4px', 'white-space:pre-wrap', 'user-select:text',
+        ].join(';') + ';';
+
+        // If reasoning exists, add toggleable reasoning drawer
+        if (item.reasoning) {
+          const reasonWrap = document.createElement('div');
+          reasonWrap.style.cssText = 'margin-top:4px;';
+          const reasonBtn = document.createElement('button');
+          reasonBtn.textContent = '▶ View Model Reasoning';
+          reasonBtn.style.cssText = 'background:none; border:none; color:#8b98a5; font-size:11px; cursor:pointer; padding:0;';
+
+          const reasonBox = document.createElement('pre');
+          reasonBox.textContent = item.reasoning;
+          reasonBox.style.cssText = 'display:none; margin-top:6px; padding:8px 10px; background:#15202b; border:1px solid #273340; border-radius:6px; font-size:11px; color:#8b98a5; max-height:140px; overflow-y:auto; white-space:pre-wrap;';
+
+          reasonBtn.addEventListener('click', () => {
+            if (reasonBox.style.display === 'none') {
+              reasonBox.style.display = 'block';
+              reasonBtn.textContent = '▼ Hide Model Reasoning';
+            } else {
+              reasonBox.style.display = 'none';
+              reasonBtn.textContent = '▶ View Model Reasoning';
+            }
+          });
+
+          reasonWrap.appendChild(reasonBtn);
+          reasonWrap.appendChild(reasonBox);
+          entry.card.appendChild(reasonWrap);
+        }
+      }
+    } catch (err) {
+      for (const k in cards) {
+        cards[k].status.textContent = 'Failed';
+        cards[k].status.style.color = '#e0245e';
+        cards[k].textEl.textContent = `Could not communicate with controller: ${err.message || String(err)}`;
+      }
+    }
+  }
+
+  rerunBtn.addEventListener('click', () => runComparison(initialText));
+  runComparison(initialText);
+}
+
+// Listen for messages from popup or background to open the comparison modal
+try {
+  chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+    if (msg && msg.type === 'OPEN_COMPARE_MODAL' && typeof msg.text === 'string') {
+      openModelComparisonModal(msg.text);
+      if (typeof sendResponse === 'function') sendResponse({ ok: true });
+      return true;
+    }
+  });
+} catch {}
+
 function injectButton(article) {
   if (article[INJECTION_FLAG]) return;
   article[INJECTION_FLAG] = true;
@@ -925,13 +1339,14 @@ function injectButton(article) {
   const toolbar = toolbarFor(bar);
 
   // The actions run in reverse of the order they were added, so the row reads,
-  // left to right: screenshot, Urdu, author-name, plain - ending at the right
-  // edge with the plain post. The reversal lives here, in the one place the
-  // row is built, rather than being undone in the toolbar's layout.
+  // left to right: screenshot, compare, Urdu, author-name, plain - ending at the right
+  // edge with the plain post.
   const shotBtn = document.createElement('button');
   shotBtn.type = 'button';
   wireShotButton(shotBtn);
   toolbar.appendChild(shotBtn);
+
+  toolbar.appendChild(createCompareButton(article));
 
   toolbar.appendChild(createPostButton(article, 'urdu'));
   toolbar.appendChild(createPostButton(article, 'named'));
