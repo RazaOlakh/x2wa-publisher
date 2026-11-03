@@ -27,6 +27,7 @@ const ui = {
   // Model Comparison
   compareCard: el('compareCard'),
   compareBadge: el('compareBadge'),
+  compareAuthorInput: el('compareAuthorInput'),
   compareInputText: el('compareInputText'),
   compareRunBtn: el('compareRunBtn'),
   compareResultsWrap: el('compareResultsWrap'),
@@ -699,7 +700,8 @@ if (ui.groqClear) {
 if (ui.compareRunBtn) {
   ui.compareRunBtn.addEventListener('click', async () => {
     const text = (ui.compareInputText && ui.compareInputText.value ? ui.compareInputText.value : '').trim();
-    if (!text) {
+    const author = (ui.compareAuthorInput && ui.compareAuthorInput.value ? ui.compareAuthorInput.value : '').trim();
+    if (!text && !author) {
       if (ui.compareInputText) ui.compareInputText.focus();
       return;
     }
@@ -715,7 +717,7 @@ if (ui.compareRunBtn) {
     try {
       chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
         if (tabs && tabs[0] && tabs[0].id) {
-          chrome.tabs.sendMessage(tabs[0].id, { type: 'OPEN_COMPARE_MODAL', text }, () => {
+          chrome.tabs.sendMessage(tabs[0].id, { type: 'OPEN_COMPARE_MODAL', text, author }, () => {
             if (chrome.runtime.lastError) { /* ignore if not on page */ }
           });
         }
@@ -726,7 +728,7 @@ if (ui.compareRunBtn) {
       const res = await req('/translate/compare', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, pure: true }),
+        body: JSON.stringify({ text, author, pure: true }),
       });
 
       if (!res.ok || !res.body || !res.body.ok || !Array.isArray(res.body.results)) {

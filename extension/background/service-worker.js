@@ -322,6 +322,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             text: msg.text,
+            author: msg.author,
             models: msg.models,
             pure: msg.pure !== false,
           }),

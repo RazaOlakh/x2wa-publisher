@@ -953,26 +953,69 @@ function createCompareButton(article) {
     ev.preventDefault();
     ev.stopPropagation();
     let text = '';
+    let author = '';
+    let authorHandle = '';
     try {
       const post = await window.__xwapExtractPostAsync(article);
       if (post && post.text) text = post.text;
+      if (post && post.author) author = post.author;
+      if (post && post.authorHandle) authorHandle = post.authorHandle;
     } catch {}
     if (!text) {
       const tweetEl = article.querySelector('[data-testid="tweetText"]');
       if (tweetEl) text = tweetEl.innerText || tweetEl.textContent || '';
     }
+    if (!author) {
+      const nameEl = article.querySelector('[data-testid="User-Name"]');
+      if (nameEl) {
+        const anchors = nameEl.querySelectorAll('a');
+        if (anchors.length > 0) author = anchors[0].innerText || anchors[0].textContent || '';
+        if (anchors.length > 1) authorHandle = anchors[1].innerText || anchors[1].textContent || '';
+      }
+    }
     if (!text || !text.trim()) {
       showSnackbar('info', 'No text to translate', 'This post does not contain any readable text.');
       return;
     }
-    openModelComparisonModal(text.trim());
+    openModelComparisonModal({
+      text: text.trim(),
+      author: author.trim(),
+      authorHandle: authorHandle.trim(),
+    });
   });
 
   return btn;
 }
 
 // Modal pop-up in the center of the window to analyze and compare each model's pure response.
-function openModelComparisonModal(initialText) {
+function openModelComparisonModal(input) {
+  let initialText = '';
+  let initialAuthor = '';
+  let initialAuthorHandle = '';
+  if (typeof input === 'string') {
+    initialText = input.trim();
+  } else if (input && typeof input === 'object') {
+    initialText = (input.text || '').trim();
+    initialAuthor = (input.author || '').trim();
+    initialAuthorHandle = (input.authorHandle || '').trim();
+  }
+
+  let fullAuthor = initialAuthor;
+  if (initialAuthor && initialAuthorHandle && !initialAuthor.includes(initialAuthorHandle)) {
+    fullAuthor = `${initialAuthor} (${initialAuthorHandle})`;
+  } else if (!fullAuthor && initialAuthorHandle) {
+    fullAuthor = initialAuthorHandle;
+  }
+
+  let includeAuthor = Boolean(fullAuthor);
+
+  function buildComparisonText() {
+    if (includeAuthor && fullAuthor) {
+      return `${fullAuthor}:\n${initialText}`;
+    }
+    return initialText;
+  }
+
   const existing = document.getElementById('__xwap-compare-modal-root');
   if (existing) {
     try { existing.remove(); } catch {}
@@ -1064,30 +1107,68 @@ function openModelComparisonModal(initialText) {
   ].join(';') + ';';
 
   const origHeader = document.createElement('div');
-  origHeader.style.cssText = 'display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;';
+  origHeader.style.cssText = 'display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; flex-wrap:wrap; gap:8px;';
+
+  const origLeft = document.createElement('div');
+  origLeft.style.cssText = 'display:flex; align-items:center; gap:8px;';
+
   const origTitle = document.createElement('span');
   origTitle.textContent = 'Original English Post';
   origTitle.style.cssText = 'font-weight:600; font-size:11.5px; color:#8b98a5; text-transform:uppercase; letter-spacing:0.5px;';
+  origLeft.appendChild(origTitle);
+
+  if (fullAuthor) {
+    const authorBadge = document.createElement('span');
+    authorBadge.textContent = `Author: ${fullAuthor}`;
+    authorBadge.style.cssText = 'font-size:11.5px; color:#1d9bf0; background:#22303c; padding:2px 8px; border-radius:10px; border:1px solid #38444d; font-weight:500;';
+    origLeft.appendChild(authorBadge);
+  }
+
+  const origRight = document.createElement('div');
+  origRight.style.cssText = 'display:flex; align-items:center; gap:12px;';
+
+  if (fullAuthor) {
+    const authorToggleLabel = document.createElement('label');
+    authorToggleLabel.style.cssText = 'display:flex; align-items:center; gap:6px; font-size:12px; color:#e7e9ea; cursor:pointer; user-select:none;';
+    const authorCheckbox = document.createElement('input');
+    authorCheckbox.type = 'checkbox';
+    authorCheckbox.checked = includeAuthor;
+    authorCheckbox.style.cursor = 'pointer';
+    authorCheckbox.addEventListener('change', () => {
+      includeAuthor = authorCheckbox.checked;
+      updateOrigContent();
+      runComparison(buildComparisonText());
+    });
+    authorToggleLabel.appendChild(authorCheckbox);
+    const authorToggleText = document.createElement('span');
+    authorToggleText.textContent = 'Translate Author name';
+    authorToggleLabel.appendChild(authorToggleText);
+    origRight.appendChild(authorToggleLabel);
+  }
 
   const origCopyBtn = document.createElement('button');
   origCopyBtn.textContent = 'Copy text';
   origCopyBtn.style.cssText = 'background:none; border:none; color:#1d9bf0; font-size:11.5px; cursor:pointer; padding:0;';
   origCopyBtn.addEventListener('click', () => {
     try {
-      navigator.clipboard.writeText(initialText).then(() => {
+      navigator.clipboard.writeText(buildComparisonText()).then(() => {
         origCopyBtn.textContent = 'Copied!';
         setTimeout(() => { origCopyBtn.textContent = 'Copy text'; }, 1500);
       });
     } catch {}
   });
+  origRight.appendChild(origCopyBtn);
 
-  origHeader.appendChild(origTitle);
-  origHeader.appendChild(origCopyBtn);
+  origHeader.appendChild(origLeft);
+  origHeader.appendChild(origRight);
   origCard.appendChild(origHeader);
 
   const origContent = document.createElement('div');
-  origContent.textContent = initialText;
   origContent.style.cssText = 'color:#e7e9ea; line-height:1.5; white-space:pre-wrap; font-size:13.5px;';
+  function updateOrigContent() {
+    origContent.textContent = buildComparisonText();
+  }
+  updateOrigContent();
   origCard.appendChild(origContent);
   body.appendChild(origCard);
 
@@ -1311,15 +1392,19 @@ function openModelComparisonModal(initialText) {
     }
   }
 
-  rerunBtn.addEventListener('click', () => runComparison(initialText));
-  runComparison(initialText);
+  rerunBtn.addEventListener('click', () => runComparison(buildComparisonText()));
+  runComparison(buildComparisonText());
 }
 
 // Listen for messages from popup or background to open the comparison modal
 try {
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-    if (msg && msg.type === 'OPEN_COMPARE_MODAL' && typeof msg.text === 'string') {
-      openModelComparisonModal(msg.text);
+    if (msg && msg.type === 'OPEN_COMPARE_MODAL') {
+      openModelComparisonModal({
+        text: msg.text || '',
+        author: msg.author || '',
+        authorHandle: msg.authorHandle || '',
+      });
       if (typeof sendResponse === 'function') sendResponse({ ok: true });
       return true;
     }

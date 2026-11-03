@@ -403,7 +403,11 @@ async function compareTranslations(text, options = {}, deps = {}) {
   if (!isTranslatable(text)) {
     return { ok: false, error: 'empty-text', results: [] };
   }
-  const cleanText = text.trim();
+  let cleanText = text.trim();
+  const author = options && options.author && typeof options.author === 'string' ? options.author.trim() : '';
+  if (author && !cleanText.toLowerCase().startsWith(author.toLowerCase())) {
+    cleanText = `${author}:\n${cleanText}`;
+  }
   const requestedModels = options && Array.isArray(options.models) && options.models.length > 0
     ? options.models
     : [

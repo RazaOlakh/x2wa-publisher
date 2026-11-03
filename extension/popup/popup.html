@@ -165,7 +165,10 @@
     <div style="font-size:11.5px; color:var(--muted); margin-bottom:8px;">
       Generate pure, unmodified Urdu translations with each model to compare and analyze what each model is responding.
     </div>
-    <textarea id="compareInputText" rows="2" style="width:100%; font-size:12px; padding:6px 8px; border-radius:6px; border:1px solid var(--line); margin-bottom:6px; box-sizing:border-box; resize:vertical; font-family:inherit;" placeholder="Enter or paste text to test across models…">OpenAI announced GPT-5 with revolutionary multimodal capabilities. Sam Altman said it is smarter than any human.</textarea>
+    <label class="field" for="compareAuthorInput" style="font-size:11px;">Author Name (optional)</label>
+    <input type="text" id="compareAuthorInput" placeholder="e.g. Elon Musk (@elonmusk)" value="Elon Musk (@elonmusk)" style="width:100%; font-size:12px; padding:5px 8px; border-radius:6px; border:1px solid var(--line); margin-bottom:6px; box-sizing:border-box;" />
+    <label class="field" for="compareInputText" style="font-size:11px;">Post Text</label>
+    <textarea id="compareInputText" rows="2" style="width:100%; font-size:12px; padding:6px 8px; border-radius:6px; border:1px solid var(--line); margin-bottom:6px; box-sizing:border-box; resize:vertical; font-family:inherit;" placeholder="Enter or paste text to test across models…">Starship Flight 6 splashdown confirmed! Congratulations to the entire SpaceX team on an epic test flight.</textarea>
     <div class="row" style="margin-top:2px;">
       <button id="compareRunBtn" class="primary" style="width:100%;">🔬 Test All Models in Center Window</button>
     </div>

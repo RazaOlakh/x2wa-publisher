@@ -116,7 +116,11 @@ async function runTests() {
       scrollX: 0,
       scrollY: 0,
       location: { href: 'https://x.com/test' },
-      __xwapExtractPostAsync: async () => ({ text: 'Breaking news: Space mission launched successfully.' }),
+      __xwapExtractPostAsync: async () => ({
+        text: 'Breaking news: Space mission launched successfully.',
+        author: 'Space Agency',
+        authorHandle: '@space',
+      }),
     },
     navigator: {
       clipboard: {
@@ -199,7 +203,7 @@ async function runTests() {
   const compMsg = sentRuntimeMessages.find((m) => m.type === 'COMPARE_MODELS');
   ok('COMPARE_MODELS message sent to background', Boolean(compMsg));
   eq('pure translation flag is true', compMsg.pure, true);
-  eq('original text passed intact with no modifications', compMsg.text, 'Breaking news: Space mission launched successfully.');
+  eq('original text includes author line for translation', compMsg.text, 'Space Agency (@space):\nBreaking news: Space mission launched successfully.');
 
   console.log('\n--- 2. Centered Pop-up Modal Verification ---');
   ok('modal root contains children', modalRoot.children.length > 0);

@@ -130,7 +130,40 @@ async function runTests() {
   eq('google text matches', google.text, 'گوگل ترجمہ');
   eq('google provider is google', google.provider, 'google');
 
-  console.log('\n--- 4. Error Isolation Across Models ---');
+  console.log('\n--- 4. Author Name Inclusion in Comparison ---');
+  let capturedAuthorBody = null;
+  const mockAuthorFetch = async (url, opts) => {
+    capturedAuthorBody = JSON.parse(opts.body);
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        choices: [
+          {
+            message: {
+              role: 'assistant',
+              content: 'ڈونلڈ ٹرمپ:\nخلائی مشن کامیابی سے مکمل ہوا۔',
+            },
+          },
+        ],
+      }),
+    };
+  };
+
+  const authorCompareRes = await compareTranslations('Space mission completed successfully.', {
+    author: 'Donald J. Trump (@realDonaldTrump)',
+    models: ['openai/gpt-oss-120b'],
+    pure: true,
+  }, {
+    apiKey: 'gsk_mock_key',
+    fetchImpl: mockAuthorFetch,
+  });
+
+  eq('original text includes author line', authorCompareRes.original, 'Donald J. Trump (@realDonaldTrump):\nSpace mission completed successfully.');
+  eq('request body includes author header at top', capturedAuthorBody.messages[1].content, 'Donald J. Trump (@realDonaldTrump):\nSpace mission completed successfully.');
+  eq('result text has translated author', authorCompareRes.results[0].text, 'ڈونلڈ ٹرمپ:\nخلائی مشن کامیابی سے مکمل ہوا۔');
+
+  console.log('\n--- 5. Error Isolation Across Models ---');
   const mockFetchWithFailures = async (url, opts) => {
     if (url.includes('translate.googleapis.com')) {
       return {

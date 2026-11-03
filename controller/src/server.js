@@ -955,6 +955,7 @@ const server = http.createServer(async (req, res) => {
       try {
         log('info', 'translate-compare-start', { charsIn: body.text.length, models: body.models || 'default' });
         const comparison = await compareTranslations(body.text, {
+          author: body.author,
           models: body.models,
           pure: body.pure !== false,
           temperature: body.temperature,
