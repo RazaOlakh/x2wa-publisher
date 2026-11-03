@@ -17,8 +17,8 @@ function eq(msg, actual, expected) {
 async function runTests() {
   console.log('--- 1. Pure Translation System Prompt & Payload ---');
   ok('pure system prompt is defined', typeof PURE_SYSTEM_PROMPT === 'string' && PURE_SYSTEM_PROMPT.length > 0);
-  ok('pure system prompt instructs accurate, natural Urdu', PURE_SYSTEM_PROMPT.includes('accurate English-to-Urdu translator'));
-  ok('pure system prompt prohibits notes or explanations', PURE_SYSTEM_PROMPT.includes('without any notes'));
+  ok('pure system prompt instructs natural Pakistani Urdu', PURE_SYSTEM_PROMPT.includes('natural Pakistani Urdu'));
+  ok('pure system prompt prohibits notes or explanations', PURE_SYSTEM_PROMPT.includes('without any markdown, explanations'));
 
   const purePayload = buildGroqPayload('Hello world', 'openai/gpt-oss-120b', 0.2, 1000, { pure: true });
   eq('payload model matches', purePayload.model, 'openai/gpt-oss-120b');
@@ -160,7 +160,7 @@ async function runTests() {
   });
 
   eq('original text includes display name only (handle stripped)', authorCompareRes.original, 'Donald J. Trump:\nSpace mission completed successfully.');
-  eq('request body includes author display name at top', capturedAuthorBody.messages[1].content, 'Donald J. Trump:\nSpace mission completed successfully.');
+  eq('request body includes author display name at top', capturedAuthorBody.messages[1].content, 'Author: Donald J. Trump\n\nSpace mission completed successfully.');
   eq('result text has translated author', authorCompareRes.results[0].text, 'ڈونلڈ ٹرمپ:\nخلائی مشن کامیابی سے مکمل ہوا۔');
 
   console.log('\n--- 5. Error Isolation Across Models ---');

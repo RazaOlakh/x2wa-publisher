@@ -195,9 +195,9 @@ async function translateTextWithMeta(text, target, deps) {
   const lang = target || 'ur';
   const log = getLogger(deps);
   const isPure = Boolean(deps && deps.pure);
-  const { text: masked, tokens } = isPure ? { text, tokens: [] } : maskHandles(text);
+  const author = deps && deps.author ? sanitizeAuthorDisplayName(deps.author) : null;
 
-  // 1. Primary path: Qwen 3.8 27B / GPT-OSS on Groq for Urdu translation
+  // 1. Primary path: Groq (GPT-OSS 120B / Qwen 3.8 27B) for Urdu translation
   const disableGroq = deps && deps.disableGroq === true;
   const isUrdu = lang === 'ur';
   if (isUrdu && !disableGroq) {
@@ -207,16 +207,18 @@ async function translateTextWithMeta(text, target, deps) {
     } else {
       const cfg = getGroqConfig(deps && deps.env, deps);
       const chosenModel = (deps && deps.model) || cfg.model;
-      log('info', 'translate-groq-start', { model: chosenModel, charsIn: text.length });
+      log('info', 'translate-groq-start', { model: chosenModel, charsIn: text.length, author: author || undefined });
       const t0 = Date.now();
       try {
-        const groqRes = await translateWithGroq(isPure ? text : masked, {
+        // Groq receives unmasked pure text naturally as LLM understands handles & author natively
+        const groqRes = await translateWithGroq(text, {
           target: lang,
           model: chosenModel,
           pure: isPure,
+          author,
         }, deps);
         if (groqRes && typeof groqRes.text === 'string' && groqRes.text.trim().length > 0) {
-          const out = isPure ? groqRes.text : unmaskHandles(groqRes.text, tokens);
+          const out = groqRes.text;
           log('info', 'translate-groq-done', {
             provider: 'groq',
             model: groqRes.model,
@@ -247,14 +249,15 @@ async function translateTextWithMeta(text, target, deps) {
 
   // 2. Fallback path: Google Translate (or primary for non-Urdu targets)
   const t0 = Date.now();
-  const inputToChunk = isPure ? text : masked;
+  const { text: googleMasked, tokens: googleTokens } = isPure ? { text, tokens: [] } : maskHandles(text);
+  const inputToChunk = googleMasked;
   const { chunks, seps } = chunkText(inputToChunk, (deps && deps.maxChunk) || MAX_CHUNK);
   let googleOut = '';
   for (let i = 0; i < chunks.length; i++) {
     googleOut += await requestChunkRetrying(chunks[i], lang, deps);
     googleOut += seps[i];
   }
-  const out = isPure ? googleOut : unmaskHandles(googleOut, tokens);
+  const out = isPure ? googleOut : unmaskHandles(googleOut, googleTokens);
   log('info', 'translate-google-done', {
     provider: 'google',
     target: lang,
@@ -366,32 +369,55 @@ async function transliterateText(text, target, deps) {
 }
 
 // Translate a post's text into the target language (default Urdu).
-// If the text starts with an author header (separated by \n\n) or matches `author`,
-// the author name is phonetically transliterated into Urdu (e.g. "Reborn" -> "ریبورن")
-// rather than being semantically translated into Urdu vocabulary words (like "دوبارہ پیدا ہوا"),
-// while the rest of the post text is translated normally.
+// When translating with AI (Groq), the author display name is specified to the AI model
+// and translated naturally along with the post text in one pure AI translation step.
+// Mechanical transliteration is completely bypassed in favor of natural LLM translation.
 async function translatePostTextWithMeta(text, target, author, deps) {
   if (!isTranslatable(text)) return { text: '', provider: 'none', model: null };
   const lang = target || 'ur';
+  let bodyText = text;
+  let rawAuthor = author && typeof author === 'string' ? author.trim() : '';
+
   const sepIdx = text.indexOf('\n\n');
   if (sepIdx > 0) {
     const firstLine = text.slice(0, sepIdx).trim();
-    const rest = text.slice(sepIdx + 2);
-    const authorMatches = author && typeof author === 'string' &&
-      (firstLine.toLowerCase() === author.trim().toLowerCase() || firstLine === author.trim());
+    const rest = text.slice(sepIdx + 2).trim();
+    const authorMatches = rawAuthor && (firstLine.toLowerCase() === rawAuthor.toLowerCase() || firstLine === rawAuthor);
     const isUrduAuthorHeader = isUrduScript(firstLine) && !/[A-Za-z]/.test(firstLine);
-    if (authorMatches || isUrduAuthorHeader) {
-      const transliteratedAuthor = await transliterateText(firstLine, lang, deps);
-      const bodyRes = await translateTextWithMeta(rest, lang, deps);
-      return {
-        text: transliteratedAuthor + '\n\n' + bodyRes.text,
-        provider: bodyRes.provider,
-        model: bodyRes.model,
-        authorTransliterated: true,
-      };
+    if (isUrduAuthorHeader) {
+      rawAuthor = firstLine;
+      bodyText = rest;
+    } else if (authorMatches || (!rawAuthor && firstLine.length <= 60 && !firstLine.includes('\n'))) {
+      if (!rawAuthor) rawAuthor = firstLine;
+      bodyText = rest;
     }
   }
-  return translateTextWithMeta(text, lang, deps);
+
+  const cleanAuthor = sanitizeAuthorDisplayName(rawAuthor);
+
+  // If Groq is configured and active for Urdu, execute pure AI translation with author specified:
+  const isUrdu = lang === 'ur';
+  const disableGroq = deps && deps.disableGroq === true;
+  if (isUrdu && !disableGroq && isGroqConfigured(deps && deps.env, deps)) {
+    return translateTextWithMeta(bodyText, lang, {
+      ...(deps || {}),
+      author: cleanAuthor || undefined,
+      pure: true,
+    });
+  }
+
+  // Fallback path: Google Translate (when Groq is unconfigured or disabled)
+  if (cleanAuthor) {
+    const transliteratedAuthor = await transliterateText(cleanAuthor, lang, deps);
+    const bodyRes = await translateTextWithMeta(bodyText, lang, deps);
+    return {
+      text: transliteratedAuthor + '\n\n' + bodyRes.text,
+      provider: bodyRes.provider,
+      model: bodyRes.model,
+      authorTransliterated: true,
+    };
+  }
+  return translateTextWithMeta(bodyText, lang, deps);
 }
 
 async function translatePostText(text, target, author, deps) {
@@ -415,8 +441,8 @@ async function compareTranslations(text, options = {}, deps = {}) {
   let cleanText = text.trim();
   const rawAuthor = options && options.author && typeof options.author === 'string' ? options.author : '';
   const author = sanitizeAuthorDisplayName(rawAuthor);
-  if (author && !cleanText.toLowerCase().startsWith(author.toLowerCase())) {
-    cleanText = `${author}:\n${cleanText}`;
+  if (author && cleanText.toLowerCase().startsWith(author.toLowerCase())) {
+    cleanText = cleanText.slice(author.length).replace(/^[:\s\n]+/, '').trim();
   }
   const requestedModels = options && Array.isArray(options.models) && options.models.length > 0
     ? options.models
@@ -433,7 +459,7 @@ async function compareTranslations(text, options = {}, deps = {}) {
     const t0 = Date.now();
     if (modelId === 'google') {
       try {
-        const res = await translateTextWithMeta(cleanText, 'ur', {
+        const res = await translatePostTextWithMeta(cleanText, 'ur', author, {
           ...(deps || {}),
           disableGroq: true,
           pure: isPure,
@@ -463,6 +489,7 @@ async function compareTranslations(text, options = {}, deps = {}) {
       const groqRes = await translateWithGroq(cleanText, {
         model: modelId,
         pure: isPure,
+        author: author || undefined,
         temperature: options.temperature || 0.2,
       }, deps);
       return {
@@ -489,7 +516,7 @@ async function compareTranslations(text, options = {}, deps = {}) {
   const results = await Promise.all(promises);
   return {
     ok: true,
-    original: cleanText,
+    original: author ? `${author}:\n${cleanText}` : cleanText,
     pure: isPure,
     results,
   };

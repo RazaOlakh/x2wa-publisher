@@ -97,6 +97,7 @@ const {
   DEFAULT_MODEL: GROQ_DEFAULT_MODEL,
   SUPPORTED_MODELS: GROQ_SUPPORTED_MODELS,
   formatModelDisplayName: formatGroqModelDisplayName,
+  isGroqConfigured,
 } = require('./groq');
 
 const HOST = '127.0.0.1';
@@ -981,11 +982,12 @@ const server = http.createServer(async (req, res) => {
       if (!request.ok) { log('error','translate-rejected-bad-request',{}); return json(res, 400, { error: request.error }); }
       try {
         let out, provider, model;
-        if (request.mode === 'translate') {
+        if (request.mode === 'translate' || isGroqConfigured()) {
           const res = await translateTextWithMeta(request.text, request.to, {
             log,
             model: body.model,
-            pure: Boolean(body.pure),
+            pure: body.pure !== false,
+            author: body.author,
           });
           out = res.text;
           provider = res.provider;
@@ -1001,7 +1003,7 @@ const server = http.createServer(async (req, res) => {
           provider = 'inputtools';
           model = null;
         }
-        log('info','translate-http',{to:request.to,charsIn:request.text.length,charsOut:out.length,mode:request.mode||'transliterate',provider,model});
+        log('info','translate-http',{to:request.to,charsIn:request.text.length,charsOut:out.length,mode:request.mode||(provider==='groq'?'translate':'transliterate'),provider,model});
         return json(res, 200, { ok: true, text: out, to: request.to, provider, model });
       } catch (e) {
         log('warn','translate-http-failed',{to:request.to,error:errMsg(e)});

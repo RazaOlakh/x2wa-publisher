@@ -29,7 +29,7 @@ async function runGroqIntegrationTests() {
       // Groq Chat Completions request
       if (url.includes('api.groq.com')) {
         const body = JSON.parse(opts.body);
-        eq('Groq request receives masked text', body.messages[1].content, 'ہیلو @h0 دنیا');
+        eq('Groq request receives pure text without artificial masks', body.messages[1].content, 'ہیلو @testuser دنیا');
         return {
           ok: true,
           status: 200,
@@ -38,7 +38,7 @@ async function runGroqIntegrationTests() {
               {
                 message: {
                   role: 'assistant',
-                  content: '<think>Keep handles intact</think>ہیلو @h0 دنیا',
+                  content: '<think>Keep handles intact</think>ہیلو @testuser دنیا',
                 },
               },
             ],
@@ -257,7 +257,7 @@ async function runGroqIntegrationTests() {
     ok('Groq was not started for Spanish', !logs.some((l) => l.event === 'translate-groq-start'));
   }
 
-  console.log('\n--- 8. Author Header Transliteration + Groq Post Body Translation ---');
+  console.log('\n--- 8. Author Display Name Specification + Pure Groq AI Translation ---');
   {
     // Post with author header:
     // Reborn
@@ -265,17 +265,10 @@ async function runGroqIntegrationTests() {
     // Big announcement today!
     const postWithHeader = 'Reborn\n\nBig announcement today!';
 
-    const mockFetch = async (url) => {
-      if (url.includes('inputtools.google.com')) {
-        // Phonetic transliteration for Reborn -> ری بورن
-        return {
-          ok: true,
-          status: 200,
-          json: async () => ['SUCCESS', [['Reborn', ['ری بورن'], [], []]]],
-        };
-      }
+    const mockFetch = async (url, opts) => {
       if (url.includes('api.groq.com')) {
-        // Groq translation for post body
+        const body = JSON.parse(opts.body);
+        eq('Groq request specifies author display name', body.messages[1].content, 'Author: Reborn\n\nBig announcement today!');
         return {
           ok: true,
           status: 200,
@@ -284,7 +277,7 @@ async function runGroqIntegrationTests() {
               {
                 message: {
                   role: 'assistant',
-                  content: 'آج ایک بڑا اعلان کیا جا رہا ہے!',
+                  content: 'ریبورن:\nآج ایک بڑا اعلان کیا جا رہا ہے!',
                 },
               },
             ],
@@ -300,13 +293,12 @@ async function runGroqIntegrationTests() {
     });
 
     eq(
-      'Author is phonetically transliterated and body translated via Groq',
+      'Author is translated naturally by Groq AI and body translated in one go',
       res.text,
-      'ری بورن\n\nآج ایک بڑا اعلان کیا جا رہا ہے!'
+      'ریبورن:\nآج ایک بڑا اعلان کیا جا رہا ہے!'
     );
     eq('Provider is groq', res.provider, 'groq');
     eq('Model is openai/gpt-oss-120b', res.model, 'openai/gpt-oss-120b');
-    ok('authorTransliterated flag is true', res.authorTransliterated === true);
   }
 
   console.log('\n--- 9. 8 Real-World Categories: Groq vs Google Translate Comparison ---');

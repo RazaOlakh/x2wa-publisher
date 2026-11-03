@@ -747,7 +747,7 @@ async function postQuoteShot(btn, v, variant, article, quoteEl, requestId) {
   let name = post.author;
   if (v.nameTheAuthor) {
     const handle = post.authorHandle || null;
-    name = (isUrduText(post.text) || v.translateTo === 'ur')
+    name = (isUrduText(post.text) && !v.translateTo)
       ? await urduAuthorName(post.author, requestId, { handle })
       : post.author;
   }
@@ -852,7 +852,7 @@ async function onPostClick(ev, btn, variant) {
   // first. With no author found the text goes through untouched.
   if (v.nameTheAuthor) {
     const handle = post.authorHandle || null;
-    const name = (isUrduText(post.text) || v.translateTo === 'ur')
+    const name = (isUrduText(post.text) && !v.translateTo)
       ? await urduAuthorName(post.author, requestId, { handle })
       : post.author;
     post = { ...post, text: withAuthorHeader(post.text, name) };

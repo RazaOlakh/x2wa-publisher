@@ -34,9 +34,6 @@ function formatModelDisplayName(modelId) {
   return modelId;
 }
 
-const PURE_SYSTEM_PROMPT =
-  'You are an accurate English-to-Urdu translator. Translate the following text into Urdu faithfully and naturally. Output ONLY the pure translated Urdu text without any notes, explanations, commentary, or markdown formatting.';
-
 const SYSTEM_PROMPT = `You are a professional English-to-Urdu translator specialising in natural Pakistani Urdu.
 
 Translate the supplied social media post into fluent, natural Urdu.
@@ -46,13 +43,19 @@ Rules:
 - Use natural Pakistani Urdu rather than overly formal or literary Urdu.
 - Preserve the author's tone, intent, humour, sarcasm, criticism, and emotional expression.
 - Translate idioms and expressions according to their meaning and context.
-- Preserve names, usernames, brands, product names, organisations, and technical terminology appropriately.
 - Do not translate proper names semantically.
+- Author and Proper Names:
+  * If an author name is provided, output the author's name at the very top followed by a colon and a newline (e.g. ایلن مسک:).
+  * Translate and write proper names (people, brands, places) in standard Urdu script according to their natural pronunciation (e.g. 'Elon Musk' -> 'ایلن مسک', 'Reborn' -> 'ریبورن', 'Donald Trump' -> 'ڈونلڈ ٹرمپ').
+  * NEVER translate proper names semantically into literal Urdu dictionary words (e.g. never translate 'Reborn' as 'دوبارہ پیدا ہوا', never translate 'Gates' as 'دروازے').
+  * Keep @handles, usernames, hashtags, and URLs in their original Latin characters without modification.
 - Preserve numbers, dates, URLs, email addresses, hashtags, and mentions.
 - Maintain paragraph breaks and readable formatting.
 - Do not add explanations, opinions, summaries, or additional information.
 - Do not omit any part of the original post.
-- Return only the translated Urdu text.`;
+- Return ONLY the pure translated Urdu text without any markdown, explanations, commentary, or quotes.`;
+
+const PURE_SYSTEM_PROMPT = SYSTEM_PROMPT;
 
 // Configuration reader with fallback defaults.
 function getGroqConfig(env = process.env, overrides = {}) {
@@ -87,6 +90,10 @@ function cleanGroqResponse(rawText) {
   if (typeof rawText !== 'string') return null;
   // Strip <think>...</think> reasoning blocks if present in model output
   let text = rawText.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+  // Strip outer markdown code block fences if present
+  if (text.startsWith('```') && text.endsWith('```')) {
+    text = text.replace(/^```[a-z]*\n?/i, '').replace(/\n?```$/i, '').trim();
+  }
   // Strip outer matching quotation marks if the LLM wrapped its entire response in quotes
   if (
     (text.startsWith('"') && text.endsWith('"') && text.length >= 2) ||
@@ -115,13 +122,25 @@ function readGroqTranslation(data) {
 
 // Constructs Chat Completions payload for Groq.
 function buildGroqPayload(text, model = DEFAULT_MODEL, temperature = 0.3, maxTokens = DEFAULT_MAX_TOKENS, options = {}) {
-  const isPure = options && options.pure;
+  const isPure = options && options.pure !== undefined ? Boolean(options.pure) : true;
   const prompt = (options && options.systemPrompt) || (isPure ? PURE_SYSTEM_PROMPT : SYSTEM_PROMPT);
+
+  let userContent = typeof text === 'string' ? text.trim() : '';
+  const rawAuthor = options && options.author && typeof options.author === 'string' ? options.author.trim() : '';
+  if (rawAuthor) {
+    if (!userContent.toLowerCase().startsWith('author:') && !userContent.toLowerCase().startsWith(rawAuthor.toLowerCase())) {
+      userContent = `Author: ${rawAuthor}\n\n${userContent}`;
+    } else if (!userContent.toLowerCase().startsWith('author:') && userContent.toLowerCase().startsWith(rawAuthor.toLowerCase())) {
+      const afterAuthor = userContent.slice(rawAuthor.length).replace(/^[:\s]+/, '');
+      userContent = `Author: ${rawAuthor}\n\n${afterAuthor}`;
+    }
+  }
+
   const payload = {
     model,
     messages: [
       { role: 'system', content: prompt },
-      { role: 'user', content: text },
+      { role: 'user', content: userContent },
     ],
     temperature,
   };
@@ -152,11 +171,15 @@ async function translateWithGroq(text, options, deps) {
   const timeoutMs = (options && options.timeoutMs != null) ? options.timeoutMs : config.timeoutMs;
   const temperature = (options && options.temperature != null) ? options.temperature : 0.3;
   const maxTokens = (options && options.maxTokens != null) ? options.maxTokens : config.maxTokens;
-  const isPure = Boolean(options && options.pure);
+  const isPure = options && options.pure !== undefined ? Boolean(options.pure) : true;
   const fetchImpl = (deps && deps.fetchImpl) || fetch;
 
   const url = `${baseUrl.replace(/\/+$/, '')}/chat/completions`;
-  const payload = buildGroqPayload(text, model, temperature, maxTokens, { pure: isPure, systemPrompt: options && options.systemPrompt });
+  const payload = buildGroqPayload(text, model, temperature, maxTokens, {
+    pure: isPure,
+    systemPrompt: options && options.systemPrompt,
+    author: options && options.author,
+  });
 
   const controller = new AbortController();
   const timer = setTimeout(() => {

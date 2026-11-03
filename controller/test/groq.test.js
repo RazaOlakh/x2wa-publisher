@@ -71,7 +71,7 @@ async function testGroqModule() {
   ok('system prompt preserves URLs, hashtags, mentions', SYSTEM_PROMPT.includes('Preserve numbers, dates, URLs, email addresses, hashtags, and mentions.'));
   ok('system prompt maintains paragraph breaks', SYSTEM_PROMPT.includes('Maintain paragraph breaks and readable formatting.'));
   ok('system prompt forbids explanations or omissions', SYSTEM_PROMPT.includes('Do not add explanations, opinions, summaries, or additional information.'));
-  ok('system prompt requires only Urdu text', SYSTEM_PROMPT.includes('Return only the translated Urdu text.'));
+  ok('system prompt requires only Urdu text', SYSTEM_PROMPT.includes('Return ONLY the pure translated Urdu text'));
 
   console.log('cleanGroqResponse sanitization');
   eq('plain text is trimmed', cleanGroqResponse('   یہ ایک ٹیسٹ ہے۔   '), 'یہ ایک ٹیسٹ ہے۔');
