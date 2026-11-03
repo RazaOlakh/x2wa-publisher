@@ -36,13 +36,14 @@ function formatModelDisplayName(modelId) {
 
 const SYSTEM_PROMPT = `You are an expert English-to-Urdu translator specialising in natural, contemporary Pakistani Urdu. Translate the complete text into fluent, natural Urdu while preserving its meaning, context, tone, humour, sarcasm, and formatting.
 
-- Names: Write names in their commonly recognised Urdu spellings. For example, Ali → علی, Siddiq → صدیق, Muhammad → محمد. Transliterate phonetically, never by dictionary meaning.
-- Author identity: An author's display name may be a real name, organisation, brand, pseudonym, username, joke, or parody. Understand what it represents. Preserve its identity and intended wording; never turn it into an unrelated literal translation.
-- Acronyms and titles: Write initialisms letter by letter in Urdu where appropriate (PTI → پی ٹی آئی). Recognise professional abbreviations contextually (ADV. → ایڈووکیٹ).
-- Organisations and brands: Use their recognised names or conventional Urdu spellings. Never translate their individual words literally.
-- Preservation: Keep @handles, usernames, hashtags, URLs, emails, numbers, dates, and technical identifiers unchanged.
-
-If an author name is provided, place it at the beginning followed by a colon and newline. Do not omit, summarise, or add content. Return only the Urdu translation, without explanations.`;
+Rules:
+- Author Name: If an author display name is provided at the start (e.g. "Author: ..."), always transliterate/translate it into Urdu script at the very top followed by a colon and a newline (e.g., Ali → علی:, Siddiq → صدیق:, Muhammad → محمد:, Imran Khan → عمران خان:, PTI → پی ٹی آئی:, ADV. Salman → ایڈووکیٹ سلمان:). Never leave the author name in English Latin script.
+- Body Translation: Faithfully translate the complete body text into Urdu. Never omit, drop, or summarise words, even if a name or organization is already in the author line.
+- Acronyms and initialisms: Write initialisms letter-by-letter in Urdu script (e.g., PTI → پی ٹی آئی, PMLN → پی ایم ایل این). Recognise professional titles contextually (e.g., ADV. → ایڈووکیٹ).
+- Personal names: Write names in their commonly recognised Urdu spellings (Ali → علی, Siddiq → صدیق, Muhammad → محمد). Transliterate phonetically into Urdu script, never by literal dictionary meaning.
+- Organisations and brands: Use their recognised Urdu names or conventional Urdu transliteration. Never translate their individual words literally.
+- Technical elements: Keep @handles, usernames, hashtags, URLs, emails, numbers, dates, and technical identifiers unchanged.
+- Output: Return ONLY the final translated Urdu text without any introductory remarks, notes, or explanations.`;
 
 const PURE_SYSTEM_PROMPT = SYSTEM_PROMPT;
 
@@ -110,7 +111,7 @@ function readGroqTranslation(data) {
 }
 
 // Constructs Chat Completions payload for Groq.
-function buildGroqPayload(text, model = DEFAULT_MODEL, temperature = 0.3, maxTokens = DEFAULT_MAX_TOKENS, options = {}) {
+function buildGroqPayload(text, model = DEFAULT_MODEL, temperature = 0.1, maxTokens = DEFAULT_MAX_TOKENS, options = {}) {
   const isPure = options && options.pure !== undefined ? Boolean(options.pure) : true;
   const prompt = (options && options.systemPrompt) || (isPure ? PURE_SYSTEM_PROMPT : SYSTEM_PROMPT);
 
@@ -158,7 +159,7 @@ async function translateWithGroq(text, options, deps) {
   const model = (options && options.model) || config.model;
   const baseUrl = (options && options.baseUrl) || config.baseUrl;
   const timeoutMs = (options && options.timeoutMs != null) ? options.timeoutMs : config.timeoutMs;
-  const temperature = (options && options.temperature != null) ? options.temperature : 0.3;
+  const temperature = (options && options.temperature != null) ? options.temperature : 0.1;
   const maxTokens = (options && options.maxTokens != null) ? options.maxTokens : config.maxTokens;
   const isPure = options && options.pure !== undefined ? Boolean(options.pure) : true;
   const fetchImpl = (deps && deps.fetchImpl) || fetch;

@@ -17,8 +17,8 @@ function eq(msg, actual, expected) {
 async function runTests() {
   console.log('--- 1. Pure Translation System Prompt & Payload ---');
   ok('pure system prompt is defined', typeof PURE_SYSTEM_PROMPT === 'string' && PURE_SYSTEM_PROMPT.length > 0);
-  ok('pure system prompt instructs natural Pakistani Urdu', PURE_SYSTEM_PROMPT.includes('natural Pakistani Urdu'));
-  ok('pure system prompt prohibits notes or explanations', PURE_SYSTEM_PROMPT.includes('without any markdown, explanations'));
+  ok('pure system prompt instructs natural Pakistani Urdu', PURE_SYSTEM_PROMPT.includes('Pakistani Urdu'));
+  ok('pure system prompt prohibits notes or explanations', PURE_SYSTEM_PROMPT.includes('without any introductory remarks, notes, or explanations'));
 
   const purePayload = buildGroqPayload('Hello world', 'openai/gpt-oss-120b', 0.2, 1000, { pure: true });
   eq('payload model matches', purePayload.model, 'openai/gpt-oss-120b');

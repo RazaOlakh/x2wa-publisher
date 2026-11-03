@@ -63,15 +63,13 @@ async function testGroqModule() {
   eq('isGroqConfigured is true with override apiKey', isGroqConfigured({}, { apiKey: 'gsk_456' }), true);
 
   console.log('System prompt requirements verification');
-  ok('system prompt specifies professional English-to-Urdu translator', SYSTEM_PROMPT.includes('You are a professional English-to-Urdu translator specialising in natural Pakistani Urdu.'));
-  ok('system prompt requires natural Pakistani Urdu', SYSTEM_PROMPT.includes('Use natural Pakistani Urdu rather than overly formal or literary Urdu.'));
-  ok('system prompt preserves tone and sarcasm', SYSTEM_PROMPT.includes("Preserve the author's tone, intent, humour, sarcasm, criticism, and emotional expression."));
-  ok('system prompt translates idioms contextually', SYSTEM_PROMPT.includes('Translate idioms and expressions according to their meaning and context.'));
-  ok('system prompt forbids translating proper names semantically', SYSTEM_PROMPT.includes('Do not translate proper names semantically.'));
-  ok('system prompt preserves URLs, hashtags, mentions', SYSTEM_PROMPT.includes('Preserve numbers, dates, URLs, email addresses, hashtags, and mentions.'));
-  ok('system prompt maintains paragraph breaks', SYSTEM_PROMPT.includes('Maintain paragraph breaks and readable formatting.'));
-  ok('system prompt forbids explanations or omissions', SYSTEM_PROMPT.includes('Do not add explanations, opinions, summaries, or additional information.'));
-  ok('system prompt requires only Urdu text', SYSTEM_PROMPT.includes('Return ONLY the pure translated Urdu text'));
+  ok('system prompt specifies expert English-to-Urdu translator', SYSTEM_PROMPT.includes('You are an expert English-to-Urdu translator specialising in natural, contemporary Pakistani Urdu.'));
+  ok('system prompt requires natural Pakistani Urdu', SYSTEM_PROMPT.includes('Translate the complete text into fluent, natural Urdu'));
+  ok('system prompt preserves tone and sarcasm', SYSTEM_PROMPT.includes("tone, humour, sarcasm, and formatting"));
+  ok('system prompt translates acronyms correctly', SYSTEM_PROMPT.includes('PTI → پی ٹی آئی'));
+  ok('system prompt transliterates names', SYSTEM_PROMPT.includes('Ali → علی'));
+  ok('system prompt preserves URLs, hashtags, mentions', SYSTEM_PROMPT.includes('Keep @handles, usernames, hashtags, URLs, emails'));
+  ok('system prompt forbids explanations or commentary', SYSTEM_PROMPT.includes('Return ONLY the final translated Urdu text without any introductory remarks, notes, or explanations.'));
 
   console.log('cleanGroqResponse sanitization');
   eq('plain text is trimmed', cleanGroqResponse('   یہ ایک ٹیسٹ ہے۔   '), 'یہ ایک ٹیسٹ ہے۔');
