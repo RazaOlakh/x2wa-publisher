@@ -728,6 +728,21 @@ async function urduAuthorName(name, requestId, context) {
   return original;
 }
 
+function formatEngineName(translation) {
+  if (!translation || typeof translation !== 'object') return 'AI';
+  if (translation.provider === 'groq') {
+    const m = translation.model;
+    if (m === 'openai/gpt-oss-120b') return 'GPT-OSS 120B';
+    if (m === 'qwen/qwen3.8-27b') return 'Qwen 3.8 27B';
+    if (m === 'openai/gpt-oss-20b') return 'GPT-OSS 20B';
+    if (m === 'allam-2-7b') return 'Allam 2 7B';
+    if (typeof m === 'string' && m.includes('/')) return m.split('/')[1];
+    if (m) return m;
+    return 'GPT-OSS 120B';
+  }
+  return 'Google Translate';
+}
+
 // Publish a quote-tweet: the picture is the post it quotes, the caption is this
 // post's own words, presented the way the pressed button presents a post. The
 // quoted post's media is never attached separately - it is already in the
@@ -745,7 +760,7 @@ async function postQuoteShot(btn, v, variant, article, quoteEl, requestId) {
   // The author's name is written in the post's own language, exactly as the
   // named variant does it for an ordinary post.
   let name = post.author;
-  if (v.nameTheAuthor) {
+  if (v.nameTheAuthor || v.translateTo === 'ur') {
     const handle = post.authorHandle || null;
     name = (isUrduText(post.text) && !v.translateTo)
       ? await urduAuthorName(post.author, requestId, { handle })
@@ -772,8 +787,11 @@ async function postQuoteShot(btn, v, variant, article, quoteEl, requestId) {
       renderButton(btn, 'success', 'Sent');
       rememberSent(post.tweetId, where);
       const count = result.sent ? result.sent.length : 0;
-      showSnackbar('success', where ? 'Posted to ' + where : 'Posted to WhatsApp',
-        count > 1 ? count + ' messages sent.' : 'The post it quotes is in the channel.');
+      let detail = count > 1 ? count + ' messages sent.' : 'The post it quotes is in the channel.';
+      if (result && result.translation && result.translation.provider) {
+        detail += ` (${formatEngineName(result.translation)})`;
+      }
+      showSnackbar('success', where ? 'Posted to ' + where : 'Posted to WhatsApp', detail);
       try { xlog('info', 'quote-shot-succeeded', { requestId, tweetId: post.tweetId, jobId: result.jobId }); } catch {}
     } else if (result && result.partial) {
       renderButton(btn, 'partial', 'Partial');
@@ -843,14 +861,10 @@ async function onPostClick(ev, btn, variant) {
     return;
   }
 
-  // Only the "name the author" variant changes the post, and it changes only
-  // the front of it, so the link-first order arranged above stays beneath the
-  // name. The name is written in the post's own language: an Urdu post is headed
-  // with the name in Urdu (translated), an English one with the name as it
-  // stands. The post itself is left as written; the Urdu variant is the one that
-  // translates it, in the controller, after this reordering so the link stays
-  // first. With no author found the text goes through untouched.
-  if (v.nameTheAuthor) {
+  // Always include the author's name when translating or when the named variant is used.
+  // The name is written in the post's own language. When posting in Urdu (v.translateTo === 'ur'),
+  // the controller's AI translates the author display name naturally at the top of the post.
+  if (v.nameTheAuthor || v.translateTo === 'ur') {
     const handle = post.authorHandle || null;
     const name = (isUrduText(post.text) && !v.translateTo)
       ? await urduAuthorName(post.author, requestId, { handle })
@@ -876,7 +890,7 @@ async function onPostClick(ev, btn, variant) {
       const count = result.sent ? result.sent.length : 0;
       let snackDetail = count > 1 ? count + ' messages sent.' : 'Your post is in the channel.';
       if (result && result.translation && result.translation.provider) {
-        const eng = result.translation.provider === 'groq' ? 'Qwen 3.8 27B' : 'Google Translate';
+        const eng = formatEngineName(result.translation);
         snackDetail += ` (${eng})`;
       }
       showSnackbar('success', where ? 'Posted to ' + where : 'Posted to WhatsApp', snackDetail);

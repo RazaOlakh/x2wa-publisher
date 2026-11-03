@@ -481,7 +481,7 @@ async function getGroqConfig() {
     const r = await req('/groq/config');
     if (r.ok && r.body) return r.body;
   } catch {}
-  return { configured: false, model: 'qwen/qwen3.8-27b' };
+  return { configured: false, model: 'openai/gpt-oss-120b' };
 }
 
 function formatTimeAgo(ts) {

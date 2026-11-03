@@ -20,7 +20,7 @@
 const POST_VARIANTS = {
   plain: { action: 'Post to WhatsApp',      icon: 'whatsapp', color: '#536471', nameTheAuthor: false, translateTo: null },
   named: { action: 'Post with author name', icon: 'at',       color: '#536471', nameTheAuthor: true,  translateTo: null },
-  urdu:  { action: 'Post in Urdu',          icon: 'globe',    color: '#536471', nameTheAuthor: false, translateTo: 'ur' },
+  urdu:  { action: 'Post in Urdu',          icon: 'globe',    color: '#536471', nameTheAuthor: true,  translateTo: 'ur' },
 };
 
 // Look a variant up, falling back to the plain one so a name that is ever
@@ -37,7 +37,7 @@ function postVariant(name) {
 // With no name to head it (or an empty post) the words go through as they are.
 function quoteCaption(text, variant, name) {
   const v = postVariant(variant);
-  if (v.nameTheAuthor) return withAuthorHeader(text, name);
+  if (v.nameTheAuthor || v.translateTo === 'ur') return withAuthorHeader(text, name);
   return text == null ? '' : String(text);
 }
 
