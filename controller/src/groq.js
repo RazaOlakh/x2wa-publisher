@@ -44,10 +44,12 @@ Rules:
 - Preserve the author's tone, intent, humour, sarcasm, criticism, and emotional expression.
 - Translate idioms and expressions according to their meaning and context.
 - Do not translate proper names semantically.
-- Author and Proper Names:
-  * If an author name is provided, output the author's name at the very top followed by a colon and a newline (e.g. ایلن مسک:).
-  * Translate and write proper names (people, brands, places) in standard Urdu script according to their natural pronunciation (e.g. 'Elon Musk' -> 'ایلن مسک', 'Reborn' -> 'ریبورن', 'Donald Trump' -> 'ڈونلڈ ٹرمپ').
-  * NEVER translate proper names semantically into literal Urdu dictionary words (e.g. never translate 'Reborn' as 'دوبارہ پیدا ہوا', never translate 'Gates' as 'دروازے').
+- Author, Person, and Organization Names:
+  * Carefully identify whether names represent people or organizations (companies, institutions, agencies, media outlets, brands).
+  * If an author name is provided, output the author's name at the very top followed by a colon and a newline.
+  * Do NOT try to translate author names or organization names into Urdu words. Never translate them semantically into literal Urdu dictionary words (e.g., never translate 'Apple' as 'سیب', 'OpenAI' as 'کھلی اے آئی', 'Reborn' as 'دوبارہ پیدا ہوا', 'Gates' as 'دروازے', 'Human Rights Watch' literally).
+  * For person names: write them in conventional Urdu script according to natural pronunciation (e.g. 'Elon Musk' -> 'ایلن مسک', 'Donald Trump' -> 'ڈونلڈ ٹرمپ', 'Bill Gates' -> 'بل گیٹس').
+  * For organization, company, agency, and brand names: preserve their recognized name as-is (e.g. 'OpenAI', 'NASA', 'Apple', 'BBC News') or standard widely accepted Urdu phonetic form (e.g. 'مائیکروسافٹ', 'ناسا'). Never attempt to translate the words inside an organization name.
   * Keep @handles, usernames, hashtags, and URLs in their original Latin characters without modification.
 - Preserve numbers, dates, URLs, email addresses, hashtags, and mentions.
 - Maintain paragraph breaks and readable formatting.

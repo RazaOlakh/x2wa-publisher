@@ -23,17 +23,6 @@ const ui = {
   groqCustomModelInput: el('groqCustomModelInput'),
   groqKeyInput: el('groqKeyInput'),
   groqSave: el('groqSaveBtn'), groqClear: el('groqClearBtn'), groqNote: el('groqNote'),
-  // Author name transliteration review
-  revCard: el('reviewCard'), revBadge: el('revBadge'), revContent: el('revContent'),
-  revOriginal: el('revOriginal'), revHandle: el('revHandle'), revUrdu: el('revUrdu'),
-  revApprove: el('revApproveBtn'), revEdit: el('revEditBtn'), revRemove: el('revRemoveBtn'),
-  revDismiss: el('revDismissBtn'), revEditor: el('revEditor'), revInput: el('revInput'),
-  revSave: el('revSaveBtn'), revCancel: el('revCancelBtn'), revNote: el('revNote'),
-  revEmpty: el('revEmpty'),
-  revAddBtn: el('revAddBtn'), revAddForm: el('revAddForm'),
-  revAddOriginal: el('revAddOriginal'), revAddUrdu: el('revAddUrdu'),
-  revAddSaveBtn: el('revAddSaveBtn'), revAddCancelBtn: el('revAddCancelBtn'),
-  revAddNote: el('revAddNote'),
   // Bottom center translation engine indicator
   transEngineFooter: el('transEngineFooter'),
   transEngineDot: el('transEngineDot'),
@@ -694,7 +683,6 @@ async function doRefresh() {
   const s = await status();
   // Local and cheap: safe to ask on every tick, unlike a network fetch.
   renderVersion(await versionStatus());
-  await refreshReview();
   await refreshGroq();
 
   if (s.state === 'unavailable') {
