@@ -700,7 +700,12 @@ if (ui.groqClear) {
 if (ui.compareRunBtn) {
   ui.compareRunBtn.addEventListener('click', async () => {
     const text = (ui.compareInputText && ui.compareInputText.value ? ui.compareInputText.value : '').trim();
-    const author = (ui.compareAuthorInput && ui.compareAuthorInput.value ? ui.compareAuthorInput.value : '').trim();
+    const rawAuthor = (ui.compareAuthorInput && ui.compareAuthorInput.value ? ui.compareAuthorInput.value : '').trim();
+    const author = rawAuthor
+      .replace(/\s*\(@?[A-Za-z0-9_]+\)/g, '')
+      .replace(/\s*@[A-Za-z0-9_]+/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
     if (!text && !author) {
       if (ui.compareInputText) ui.compareInputText.focus();
       return;

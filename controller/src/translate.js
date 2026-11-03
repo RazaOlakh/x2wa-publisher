@@ -399,12 +399,22 @@ async function translatePostText(text, target, author, deps) {
   return res.text;
 }
 
+function sanitizeAuthorDisplayName(str) {
+  if (!str || typeof str !== 'string') return '';
+  return str
+    .replace(/\s*\(@?[A-Za-z0-9_]+\)/g, '')
+    .replace(/\s*@[A-Za-z0-9_]+/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 async function compareTranslations(text, options = {}, deps = {}) {
   if (!isTranslatable(text)) {
     return { ok: false, error: 'empty-text', results: [] };
   }
   let cleanText = text.trim();
-  const author = options && options.author && typeof options.author === 'string' ? options.author.trim() : '';
+  const rawAuthor = options && options.author && typeof options.author === 'string' ? options.author : '';
+  const author = sanitizeAuthorDisplayName(rawAuthor);
   if (author && !cleanText.toLowerCase().startsWith(author.toLowerCase())) {
     cleanText = `${author}:\n${cleanText}`;
   }

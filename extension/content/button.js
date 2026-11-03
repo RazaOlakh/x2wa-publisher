@@ -954,12 +954,10 @@ function createCompareButton(article) {
     ev.stopPropagation();
     let text = '';
     let author = '';
-    let authorHandle = '';
     try {
       const post = await window.__xwapExtractPostAsync(article);
       if (post && post.text) text = post.text;
       if (post && post.author) author = post.author;
-      if (post && post.authorHandle) authorHandle = post.authorHandle;
     } catch {}
     if (!text) {
       const tweetEl = article.querySelector('[data-testid="tweetText"]');
@@ -969,49 +967,57 @@ function createCompareButton(article) {
       const nameEl = article.querySelector('[data-testid="User-Name"]');
       if (nameEl) {
         const anchors = nameEl.querySelectorAll('a');
-        if (anchors.length > 0) author = anchors[0].innerText || anchors[0].textContent || '';
-        if (anchors.length > 1) authorHandle = anchors[1].innerText || anchors[1].textContent || '';
+        for (const a of anchors) {
+          const t = (a.innerText || a.textContent || '').trim();
+          if (t && !t.startsWith('@') && !t.includes('/status/')) {
+            author = t;
+            break;
+          }
+        }
       }
     }
+    author = extractAuthorDisplayNameOnly(author);
     if (!text || !text.trim()) {
       showSnackbar('info', 'No text to translate', 'This post does not contain any readable text.');
       return;
     }
     openModelComparisonModal({
       text: text.trim(),
-      author: author.trim(),
-      authorHandle: authorHandle.trim(),
+      author: author,
     });
   });
 
   return btn;
 }
 
+// Helper to strip any @username or (@username) handle and keep only the display name.
+function extractAuthorDisplayNameOnly(str) {
+  if (!str || typeof str !== 'string') return '';
+  return str
+    .replace(/\s*\(@?[A-Za-z0-9_]+\)/g, '')
+    .replace(/\s*@[A-Za-z0-9_]+/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 // Modal pop-up in the center of the window to analyze and compare each model's pure response.
 function openModelComparisonModal(input) {
   let initialText = '';
   let initialAuthor = '';
-  let initialAuthorHandle = '';
   if (typeof input === 'string') {
     initialText = input.trim();
   } else if (input && typeof input === 'object') {
     initialText = (input.text || '').trim();
     initialAuthor = (input.author || '').trim();
-    initialAuthorHandle = (input.authorHandle || '').trim();
   }
 
-  let fullAuthor = initialAuthor;
-  if (initialAuthor && initialAuthorHandle && !initialAuthor.includes(initialAuthorHandle)) {
-    fullAuthor = `${initialAuthor} (${initialAuthorHandle})`;
-  } else if (!fullAuthor && initialAuthorHandle) {
-    fullAuthor = initialAuthorHandle;
-  }
-
-  let includeAuthor = Boolean(fullAuthor);
+  // Pure display name only - NO username or handle
+  const authorDisplayName = extractAuthorDisplayNameOnly(initialAuthor);
+  let includeAuthor = Boolean(authorDisplayName);
 
   function buildComparisonText() {
-    if (includeAuthor && fullAuthor) {
-      return `${fullAuthor}:\n${initialText}`;
+    if (includeAuthor && authorDisplayName) {
+      return `${authorDisplayName}:\n${initialText}`;
     }
     return initialText;
   }
@@ -1117,9 +1123,9 @@ function openModelComparisonModal(input) {
   origTitle.style.cssText = 'font-weight:600; font-size:11.5px; color:#8b98a5; text-transform:uppercase; letter-spacing:0.5px;';
   origLeft.appendChild(origTitle);
 
-  if (fullAuthor) {
+  if (authorDisplayName) {
     const authorBadge = document.createElement('span');
-    authorBadge.textContent = `Author: ${fullAuthor}`;
+    authorBadge.textContent = `Author: ${authorDisplayName}`;
     authorBadge.style.cssText = 'font-size:11.5px; color:#1d9bf0; background:#22303c; padding:2px 8px; border-radius:10px; border:1px solid #38444d; font-weight:500;';
     origLeft.appendChild(authorBadge);
   }
@@ -1127,7 +1133,7 @@ function openModelComparisonModal(input) {
   const origRight = document.createElement('div');
   origRight.style.cssText = 'display:flex; align-items:center; gap:12px;';
 
-  if (fullAuthor) {
+  if (authorDisplayName) {
     const authorToggleLabel = document.createElement('label');
     authorToggleLabel.style.cssText = 'display:flex; align-items:center; gap:6px; font-size:12px; color:#e7e9ea; cursor:pointer; user-select:none;';
     const authorCheckbox = document.createElement('input');
@@ -1403,7 +1409,6 @@ try {
       openModelComparisonModal({
         text: msg.text || '',
         author: msg.author || '',
-        authorHandle: msg.authorHandle || '',
       });
       if (typeof sendResponse === 'function') sendResponse({ ok: true });
       return true;

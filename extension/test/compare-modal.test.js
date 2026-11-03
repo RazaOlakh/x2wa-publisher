@@ -203,7 +203,7 @@ async function runTests() {
   const compMsg = sentRuntimeMessages.find((m) => m.type === 'COMPARE_MODELS');
   ok('COMPARE_MODELS message sent to background', Boolean(compMsg));
   eq('pure translation flag is true', compMsg.pure, true);
-  eq('original text includes author line for translation', compMsg.text, 'Space Agency (@space):\nBreaking news: Space mission launched successfully.');
+  eq('original text includes display name only (no username/handle) for translation', compMsg.text, 'Space Agency:\nBreaking news: Space mission launched successfully.');
 
   console.log('\n--- 2. Centered Pop-up Modal Verification ---');
   ok('modal root contains children', modalRoot.children.length > 0);

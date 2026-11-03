@@ -130,7 +130,7 @@ async function runTests() {
   eq('google text matches', google.text, 'گوگل ترجمہ');
   eq('google provider is google', google.provider, 'google');
 
-  console.log('\n--- 4. Author Name Inclusion in Comparison ---');
+  console.log('\n--- 4. Author Display Name (No Username/Handle) in Comparison ---');
   let capturedAuthorBody = null;
   const mockAuthorFetch = async (url, opts) => {
     capturedAuthorBody = JSON.parse(opts.body);
@@ -159,8 +159,8 @@ async function runTests() {
     fetchImpl: mockAuthorFetch,
   });
 
-  eq('original text includes author line', authorCompareRes.original, 'Donald J. Trump (@realDonaldTrump):\nSpace mission completed successfully.');
-  eq('request body includes author header at top', capturedAuthorBody.messages[1].content, 'Donald J. Trump (@realDonaldTrump):\nSpace mission completed successfully.');
+  eq('original text includes display name only (handle stripped)', authorCompareRes.original, 'Donald J. Trump:\nSpace mission completed successfully.');
+  eq('request body includes author display name at top', capturedAuthorBody.messages[1].content, 'Donald J. Trump:\nSpace mission completed successfully.');
   eq('result text has translated author', authorCompareRes.results[0].text, 'ڈونلڈ ٹرمپ:\nخلائی مشن کامیابی سے مکمل ہوا۔');
 
   console.log('\n--- 5. Error Isolation Across Models ---');
