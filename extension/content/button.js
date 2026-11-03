@@ -907,7 +907,12 @@ async function onPostClick(ev, btn, variant) {
     }
   } catch (e) {
     renderButton(btn, 'error', 'Err');
-    showSnackbar('error', 'Could not post', errorDetail('Failed to fetch'));
+    const msg = (e && e.message) || '';
+    if (msg.includes('Extension context invalidated')) {
+      showSnackbar('warn', 'Extension Reloaded', 'Please refresh this page (F5 or Ctrl+R) to reconnect.');
+    } else {
+      showSnackbar('error', 'Could not post', errorDetail('Failed to fetch'));
+    }
     try { xlog('error', 'send-failed', { requestId, tweetId: post.tweetId, error: e && e.message }); } catch {}
   } finally {
     btn.disabled = false;
@@ -988,6 +993,14 @@ function createCompareButton(article) {
   });
 
   return btn;
+}
+
+function isExtensionContextValid() {
+  try {
+    return Boolean(typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.id);
+  } catch {
+    return false;
+  }
 }
 
 // Helper to strip any @username or (@username) handle and keep only the display name.
@@ -1390,10 +1403,53 @@ function openModelComparisonModal(input) {
         }
       }
     } catch (err) {
+      const errMsg = (err && err.message) || String(err || '');
+      const isContextInvalidated = errMsg.includes('Extension context invalidated');
+
+      if (isContextInvalidated) {
+        resultsWrap.innerHTML = '';
+        const banner = document.createElement('div');
+        banner.style.cssText = [
+          'background:#22303c', 'border:1px solid #1d9bf0', 'border-radius:12px',
+          'padding:24px 20px', 'text-align:center', 'display:flex', 'flex-direction:column',
+          'align-items:center', 'gap:12px', 'margin:12px 0',
+        ].join(';') + ';';
+
+        const iconEl = document.createElement('div');
+        iconEl.textContent = '🔄';
+        iconEl.style.fontSize = '32px';
+
+        const titleEl = document.createElement('div');
+        titleEl.textContent = 'Extension Reloaded or Updated';
+        titleEl.style.cssText = 'font-weight:700; font-size:16px; color:#ffffff;';
+
+        const descEl = document.createElement('div');
+        descEl.textContent = 'The browser disconnected this tab after the extension was reloaded. Please refresh this page (press F5 or Ctrl+R) to reconnect.';
+        descEl.style.cssText = 'font-size:13px; color:#8b98a5; max-width:440px; line-height:1.5;';
+
+        const refBtn = document.createElement('button');
+        refBtn.textContent = '🔄 Refresh Page Now';
+        refBtn.style.cssText = [
+          'background:#1d9bf0', 'color:#ffffff', 'border:none', 'padding:10px 24px',
+          'border-radius:9999px', 'font-size:13px', 'font-weight:700', 'cursor:pointer',
+          'box-shadow:0 4px 12px rgba(29, 155, 240, 0.4)',
+        ].join(';') + ';';
+        refBtn.addEventListener('click', () => {
+          window.location.reload();
+        });
+
+        banner.appendChild(iconEl);
+        banner.appendChild(titleEl);
+        banner.appendChild(descEl);
+        banner.appendChild(refBtn);
+        resultsWrap.appendChild(banner);
+        return;
+      }
+
       for (const k in cards) {
         cards[k].status.textContent = 'Failed';
         cards[k].status.style.color = '#e0245e';
-        cards[k].textEl.textContent = `Could not communicate with controller: ${err.message || String(err)}`;
+        cards[k].textEl.textContent = `Could not communicate with controller: ${errMsg}`;
       }
     }
   }

@@ -24,6 +24,7 @@ const popupJs = fs.readFileSync(path.join(ROOT, 'extension', 'popup', 'popup.js'
 function makeEl(tag) {
   const children = [];
   const attrs = {};
+  let _textContent = '';
   const el = {
     tagName: String(tag).toUpperCase(),
     children,
@@ -32,7 +33,6 @@ function makeEl(tag) {
       cssText: '',
       setProperty(k, v) { el.style[k] = v; },
     },
-    textContent: '',
     value: '',
     classList: {
       _set: new Set(),
@@ -70,6 +70,18 @@ function makeEl(tag) {
     firstElementChild: null,
     addEventListener(ev, fn) { el['_on_' + ev] = fn; },
   };
+
+  Object.defineProperty(el, 'textContent', {
+    get: () => {
+      if (_textContent) return _textContent;
+      return children.map((c) => (c && c.textContent) || '').join(' ');
+    },
+    set: (v) => {
+      _textContent = String(v);
+      children.length = 0;
+    },
+    configurable: true,
+  });
 
   Object.defineProperty(el, 'firstElementChild', {
     get: () => children[0] || null,
@@ -212,6 +224,18 @@ async function runTests() {
   modalRoot.remove();
   const afterRemove = bodyEl.querySelector('#__xwap-compare-modal-root');
   ok('modal dismissed cleanly', afterRemove === null);
+
+  // Test Extension context invalidated error handling
+  sandbox.chrome.runtime.sendMessage = async () => {
+    throw new Error('Extension context invalidated.');
+  };
+  sandbox.openModelComparisonModal({ text: 'Test text', author: 'Test Author' });
+  await new Promise((r) => setTimeout(r, 20));
+  const modalWithInvalidContext = bodyEl.querySelector('#__xwap-compare-modal-root');
+  ok('modal rendered on invalidated context', Boolean(modalWithInvalidContext));
+  const refreshBanner = modalWithInvalidContext.textContent.includes('Extension was reloaded') || modalWithInvalidContext.textContent.includes('Extension Reloaded');
+  ok('shows user-friendly extension reload refresh banner', refreshBanner);
+  modalWithInvalidContext.remove();
 
   console.log('\n--- 3. Popup Integration with Test & Analyze Card ---');
   ok('popup.html contains #compareCard', popupHtml.includes('id="compareCard"'));
