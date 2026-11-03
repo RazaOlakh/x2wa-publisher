@@ -3,15 +3,9 @@
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
-const vm = require('vm');
 
 function ok(msg, val) {
   assert(val, msg);
-  console.log('  ok   ' + msg);
-}
-
-function eq(msg, actual, expected) {
-  assert.strictEqual(actual, expected, `${msg}: expected ${JSON.stringify(expected)} but got ${JSON.stringify(actual)}`);
   console.log('  ok   ' + msg);
 }
 
@@ -19,232 +13,32 @@ const ROOT = path.join(__dirname, '..', '..');
 const buttonSrc = fs.readFileSync(path.join(ROOT, 'extension', 'content', 'button.js'), 'utf8');
 const popupHtml = fs.readFileSync(path.join(ROOT, 'extension', 'popup', 'popup.html'), 'utf8');
 const popupJs = fs.readFileSync(path.join(ROOT, 'extension', 'popup', 'popup.js'), 'utf8');
-
-// Lightweight DOM node simulation for button.js and modal verification
-function makeEl(tag) {
-  const children = [];
-  const attrs = {};
-  let _textContent = '';
-  const el = {
-    tagName: String(tag).toUpperCase(),
-    children,
-    attrs,
-    style: {
-      cssText: '',
-      setProperty(k, v) { el.style[k] = v; },
-    },
-    value: '',
-    classList: {
-      _set: new Set(),
-      add(c) { el.classList._set.add(c); },
-      remove(c) { el.classList._set.delete(c); },
-      contains(c) { return el.classList._set.has(c); },
-    },
-    setAttribute(k, v) { attrs[k] = String(v); },
-    getAttribute(k) { return attrs[k] !== undefined ? attrs[k] : null; },
-    removeAttribute(k) { delete attrs[k]; },
-    appendChild(c) {
-      children.push(c);
-      c.parentElement = el;
-      return c;
-    },
-    removeChild(c) {
-      const idx = children.indexOf(c);
-      if (idx >= 0) children.splice(idx, 1);
-      return c;
-    },
-    remove() {
-      if (el.parentElement) el.parentElement.removeChild(el);
-    },
-    querySelector(sel) {
-      for (const child of children) {
-        if (sel.startsWith('#') && child.id === sel.slice(1)) return child;
-        if (sel.startsWith('.') && child.classList.contains(sel.slice(1))) return child;
-        if (child.querySelector) {
-          const found = child.querySelector(sel);
-          if (found) return found;
-        }
-      }
-      return null;
-    },
-    firstElementChild: null,
-    addEventListener(ev, fn) { el['_on_' + ev] = fn; },
-  };
-
-  Object.defineProperty(el, 'textContent', {
-    get: () => {
-      if (_textContent) return _textContent;
-      return children.map((c) => (c && c.textContent) || '').join(' ');
-    },
-    set: (v) => {
-      _textContent = String(v);
-      children.length = 0;
-    },
-    configurable: true,
-  });
-
-  Object.defineProperty(el, 'firstElementChild', {
-    get: () => children[0] || null,
-  });
-
-  return el;
-}
+const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'extension', 'manifest.json'), 'utf8'));
 
 async function runTests() {
-  console.log('--- 1. Compare Button & Modal Injection in Content Script ---');
-  ok('button.js defines compareIcon', buttonSrc.includes('function compareIcon()'));
-  ok('button.js defines createCompareButton', buttonSrc.includes('function createCompareButton('));
-  ok('button.js defines openModelComparisonModal', buttonSrc.includes('function openModelComparisonModal('));
-  ok('button.js injects createCompareButton into toolbar', buttonSrc.includes('toolbar.appendChild(createCompareButton(article))'));
+  console.log('--- 1. Compare Button & Modal Removal in Content Script ---');
+  ok('compareIcon is removed from button.js', !buttonSrc.includes('function compareIcon('));
+  ok('createCompareButton is removed from button.js', !buttonSrc.includes('function createCompareButton('));
+  ok('openModelComparisonModal is removed from button.js', !buttonSrc.includes('function openModelComparisonModal('));
+  ok('modal root is not in button.js', !buttonSrc.includes('__xwap-compare-modal-root'));
+  ok('OPEN_COMPARE_MODAL listener is removed', !buttonSrc.includes('OPEN_COMPARE_MODAL'));
 
-  // Test createCompareButton execution
-  const bodyEl = makeEl('body');
-  const docEl = makeEl('html');
-  docEl.appendChild(bodyEl);
+  console.log('\n--- 2. Popup Integration - Compare Card Removed ---');
+  ok('popup.html does not contain #compareCard', !popupHtml.includes('id="compareCard"'));
+  ok('popup.html does not contain #compareRunBtn', !popupHtml.includes('id="compareRunBtn"'));
+  ok('popup.js does not contain compareRunBtn listener', !popupJs.includes('ui.compareRunBtn'));
 
-  const sentRuntimeMessages = [];
-  const sandbox = {
-    document: {
-      body: bodyEl,
-      documentElement: docEl,
-      createElement: (t) => makeEl(t),
-      createElementNS: (ns, t) => makeEl(t),
-      querySelectorAll: () => [],
-      getElementById: (id) => {
-        const find = (n) => {
-          if (n.id === id) return n;
-          for (const c of n.children) {
-            const f = find(c);
-            if (f) return f;
-          }
-          return null;
-        };
-        return find(docEl);
-      },
-    },
-    window: {
-      addEventListener: () => {},
-      removeEventListener: () => {},
-      scrollX: 0,
-      scrollY: 0,
-      location: { href: 'https://x.com/test' },
-      __xwapExtractPostAsync: async () => ({
-        text: 'Breaking news: Space mission launched successfully.',
-        author: 'Space Agency',
-        authorHandle: '@space',
-      }),
-    },
-    navigator: {
-      clipboard: {
-        writeText: async () => {},
-      },
-    },
-    chrome: {
-      runtime: {
-        sendMessage: async (msg) => {
-          sentRuntimeMessages.push(msg);
-          if (msg.type === 'COMPARE_MODELS') {
-            return {
-              ok: true,
-              original: msg.text,
-              pure: true,
-              results: [
-                {
-                  model: 'openai/gpt-oss-120b',
-                  modelName: 'GPT-OSS 120B',
-                  provider: 'groq',
-                  text: 'اہم خبر: خلائی مشن کامیابی کے ساتھ روانہ ہوا۔',
-                  durationMs: 450,
-                  ok: true,
-                },
-                {
-                  model: 'qwen/qwen3.8-27b',
-                  modelName: 'Qwen 3.8 27B',
-                  provider: 'groq',
-                  text: 'تازہ ترین: خلائی مشن کا کامیاب آغاز۔',
-                  durationMs: 310,
-                  ok: true,
-                },
-                {
-                  model: 'google',
-                  modelName: 'Google Translate',
-                  provider: 'google',
-                  text: 'بریکنگ نیوز: خلائی مشن کامیابی سے شروع کیا گیا۔',
-                  durationMs: 250,
-                  ok: true,
-                },
-              ],
-            };
-          }
-          return { ok: true };
-        },
-        onMessage: {
-          addListener: () => {},
-        },
-      },
-      storage: {
-        local: {
-          get: (k, cb) => cb({}),
-          set: (d, cb) => cb && cb(),
-        },
-      },
-    },
-    setTimeout: (fn) => fn(),
-    clearTimeout: () => {},
-    MutationObserver: class { observe() {} },
-    console,
-  };
+  console.log('\n--- 3. Single Active Model Selection in Popup ---');
+  ok('popup.html contains #groqModelSelect', popupHtml.includes('id="groqModelSelect"'));
+  ok('openai/gpt-oss-120b is the finalized default option', popupHtml.includes('value="openai/gpt-oss-120b">GPT-OSS 120B (Default'));
+  ok('dropdown includes other models (Qwen, GPT-OSS 20B, Allam)', popupHtml.includes('qwen/qwen3.8-27b') && popupHtml.includes('openai/gpt-oss-20b') && popupHtml.includes('allam-2-7b'));
 
-  vm.createContext(sandbox);
-  vm.runInContext(buttonSrc, sandbox);
+  console.log('\n--- 4. Action Popup (Not Sidebar) Configuration ---');
+  ok('action.default_popup is set to popup/popup.html', manifest.action && manifest.action.default_popup === 'popup/popup.html');
+  ok('side_panel is removed from manifest', manifest.side_panel === undefined);
+  ok('sidePanel permission is removed', !manifest.permissions.includes('sidePanel'));
 
-  const fakeArticle = makeEl('article');
-  const compareBtn = sandbox.createCompareButton(fakeArticle);
-  ok('compare button created', Boolean(compareBtn));
-  eq('button action attribute is compare-models', compareBtn.getAttribute('data-xwap-action'), 'compare-models');
-  ok('button has informative title', compareBtn.title.includes('Test & Compare'));
-
-  // Trigger compare click
-  await compareBtn._on_click({ preventDefault: () => {}, stopPropagation: () => {} });
-
-  const modalRoot = bodyEl.querySelector('#__xwap-compare-modal-root');
-  ok('centered comparison modal root is mounted in DOM', Boolean(modalRoot));
-  ok('modal has fixed positioning in center', modalRoot.style.cssText.includes('position:fixed') && modalRoot.style.cssText.includes('display:flex'));
-
-  // Verify COMPARE_MODELS was dispatched
-  const compMsg = sentRuntimeMessages.find((m) => m.type === 'COMPARE_MODELS');
-  ok('COMPARE_MODELS message sent to background', Boolean(compMsg));
-  eq('pure translation flag is true', compMsg.pure, true);
-  eq('original text includes display name only (no username/handle) for translation', compMsg.text, 'Space Agency:\nBreaking news: Space mission launched successfully.');
-
-  console.log('\n--- 2. Centered Pop-up Modal Verification ---');
-  ok('modal root contains children', modalRoot.children.length > 0);
-
-  // Test dismissal
-  modalRoot.remove();
-  const afterRemove = bodyEl.querySelector('#__xwap-compare-modal-root');
-  ok('modal dismissed cleanly', afterRemove === null);
-
-  // Test Extension context invalidated error handling
-  sandbox.chrome.runtime.sendMessage = async () => {
-    throw new Error('Extension context invalidated.');
-  };
-  sandbox.openModelComparisonModal({ text: 'Test text', author: 'Test Author' });
-  await new Promise((r) => setTimeout(r, 20));
-  const modalWithInvalidContext = bodyEl.querySelector('#__xwap-compare-modal-root');
-  ok('modal rendered on invalidated context', Boolean(modalWithInvalidContext));
-  const refreshBanner = modalWithInvalidContext.textContent.includes('Extension was reloaded') || modalWithInvalidContext.textContent.includes('Extension Reloaded');
-  ok('shows user-friendly extension reload refresh banner', refreshBanner);
-  modalWithInvalidContext.remove();
-
-  console.log('\n--- 3. Popup Integration with Test & Analyze Card ---');
-  ok('popup.html contains #compareCard', popupHtml.includes('id="compareCard"'));
-  ok('popup.html contains #compareInputText', popupHtml.includes('id="compareInputText"'));
-  ok('popup.html contains #compareRunBtn', popupHtml.includes('id="compareRunBtn"'));
-  ok('popup.html contains #compareResultsWrap', popupHtml.includes('id="compareResultsWrap"'));
-  ok('popup.js binds compareRunBtn click listener', popupJs.includes('ui.compareRunBtn.addEventListener(\'click\''));
-
-  console.log('\nALL EXTENSION COMPARE MODAL TESTS PASSED');
+  console.log('\nALL VERIFICATION TESTS PASSED');
 }
 
 runTests().catch((e) => {

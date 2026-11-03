@@ -186,19 +186,17 @@ async function runTestHarness({ groqConfig = { configured: false, model: 'qwen/q
 }
 
 async function runAll() {
-  console.log('--- 1. Manifest V3 Side Panel Configuration ---');
-  ok('permissions includes sidePanel', manifest.permissions.includes('sidePanel'));
-  ok('side_panel is defined', Boolean(manifest.side_panel));
-  eq('side_panel default_path points to popup/popup.html', manifest.side_panel.default_path, 'popup/popup.html');
-  ok('action.default_popup is omitted for side panel action click', manifest.action.default_popup === undefined);
+  console.log('--- 1. Manifest V3 Action Popup Configuration ---');
+  ok('permissions does not include sidePanel', !manifest.permissions.includes('sidePanel'));
+  ok('side_panel is omitted in favor of popup', manifest.side_panel === undefined);
+  eq('action.default_popup points to popup/popup.html', manifest.action.default_popup, 'popup/popup.html');
   ok('action.default_icon is defined', Boolean(manifest.action.default_icon));
 
-  console.log('\n--- 2. Sidebar Trigger from Popup ---');
+  console.log('\n--- 2. Popup UI Layout ---');
   {
-    const { els, wasSidebarOpened } = await runTestHarness();
-    ok('Sidebar button exists in popup', Boolean(els.openSidebarBtn));
-    await els.openSidebarBtn._on_click();
-    ok('Clicking sidebar button triggers chrome.sidePanel.open', wasSidebarOpened());
+    const { els } = await runTestHarness();
+    ok('Sidebar button is removed from popup', !els.openSidebarBtn);
+    ok('Compare card is removed from popup', !els.compareCard);
   }
 
   console.log('\n--- 3. Groq API Key and Model Configuration in Popup ---');

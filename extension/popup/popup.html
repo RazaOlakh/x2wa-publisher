@@ -81,7 +81,6 @@
         <p class="sub">Send any X post to your WhatsApp Channel.</p>
       </div>
     </div>
-    <button id="openSidebarBtn" title="Open in Chrome sidebar" style="flex:0 0 auto; width:auto; padding:4px 8px; font-size:11.5px; border-radius:6px; border:1px solid var(--line); background:var(--panel); cursor:pointer;">◨ Sidebar</button>
   </header>
 
   <!-- WhatsApp connection -->
@@ -135,7 +134,7 @@
     <div id="groqForm">
       <label class="field" for="groqModelSelect" style="font-size:11.5px;">Translation Model</label>
       <select id="groqModelSelect" style="width:100%; font-size:12px; padding:6px 8px; border-radius:6px; border:1px solid var(--line); margin-top:3px; margin-bottom:6px; background:var(--panel); color:var(--ink);">
-        <option value="openai/gpt-oss-120b">GPT-OSS 120B (Recommended · Natural Urdu)</option>
+        <option value="openai/gpt-oss-120b">GPT-OSS 120B (Default · High Quality Urdu)</option>
         <option value="qwen/qwen3.8-27b">Qwen 3.8 27B (Fast / Lightweight)</option>
         <option value="openai/gpt-oss-20b">GPT-OSS 20B (OpenAI Reasoning 20B)</option>
         <option value="allam-2-7b">Allam 2 7B (SDAIA Regional)</option>
@@ -154,25 +153,6 @@
       </div>
     </div>
     <div class="note idle" id="groqNote"></div>
-  </section>
-
-  <!-- Model Translation Analysis (Pure) -->
-  <section class="card" id="compareCard">
-    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-      <span class="status-title" style="font-size:12.5px;">Test & Analyze Models</span>
-      <span class="badge" id="compareBadge" style="font-size:11px; padding:2px 7px; border-radius:12px; background:var(--panel); border:1px solid var(--line); color:var(--muted);">Pure Translation</span>
-    </div>
-    <div style="font-size:11.5px; color:var(--muted); margin-bottom:8px;">
-      Generate pure, unmodified Urdu translations with each model to compare and analyze what each model is responding.
-    </div>
-    <label class="field" for="compareAuthorInput" style="font-size:11px;">Author Display Name (no username, optional)</label>
-    <input type="text" id="compareAuthorInput" placeholder="e.g. Elon Musk" value="Elon Musk" style="width:100%; font-size:12px; padding:5px 8px; border-radius:6px; border:1px solid var(--line); margin-bottom:6px; box-sizing:border-box;" />
-    <label class="field" for="compareInputText" style="font-size:11px;">Post Text</label>
-    <textarea id="compareInputText" rows="2" style="width:100%; font-size:12px; padding:6px 8px; border-radius:6px; border:1px solid var(--line); margin-bottom:6px; box-sizing:border-box; resize:vertical; font-family:inherit;" placeholder="Enter or paste text to test across models…">Starship Flight 6 splashdown confirmed! Congratulations to the entire SpaceX team on an epic test flight.</textarea>
-    <div class="row" style="margin-top:2px;">
-      <button id="compareRunBtn" class="primary" style="width:100%;">🔬 Test All Models in Center Window</button>
-    </div>
-    <div id="compareResultsWrap" class="hidden" style="margin-top:10px; display:flex; flex-direction:column; gap:10px;"></div>
   </section>
 
   <!-- Author name transliteration review (optional) -->
