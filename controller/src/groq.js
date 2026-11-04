@@ -246,6 +246,43 @@ async function translateWithGroq(text, options, deps) {
   }
 }
 
+const AUTHOR_DUAL_SYSTEM_PROMPT = `You are an expert English-to-Urdu transliterator. Given an author or display name (in English, Urdu, or mixed), output the name in both English and Urdu script separated by a midline with exactly three spaces before and after:
+Format: "English Name   |   Urdu Name"
+Do NOT include a colon, quotation marks, or explanations. Return ONLY the formatted name.
+
+Examples:
+- Ali → Ali   |   علی
+- عمران خان → Imran Khan   |   عمران خان
+- Muhammad Siddiq → Muhammad Siddiq   |   محمد صدیق
+- PTI → PTI   |   پی ٹی آئی
+- PTI Official → PTI Official   |   پی ٹی آئی آفیشل
+- Adv. Salman Raja → Adv. Salman Raja   |   ایڈووکیٹ سلمان راجہ
+- Geo News Urdu → Geo News Urdu   |   جیو نیوز اردو`;
+
+async function formatAuthorNameDual(name, deps) {
+  if (!name || typeof name !== 'string' || !name.trim()) return '';
+  const trimmed = name.trim();
+  if (trimmed.includes('|')) {
+    return trimmed.replace(/([^\s|])\s*\|\s*([^\s|])/g, '$1   |   $2');
+  }
+  const env = (deps && deps.env) || process.env;
+  if (isGroqConfigured(env, deps)) {
+    try {
+      const res = await translateWithGroq(trimmed, {
+        systemPrompt: AUTHOR_DUAL_SYSTEM_PROMPT,
+        temperature: 0.1,
+      }, deps);
+      if (res && res.text) {
+        let text = res.text.trim();
+        text = text.replace(/([^\s|])\s*\|\s*([^\s|])/g, '$1   |   $2');
+        text = text.replace(/[:\u061B\u05C3]\s*$/, '').trim();
+        if (text.includes('|')) return text;
+      }
+    } catch {}
+  }
+  return trimmed;
+}
+
 module.exports = {
   DEFAULT_MODEL,
   DEFAULT_BASE_URL,
@@ -254,6 +291,8 @@ module.exports = {
   formatModelDisplayName,
   SYSTEM_PROMPT,
   PURE_SYSTEM_PROMPT,
+  AUTHOR_DUAL_SYSTEM_PROMPT,
+  formatAuthorNameDual,
   getGroqConfig,
   isGroqConfigured,
   cleanGroqResponse,

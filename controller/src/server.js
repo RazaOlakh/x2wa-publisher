@@ -92,12 +92,14 @@ const {
   resolveTransliteration,
   defaultStore: overridesStore,
   MAX_NAME_CHARS,
+  isUrduText,
 } = require('./transliterate');
 const {
   DEFAULT_MODEL: GROQ_DEFAULT_MODEL,
   SUPPORTED_MODELS: GROQ_SUPPORTED_MODELS,
   formatModelDisplayName: formatGroqModelDisplayName,
   isGroqConfigured,
+  formatAuthorNameDual,
 } = require('./groq');
 
 const HOST = '127.0.0.1';
@@ -731,6 +733,25 @@ async function runSend(body) {
         log('warn','translate-failed',{requestId,jobId,target,error:errMsg(e)});
         return { ok: false, error: 'translate-failed', jobId, retryable: true };
       }
+    } else if (body.author && typeof text === 'string') {
+      // For author name button (no translateTo):
+      // If the post is in Urdu, write author name in both English and Urdu: "English Name   |   Urdu Name"
+      // If the post is in English, author name remains in English only.
+      const sep = text.indexOf('\n\n');
+      if (sep > 0) {
+        const header = text.slice(0, sep).trim();
+        const bodyContent = text.slice(sep + 2).trim();
+        const authorTrimmed = body.author.trim();
+        const isAuthorHeader = header.toLowerCase() === authorTrimmed.toLowerCase() || header === authorTrimmed;
+        if (isAuthorHeader && isUrduText(bodyContent)) {
+          try {
+            const dualAuthor = await formatAuthorNameDual(body.author);
+            if (dualAuthor) {
+              outText = `${dualAuthor}\n\n${bodyContent}`;
+            }
+          } catch {}
+        }
+      }
     }
     if (Array.isArray(media) && media.length > 0) {
       for (let i = 0; i < media.length; i++) {
@@ -1085,6 +1106,19 @@ const server = http.createServer(async (req, res) => {
         return json(res, 400, { ok: false, error: 'name-too-long' });
       }
       try {
+        if (isGroqConfigured()) {
+          const dual = await formatAuthorNameDual(body.text);
+          if (dual) {
+            log('info', 'transliterate-groq-dual', { original: body.text, dual });
+            return json(res, 200, {
+              ok: true,
+              text: dual,
+              source: 'groq',
+              original: body.text,
+              handle: body.handle || null,
+            });
+          }
+        }
         const result = await resolveTransliteration(body.text, body.handle);
         log('info', 'transliterate-http', {
           source: result.source,

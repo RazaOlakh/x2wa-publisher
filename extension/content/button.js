@@ -701,7 +701,7 @@ function showReadError(btn, label, title, detail, requestId, error) {
 async function urduAuthorName(name, requestId, context) {
   const original = String(name == null ? '' : name).trim();
   if (!original) return '';
-  if (isUrduText(original)) return original;
+  if (original.includes('|')) return original;
 
   const handle = context && context.handle ? context.handle : null;
   try {
