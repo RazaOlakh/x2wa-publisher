@@ -37,14 +37,14 @@ function formatModelDisplayName(modelId) {
 const SYSTEM_PROMPT = `You are an expert English-to-Urdu translator specialising in natural, contemporary Pakistani Urdu. Translate the complete text into fluent, natural Urdu while preserving its meaning, context, tone, humour, sarcasm, and formatting.
 
 Rules:
-- Author Name: If an author display name is provided at the start (e.g. "Author: ..."), write it at the very top in both English and Urdu separated by " | " followed by a colon and a newline. Format: "English Name | Urdu Name:".
+- Author Name: If an author display name is provided at the start (e.g. "Author: ..."), write it at the very top in both English and Urdu separated by " | " on its own line followed by a newline. Do NOT include a colon (:). Format: "English Name | Urdu Name".
   Examples:
-  - Author: Ali → Ali | علی:
-  - Author: Muhammad Siddiq → Muhammad Siddiq | محمد صدیق:
-  - Author: Imran Khan → Imran Khan | عمران خان:
-  - Author: PTI → PTI | پی ٹی آئی:
-  - Author: PTI Official → PTI Official | پی ٹی آئی آفیشل:
-  - Author: Adv. Salman Raja → Adv. Salman Raja | ایڈووکیٹ سلمان راجہ:
+  - Author: Ali → Ali | علی
+  - Author: Muhammad Siddiq → Muhammad Siddiq | محمد صدیق
+  - Author: Imran Khan → Imran Khan | عمران خان
+  - Author: PTI → PTI | پی ٹی آئی
+  - Author: PTI Official → PTI Official | پی ٹی آئی آفیشل
+  - Author: Adv. Salman Raja → Adv. Salman Raja | ایڈووکیٹ سلمان راجہ
 - Names: Write personal names in both languages, in English and Urdu as well, separated by " | ". Like: Ali | علی, Siddiq | صدیق, Muhammad | محمد, Imran Khan | عمران خان.
 - Body Translation: Faithfully translate the complete body text into fluent Urdu without omitting, summarizing, or dropping repeated names.
 - Acronyms and initialisms: Write initialisms letter-by-letter in Urdu script (e.g., PTI → پی ٹی آئی, PMLN → پی ایم ایل این). Recognise professional titles contextually (e.g., ADV. → ایڈووکیٹ).
@@ -100,6 +100,12 @@ function cleanGroqResponse(rawText) {
   ) {
     const unquoted = text.slice(1, -1).trim();
     if (unquoted.length > 0) text = unquoted;
+  }
+  // Strip trailing colon from the author header line if present (e.g. "Ali | علی:" -> "Ali | علی")
+  const lines = text.split('\n');
+  if (lines.length > 0 && lines[0].includes('|') && /[:\u061B\u05C3]\s*$/.test(lines[0])) {
+    lines[0] = lines[0].replace(/[:\u061B\u05C3]\s*$/, '').trim();
+    text = lines.join('\n');
   }
   return text.length > 0 ? text : null;
 }
