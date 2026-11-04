@@ -18,8 +18,10 @@ const ui = {
   pull: el('updateBtn'), push: el('pushBtn'), sync: el('syncBtn'),
   // Channel Branding & Signature
   sigCard: el('sigCard'), sigEnabled: el('sigEnabled'), sigForm: el('sigForm'),
-  sigLinkInput: el('sigLinkInput'), sigTemplateInput: el('sigTemplateInput'),
-  sigResetBtn: el('sigResetBtn'), sigPreview: el('sigPreview'),
+  sigPlacementTop: el('sigPlacementTop'), sigPlacementBottom: el('sigPlacementBottom'),
+  sigLinkLabel: el('sigLinkLabel'), sigLinkInput: el('sigLinkInput'),
+  sigTemplateInput: el('sigTemplateInput'), sigResetBtn: el('sigResetBtn'),
+  sigPreview: el('sigPreview'),
   // Groq Translation
   groqCard: el('groqCard'), groqBadge: el('groqBadge'),
   groqModelSelect: el('groqModelSelect'),
@@ -133,12 +135,14 @@ ui.select.addEventListener('change', async () => {
   if (!id) {
     await store.remove(['selectedChannelId', 'selectedChannelName']);
     setNote(ui.channelNote, 'Choose the channel that posts should go to.', 'idle');
+    await syncChannelLinkUI('', '');
     renderSigPreview();
     return;
   }
   const name = ui.select.options[ui.select.selectedIndex].textContent;
   await store.set({ selectedChannelId: id, selectedChannelName: name });
   setNote(ui.channelNote, `Posts will go to “${name}”.`, 'ok');
+  await syncChannelLinkUI(id, name);
   renderSigPreview();
 });
 
@@ -472,8 +476,7 @@ if (ui.revAddCancelBtn) {
 
 // ------------------------------------------------ channel signature & branding
 const DEFAULT_SIG_TEMPLATE = `╭───────────────────────
-│ 👉 Follow *{channel}* for more updates:
-│ 🔗 {link}
+│ *{channel}*
 ╰───────────────────────`;
 
 function getEffectiveChannelName() {
@@ -481,6 +484,38 @@ function getEffectiveChannelName() {
     return ui.select.options[ui.select.selectedIndex].textContent;
   }
   return '';
+}
+
+function getEffectiveChannelId() {
+  if (ui.select && ui.select.value) {
+    return ui.select.value;
+  }
+  return '';
+}
+
+function getSigPlacement() {
+  if (ui.sigPlacementTop && ui.sigPlacementTop.checked) return 'top';
+  return 'bottom';
+}
+
+async function syncChannelLinkUI(chId, chName) {
+  if (!ui.sigLinkInput) return;
+  const name = chName || getEffectiveChannelName();
+  if (ui.sigLinkLabel) {
+    ui.sigLinkLabel.innerHTML = name
+      ? `Channel Invite Link for “${name}” <span style="color:var(--muted); font-weight:normal;">(optional)</span>`
+      : 'Channel Invite Link <span style="color:var(--muted); font-weight:normal;">(optional)</span>';
+  }
+  const id = chId || getEffectiveChannelId();
+  const data = await store.get(['sigLinks', 'sigLink']);
+  const links = data && typeof data.sigLinks === 'object' && data.sigLinks ? data.sigLinks : {};
+  if (id && links[id] !== undefined) {
+    ui.sigLinkInput.value = links[id] || '';
+  } else if (data && typeof data.sigLink === 'string' && data.sigLink) {
+    ui.sigLinkInput.value = data.sigLink;
+  } else {
+    ui.sigLinkInput.value = '';
+  }
 }
 
 async function renderSigPreview() {
@@ -502,24 +537,47 @@ async function renderSigPreview() {
   }
 
   const rawLink = ui.sigLinkInput ? ui.sigLinkInput.value.trim() : '';
-  const displayLink = rawLink || 'https://whatsapp.com/channel/...';
   let tpl = (ui.sigTemplateInput && ui.sigTemplateInput.value) || DEFAULT_SIG_TEMPLATE;
 
   let previewText = tpl
     .replace(/\{channel\}/gi, chName)
-    .replace(/\{channelName\}/gi, chName)
-    .replace(/\{link\}/gi, displayLink);
+    .replace(/\{channelName\}/gi, chName);
 
-  ui.sigPreview.textContent = previewText;
+  if (rawLink) {
+    previewText = previewText.replace(/\{link\}/gi, rawLink);
+  } else {
+    // Link is optional: cleanly strip out lines containing {link}
+    previewText = previewText.split('\n').filter((l) => !l.includes('{link}')).join('\n');
+  }
+
+  const placement = getSigPlacement();
+  if (placement === 'top') {
+    ui.sigPreview.textContent = `${previewText}\n\n[Sample Tweet Content...]`;
+  } else {
+    ui.sigPreview.textContent = `[Sample Tweet Content...]\n\n${previewText}`;
+  }
 }
 
 let sigSaveTimer = null;
 function debouncedSaveSig() {
   clearTimeout(sigSaveTimer);
   sigSaveTimer = setTimeout(async () => {
+    let chId = getEffectiveChannelId();
+    if (!chId) {
+      const stored = await store.get(['selectedChannelId']);
+      chId = (stored && stored.selectedChannelId) || '';
+    }
+    const data = await store.get(['sigLinks']);
+    const links = (data && typeof data.sigLinks === 'object' && data.sigLinks) ? { ...data.sigLinks } : {};
+    const linkVal = ui.sigLinkInput ? ui.sigLinkInput.value.trim() : '';
+    if (chId) {
+      links[chId] = linkVal;
+    }
     await store.set({
       sigEnabled: ui.sigEnabled ? ui.sigEnabled.checked : true,
-      sigLink: ui.sigLinkInput ? ui.sigLinkInput.value.trim() : '',
+      sigPlacement: getSigPlacement(),
+      sigLinks: links,
+      sigLink: linkVal,
       sigTemplate: ui.sigTemplateInput ? ui.sigTemplateInput.value : DEFAULT_SIG_TEMPLATE,
     });
   }, 250);
@@ -527,10 +585,21 @@ function debouncedSaveSig() {
 
 async function initSignatureSettings() {
   if (!ui.sigCard) return;
-  const data = await store.get(['sigEnabled', 'sigLink', 'sigTemplate']);
+  const data = await store.get(['sigEnabled', 'sigPlacement', 'sigLink', 'sigLinks', 'sigTemplate', 'selectedChannelId', 'selectedChannelName']);
   const enabled = data.sigEnabled !== false;
   if (ui.sigEnabled) ui.sigEnabled.checked = enabled;
-  if (ui.sigLinkInput) ui.sigLinkInput.value = data.sigLink || '';
+
+  const placement = data.sigPlacement || 'bottom';
+  if (placement === 'top') {
+    if (ui.sigPlacementTop) ui.sigPlacementTop.checked = true;
+  } else {
+    if (ui.sigPlacementBottom) ui.sigPlacementBottom.checked = true;
+  }
+
+  const chId = getEffectiveChannelId() || data.selectedChannelId || '';
+  const chName = getEffectiveChannelName() || data.selectedChannelName || '';
+  await syncChannelLinkUI(chId, chName);
+
   if (ui.sigTemplateInput) {
     ui.sigTemplateInput.value = (typeof data.sigTemplate === 'string' && data.sigTemplate.trim())
       ? data.sigTemplate
@@ -540,6 +609,19 @@ async function initSignatureSettings() {
   if (ui.sigEnabled) {
     ui.sigEnabled.addEventListener('change', async () => {
       await store.set({ sigEnabled: ui.sigEnabled.checked });
+      renderSigPreview();
+    });
+  }
+
+  if (ui.sigPlacementTop) {
+    ui.sigPlacementTop.addEventListener('change', () => {
+      debouncedSaveSig();
+      renderSigPreview();
+    });
+  }
+  if (ui.sigPlacementBottom) {
+    ui.sigPlacementBottom.addEventListener('change', () => {
+      debouncedSaveSig();
       renderSigPreview();
     });
   }
@@ -907,6 +989,8 @@ async function doRefresh() {
 
       const { selectedChannelId } = await store.get(['selectedChannelId']);
       const kept = renderChannels(channels, selectedChannelId);
+      const chName = getEffectiveChannelName();
+      await syncChannelLinkUI(selectedChannelId || '', chName);
       renderSigPreview();
 
       if (channels.length === 0) {

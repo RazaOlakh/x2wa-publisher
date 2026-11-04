@@ -770,8 +770,9 @@ async function runSend(body) {
         }
         sig = sig.replace(/\{channel\}/gi, chName || '').replace(/\{channelName\}/gi, chName || '');
       }
+      const isTop = body.signaturePlacement === 'top';
       if (outText && outText.trim()) {
-        outText = `${outText.trim()}\n\n${sig}`;
+        outText = isTop ? `${sig}\n\n${outText.trim()}` : `${outText.trim()}\n\n${sig}`;
       } else {
         outText = sig;
       }
@@ -1226,6 +1227,10 @@ const server = http.createServer(async (req, res) => {
       }
       if (body.signature != null && (typeof body.signature !== 'string' || body.signature.length > 2000)) {
         log('error','send-rejected-bad-request',{badField:'signature'});
+        return json(res, 400, { error: 'bad-request' });
+      }
+      if (body.signaturePlacement != null && body.signaturePlacement !== 'top' && body.signaturePlacement !== 'bottom') {
+        log('error','send-rejected-bad-request',{badField:'signaturePlacement'});
         return json(res, 400, { error: 'bad-request' });
       }
       log('info','send-request-validated',{requestId:body.requestId,tweetId:body.tweetId,mediaTypes:body.media.map(m=>m.type)});

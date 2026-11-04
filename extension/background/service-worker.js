@@ -376,7 +376,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       // post, so authentication, channel eligibility, media handling,
       // duplicate protection and error reporting are all the ones already
       // in use.
-      const sig = await getActiveSignature();
+      const sigData = await getActiveSignature(channelId);
       const payload = {
         tweetId: shotId,
         tweetUrl: (msg.post && msg.post.tweetUrl) || null,
@@ -385,7 +385,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         mediaFailures: [],
         channelId,
         kind: 'screenshot',
-        ...(sig ? { signature: sig } : {}),
+        ...(sigData && sigData.signature ? { signature: sigData.signature, signaturePlacement: sigData.placement } : {}),
       };
       // The "post in Urdu" button asks the controller to translate the text
       // before sending it - including the caption that travels with a
@@ -492,7 +492,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         mediaFailures.push({ index: 0, type: 'video', videoId: null, error: 'video-source-unavailable' });
       }
 
-      const sig = await getActiveSignature();
+      const channelId = await getDefaultChannel();
+      const sigData = await getActiveSignature(channelId);
       const payload = {
         tweetId: p.tweetId,
         tweetUrl: p.tweetUrl,
@@ -502,8 +503,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         mediaFailures,
         // Kept under the old key too so an older controller still sees them.
         imageFailures: mediaFailures,
-        channelId: await getDefaultChannel(),
-        ...(sig ? { signature: sig } : {}),
+        channelId,
+        ...(sigData && sigData.signature ? { signature: sigData.signature, signaturePlacement: sigData.placement } : {}),
       };
       // The "post in Urdu" button asks the controller to translate the text
       // before sending it. Forwarded as-is; the controller validates it.
@@ -588,20 +589,26 @@ async function getDefaultChannel() {
 }
 
 const DEFAULT_SIG_TEMPLATE = `╭───────────────────────
-│ 👉 Follow *{channel}* for more updates:
-│ 🔗 {link}
+│ *{channel}*
 ╰───────────────────────`;
 
-async function getActiveSignature(overrideChannelName) {
+async function getActiveSignature(targetChannelId, overrideChannelName) {
   return new Promise((resolve) => {
-    chrome.storage.local.get(['sigEnabled', 'sigLink', 'sigTemplate', 'selectedChannelName'], (data) => {
+    chrome.storage.local.get(['sigEnabled', 'sigPlacement', 'sigLink', 'sigLinks', 'sigTemplate', 'selectedChannelName'], (data) => {
       if (data && data.sigEnabled === false) return resolve(null);
 
       const template = (data && typeof data.sigTemplate === 'string' && data.sigTemplate.trim())
         ? data.sigTemplate
         : DEFAULT_SIG_TEMPLATE;
 
-      const link = (data && typeof data.sigLink === 'string') ? data.sigLink.trim() : '';
+      const links = data && typeof data.sigLinks === 'object' && data.sigLinks ? data.sigLinks : {};
+      let link = '';
+      if (targetChannelId && links[targetChannelId] !== undefined) {
+        link = (links[targetChannelId] || '').trim();
+      } else if (typeof data.sigLink === 'string') {
+        link = data.sigLink.trim();
+      }
+
       const channelName = overrideChannelName || (data && typeof data.selectedChannelName === 'string' ? data.selectedChannelName.trim() : '');
 
       let sig = template;
@@ -611,12 +618,16 @@ async function getActiveSignature(overrideChannelName) {
       if (link) {
         sig = sig.replace(/\{link\}/gi, link);
       } else {
-        // If no link configured, cleanly strip lines containing {link} so empty placeholder doesn't post
+        // If no link configured for this channel, cleanly strip lines containing {link} so empty placeholder doesn't post
         sig = sig.split('\n').filter((line) => !line.includes('{link}')).join('\n');
       }
 
       sig = sig.trim();
-      resolve(sig || null);
+      if (!sig) return resolve(null);
+      resolve({
+        signature: sig,
+        placement: data.sigPlacement === 'top' ? 'top' : 'bottom',
+      });
     });
   });
 }
