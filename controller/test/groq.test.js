@@ -78,7 +78,7 @@ async function testGroqModule() {
   eq('strips outer double quotes', cleanGroqResponse('"یہ ایک ٹیسٹ ہے۔"'), 'یہ ایک ٹیسٹ ہے۔');
   eq('strips outer curly quotes', cleanGroqResponse('“یہ ایک ٹیسٹ ہے۔”'), 'یہ ایک ٹیسٹ ہے۔');
   eq('strips outer guillemets quotes', cleanGroqResponse('«یہ ایک ٹیسٹ ہے۔»'), 'یہ ایک ٹیسٹ ہے۔');
-  eq('strips trailing colon from author header', cleanGroqResponse('Ali | علی:\nیہ ایک ٹیسٹ ہے۔'), 'Ali | علی\nیہ ایک ٹیسٹ ہے۔');
+  eq('strips trailing colon from author header and normalizes midline spacing', cleanGroqResponse('Ali | علی:\nیہ ایک ٹیسٹ ہے۔'), 'Ali   |   علی\nیہ ایک ٹیسٹ ہے۔');
   eq('returns null for empty string', cleanGroqResponse('   '), null);
   eq('returns null for <think> only', cleanGroqResponse('<think>Just thinking</think>'), null);
   eq('returns null for non-string', cleanGroqResponse(null), null);
