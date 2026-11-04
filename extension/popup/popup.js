@@ -475,9 +475,20 @@ if (ui.revAddCancelBtn) {
 }
 
 // ------------------------------------------------ channel signature & branding
-const DEFAULT_SIG_TEMPLATE = `┌────────────────────────┐
-│   *Voice of People*    │
-└────────────────────────┘`;
+const SIG_PRESETS = {
+  heavy: `━━━━━━━━━━━━━━━━━━━━━━
+  *Voice of People*
+━━━━━━━━━━━━━━━━━━━━━━`,
+  double: `══════════════════════
+  *Voice of People*
+══════════════════════`,
+  single: `──────────────────────
+  *Voice of People*
+──────────────────────`,
+  wings: `─── 📢 *Voice of People* ───`,
+};
+
+const DEFAULT_SIG_TEMPLATE = SIG_PRESETS.heavy;
 
 function getEffectiveChannelName() {
   if (ui.select && ui.select.selectedIndex > 0 && ui.select.value) {
@@ -600,7 +611,7 @@ async function initSignatureSettings() {
   const chName = getEffectiveChannelName() || data.selectedChannelName || '';
   await syncChannelLinkUI(chId, chName);
 
-  const isOldDefault = !data.sigTemplate || data.sigTemplate.includes('{channel}') || data.sigTemplate.includes('{channelName}');
+  const isOldDefault = !data.sigTemplate || data.sigTemplate.includes('│') || data.sigTemplate.includes('{channel}') || data.sigTemplate.includes('{channelName}');
   const templateVal = isOldDefault ? DEFAULT_SIG_TEMPLATE : data.sigTemplate;
   if (isOldDefault) {
     await store.set({ sigTemplate: DEFAULT_SIG_TEMPLATE });
@@ -609,6 +620,17 @@ async function initSignatureSettings() {
   if (ui.sigTemplateInput) {
     ui.sigTemplateInput.value = templateVal;
   }
+
+  // Quick style preset buttons
+  document.querySelectorAll('.sig-preset-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const presetKey = btn.getAttribute('data-preset');
+      const tpl = SIG_PRESETS[presetKey] || DEFAULT_SIG_TEMPLATE;
+      if (ui.sigTemplateInput) ui.sigTemplateInput.value = tpl;
+      await store.set({ sigTemplate: tpl });
+      renderSigPreview();
+    });
+  });
 
   if (ui.sigEnabled) {
     ui.sigEnabled.addEventListener('change', async () => {
