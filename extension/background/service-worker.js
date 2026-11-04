@@ -596,9 +596,9 @@ async function getDefaultChannel() {
   });
 }
 
-const DEFAULT_SIG_TEMPLATE = `━━━━━━━━━━━━━━━━━━━━━━
+const DEFAULT_SIG_TEMPLATE = `──────────────────────
   *Voice of People*
-━━━━━━━━━━━━━━━━━━━━━━`;
+──────────────────────`;
 
 const DEFAULT_SIG_TEMPLATE_URDU = DEFAULT_SIG_TEMPLATE;
 
@@ -607,12 +607,12 @@ async function getActiveSignature(targetChannelId, overrideChannelName) {
     chrome.storage.local.get(['sigEnabled', 'sigPlacement', 'sigLink', 'sigLinks', 'sigTemplate', 'sigTemplateUrdu', 'selectedChannelName'], (data) => {
       if (data && data.sigEnabled === false) return resolve(null);
 
-      const isOldDefault = !data.sigTemplate || data.sigTemplate.includes('│') || data.sigTemplate.includes('{channel}') || data.sigTemplate.includes('{channelName}');
+      const isOldDefault = !data.sigTemplate || data.sigTemplate.includes('│') || data.sigTemplate.includes('━━') || data.sigTemplate.includes('{channel}') || data.sigTemplate.includes('{channelName}');
       const template = (isOldDefault || !data.sigTemplate || !data.sigTemplate.trim())
         ? DEFAULT_SIG_TEMPLATE
         : data.sigTemplate;
 
-      const isOldUrdu = !data.sigTemplateUrdu || data.sigTemplateUrdu.includes('وائس آف پیپل');
+      const isOldUrdu = !data.sigTemplateUrdu || data.sigTemplateUrdu.includes('وائس آف پیپل') || data.sigTemplateUrdu.includes('━━');
       const templateUrdu = (isOldUrdu || !data.sigTemplateUrdu || !data.sigTemplateUrdu.trim())
         ? DEFAULT_SIG_TEMPLATE_URDU
         : data.sigTemplateUrdu;
@@ -647,7 +647,7 @@ async function getActiveSignature(targetChannelId, overrideChannelName) {
       resolve({
         signature: sig || sigUrdu,
         signatureUrdu: sigUrdu || sig,
-        placement: data.sigPlacement === 'top' ? 'top' : 'bottom',
+        placement: (data && data.sigPlacement === 'bottom') ? 'bottom' : 'top',
       });
     });
   });

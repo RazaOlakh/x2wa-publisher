@@ -638,7 +638,7 @@ async function initSignatureSettings() {
   const chName = getEffectiveChannelName() || data.selectedChannelName || '';
   await syncChannelLinkUI(chId, chName);
 
-  const isOldDefault = !data.sigTemplate || data.sigTemplate.includes('│') || data.sigTemplate.includes('{channel}') || data.sigTemplate.includes('{channelName}');
+  const isOldDefault = !data.sigTemplate || data.sigTemplate.includes('│') || data.sigTemplate.includes('━━') || data.sigTemplate.includes('{channel}') || data.sigTemplate.includes('{channelName}');
   const templateVal = isOldDefault ? DEFAULT_SIG_TEMPLATE : data.sigTemplate;
   if (isOldDefault) {
     await store.set({ sigTemplate: DEFAULT_SIG_TEMPLATE });
@@ -648,7 +648,7 @@ async function initSignatureSettings() {
     ui.sigTemplateInput.value = templateVal;
   }
 
-  const isOldUrdu = !data.sigTemplateUrdu || data.sigTemplateUrdu.includes('وائس آف پیپل');
+  const isOldUrdu = !data.sigTemplateUrdu || data.sigTemplateUrdu.includes('وائس آف پیپل') || data.sigTemplateUrdu.includes('━━');
   const templateUrduVal = isOldUrdu ? DEFAULT_SIG_TEMPLATE_URDU : data.sigTemplateUrdu;
   if (isOldUrdu) {
     await store.set({ sigTemplateUrdu: DEFAULT_SIG_TEMPLATE_URDU });
