@@ -1231,6 +1231,24 @@ const server = http.createServer(async (req, res) => {
       log('info','send-request-validated',{requestId:body.requestId,tweetId:body.tweetId,mediaTypes:body.media.map(m=>m.type)});
       const result = await sendJob(body); log('info','send-response',{requestId:body.requestId,jobId:result.jobId,ok:result.ok,status:result.error||'ok'}); return json(res, 200, result);
     }
+    if (req.method === 'POST' && url.pathname === '/direct/send') {
+      if (state !== 'ready' || !client) {
+        return json(res, 409, { error: 'whatsapp-not-ready', state });
+      }
+      const body = JSON.parse(await readBody(req));
+      let { to, text } = body || {};
+      if (!to || !text) return json(res, 400, { error: 'missing-to-or-text' });
+      to = String(to).replace(/[^0-9]/g, '');
+      if (!to) return json(res, 400, { error: 'invalid-to' });
+      const jid = `${to}@c.us`;
+      try {
+        const m = await client.sendMessage(jid, text);
+        return json(res, 200, { ok: true, id: m && m.id });
+      } catch (e) {
+        log('error', 'direct-send-failed', { to, error: errMsg(e) });
+        return json(res, 500, { ok: false, error: errMsg(e) });
+      }
+    }
     json(res, 404, { error: 'unknown' });
   } catch (e) {
     json(res, 500, { error: e.message });
