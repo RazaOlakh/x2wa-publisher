@@ -588,18 +588,19 @@ async function getDefaultChannel() {
   });
 }
 
-const DEFAULT_SIG_TEMPLATE = `╭───────────────────────
-│ *{channel}*
-╰───────────────────────`;
+const DEFAULT_SIG_TEMPLATE = `┌────────────────────────┐
+│   *Voice of People*    │
+└────────────────────────┘`;
 
 async function getActiveSignature(targetChannelId, overrideChannelName) {
   return new Promise((resolve) => {
     chrome.storage.local.get(['sigEnabled', 'sigPlacement', 'sigLink', 'sigLinks', 'sigTemplate', 'selectedChannelName'], (data) => {
       if (data && data.sigEnabled === false) return resolve(null);
 
-      const template = (data && typeof data.sigTemplate === 'string' && data.sigTemplate.trim())
-        ? data.sigTemplate
-        : DEFAULT_SIG_TEMPLATE;
+      const isOldDefault = !data.sigTemplate || data.sigTemplate.includes('{channel}') || data.sigTemplate.includes('{channelName}');
+      const template = (isOldDefault || !data.sigTemplate || !data.sigTemplate.trim())
+        ? DEFAULT_SIG_TEMPLATE
+        : data.sigTemplate;
 
       const links = data && typeof data.sigLinks === 'object' && data.sigLinks ? data.sigLinks : {};
       let link = '';

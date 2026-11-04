@@ -475,9 +475,9 @@ if (ui.revAddCancelBtn) {
 }
 
 // ------------------------------------------------ channel signature & branding
-const DEFAULT_SIG_TEMPLATE = `╭───────────────────────
-│ *{channel}*
-╰───────────────────────`;
+const DEFAULT_SIG_TEMPLATE = `┌────────────────────────┐
+│   *Voice of People*    │
+└────────────────────────┘`;
 
 function getEffectiveChannelName() {
   if (ui.select && ui.select.selectedIndex > 0 && ui.select.value) {
@@ -600,10 +600,14 @@ async function initSignatureSettings() {
   const chName = getEffectiveChannelName() || data.selectedChannelName || '';
   await syncChannelLinkUI(chId, chName);
 
+  const isOldDefault = !data.sigTemplate || data.sigTemplate.includes('{channel}') || data.sigTemplate.includes('{channelName}');
+  const templateVal = isOldDefault ? DEFAULT_SIG_TEMPLATE : data.sigTemplate;
+  if (isOldDefault) {
+    await store.set({ sigTemplate: DEFAULT_SIG_TEMPLATE });
+  }
+
   if (ui.sigTemplateInput) {
-    ui.sigTemplateInput.value = (typeof data.sigTemplate === 'string' && data.sigTemplate.trim())
-      ? data.sigTemplate
-      : DEFAULT_SIG_TEMPLATE;
+    ui.sigTemplateInput.value = templateVal;
   }
 
   if (ui.sigEnabled) {
