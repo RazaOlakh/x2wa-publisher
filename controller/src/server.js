@@ -164,6 +164,7 @@ function makeClient() {
 }
 
 let client = null;
+const recentMessages = [];
 
 function startClient(reason) {
   if (client) return;
@@ -183,6 +184,21 @@ function startClient(reason) {
     setState('ready'); waInfo = client.info; lastQr = null; channelCache = null;
     restartAttempts = 0; restartPending = false; beat.reset();
     log('info','ready',{me: waInfo && waInfo.wid && waInfo.wid._serialized});
+  });
+  client.on('message', (msg) => {
+    try {
+      recentMessages.push({
+        id: msg.id ? msg.id._serialized : null,
+        from: msg.from,
+        to: msg.to,
+        fromMe: Boolean(msg.fromMe),
+        body: msg.body,
+        timestamp: msg.timestamp || Math.floor(Date.now() / 1000),
+        type: msg.type
+      });
+      if (recentMessages.length > 200) recentMessages.shift();
+      log('info', 'incoming-message', { from: msg.from, body: msg.body });
+    } catch {}
   });
   client.on('disconnected', (r) => {
     log('warn','disconnected',{reason:String(r)});
@@ -1275,6 +1291,56 @@ const server = http.createServer(async (req, res) => {
       } catch (e) {
         log('error', 'direct-send-failed', { to, error: errMsg(e) });
         return json(res, 500, { ok: false, error: errMsg(e) });
+      }
+    }
+    if (req.method === 'GET' && url.pathname === '/direct/messages') {
+      if (state !== 'ready' || !client) {
+        return json(res, 409, { error: 'whatsapp-not-ready', state });
+      }
+      let to = url.searchParams.get('to');
+      let jid = to ? `${String(to).replace(/[^0-9]/g, '')}@c.us` : null;
+      let limit = parseInt(url.searchParams.get('limit') || '15', 10);
+      try {
+        if (jid && typeof client.getChatById === 'function') {
+          const chat = await client.getChatById(jid);
+          if (chat && typeof chat.fetchMessages === 'function') {
+            const raw = await chat.fetchMessages({ limit });
+            const list = raw.map(m => ({
+              id: m.id ? m.id._serialized : null,
+              from: m.from,
+              to: m.to,
+              fromMe: Boolean(m.fromMe),
+              body: m.body,
+              timestamp: m.timestamp,
+              type: m.type
+            }));
+            return json(res, 200, { ok: true, messages: list });
+          }
+        }
+      } catch (e) {
+        log('warn', 'fetch-messages-failed', { error: errMsg(e) });
+      }
+      const filtered = jid ? recentMessages.filter(m => m.from === jid || (m.from && m.from.includes(to))) : recentMessages;
+      return json(res, 200, { ok: true, messages: filtered });
+    }
+    if (req.method === 'GET' && url.pathname === '/direct/download-media') {
+      if (state !== 'ready' || !client) {
+        return json(res, 409, { error: 'whatsapp-not-ready', state });
+      }
+      let msgId = url.searchParams.get('msgId');
+      let to = url.searchParams.get('to') || '923006900001';
+      let jid = `${String(to).replace(/[^0-9]/g, '')}@c.us`;
+      try {
+        const chat = await client.getChatById(jid);
+        const msgs = await chat.fetchMessages({ limit: 15 });
+        const target = msgs.find(m => (m.id && m.id._serialized === msgId) || (!msgId && m.hasMedia));
+        if (target && target.hasMedia && typeof target.downloadMedia === 'function') {
+          const media = await target.downloadMedia();
+          return json(res, 200, { ok: true, media });
+        }
+        return json(res, 404, { error: 'media-not-found' });
+      } catch (e) {
+        return json(res, 500, { error: errMsg(e) });
       }
     }
     json(res, 404, { error: 'unknown' });
