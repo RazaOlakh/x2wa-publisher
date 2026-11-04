@@ -385,7 +385,11 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         mediaFailures: [],
         channelId,
         kind: 'screenshot',
-        ...(sigData && sigData.signature ? { signature: sigData.signature, signaturePlacement: sigData.placement } : {}),
+        ...(sigData && sigData.signature ? {
+          signature: sigData.signature,
+          signatureUrdu: sigData.signatureUrdu,
+          signaturePlacement: sigData.placement,
+        } : {}),
       };
       // The "post in Urdu" button asks the controller to translate the text
       // before sending it - including the caption that travels with a
@@ -504,7 +508,11 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         // Kept under the old key too so an older controller still sees them.
         imageFailures: mediaFailures,
         channelId,
-        ...(sigData && sigData.signature ? { signature: sigData.signature, signaturePlacement: sigData.placement } : {}),
+        ...(sigData && sigData.signature ? {
+          signature: sigData.signature,
+          signatureUrdu: sigData.signatureUrdu,
+          signaturePlacement: sigData.placement,
+        } : {}),
       };
       // The "post in Urdu" button asks the controller to translate the text
       // before sending it. Forwarded as-is; the controller validates it.
@@ -592,15 +600,23 @@ const DEFAULT_SIG_TEMPLATE = `━━━━━━━━━━━━━━━━�
   *Voice of People*
 ━━━━━━━━━━━━━━━━━━━━━━`;
 
+const DEFAULT_SIG_TEMPLATE_URDU = `━━━━━━━━━━━━━━━━━━━━━━
+  *Voice of People   |   وائس آف پیپل*
+━━━━━━━━━━━━━━━━━━━━━━`;
+
 async function getActiveSignature(targetChannelId, overrideChannelName) {
   return new Promise((resolve) => {
-    chrome.storage.local.get(['sigEnabled', 'sigPlacement', 'sigLink', 'sigLinks', 'sigTemplate', 'selectedChannelName'], (data) => {
+    chrome.storage.local.get(['sigEnabled', 'sigPlacement', 'sigLink', 'sigLinks', 'sigTemplate', 'sigTemplateUrdu', 'selectedChannelName'], (data) => {
       if (data && data.sigEnabled === false) return resolve(null);
 
       const isOldDefault = !data.sigTemplate || data.sigTemplate.includes('│') || data.sigTemplate.includes('{channel}') || data.sigTemplate.includes('{channelName}');
       const template = (isOldDefault || !data.sigTemplate || !data.sigTemplate.trim())
         ? DEFAULT_SIG_TEMPLATE
         : data.sigTemplate;
+
+      const templateUrdu = (data.sigTemplateUrdu && data.sigTemplateUrdu.trim())
+        ? data.sigTemplateUrdu
+        : DEFAULT_SIG_TEMPLATE_URDU;
 
       const links = data && typeof data.sigLinks === 'object' && data.sigLinks ? data.sigLinks : {};
       let link = '';
@@ -612,21 +628,26 @@ async function getActiveSignature(targetChannelId, overrideChannelName) {
 
       const channelName = overrideChannelName || (data && typeof data.selectedChannelName === 'string' ? data.selectedChannelName.trim() : '');
 
-      let sig = template;
-      if (channelName) {
-        sig = sig.replace(/\{channel\}/gi, channelName).replace(/\{channelName\}/gi, channelName);
-      }
-      if (link) {
-        sig = sig.replace(/\{link\}/gi, link);
-      } else {
-        // If no link configured for this channel, cleanly strip lines containing {link} so empty placeholder doesn't post
-        sig = sig.split('\n').filter((line) => !line.includes('{link}')).join('\n');
+      function renderTemplate(tpl) {
+        let text = tpl;
+        if (channelName) {
+          text = text.replace(/\{channel\}/gi, channelName).replace(/\{channelName\}/gi, channelName);
+        }
+        if (link) {
+          text = text.replace(/\{link\}/gi, link);
+        } else {
+          text = text.split('\n').filter((line) => !line.includes('{link}')).join('\n');
+        }
+        return text.trim();
       }
 
-      sig = sig.trim();
-      if (!sig) return resolve(null);
+      const sig = renderTemplate(template);
+      const sigUrdu = renderTemplate(templateUrdu);
+
+      if (!sig && !sigUrdu) return resolve(null);
       resolve({
-        signature: sig,
+        signature: sig || sigUrdu,
+        signatureUrdu: sigUrdu || sig,
         placement: data.sigPlacement === 'top' ? 'top' : 'bottom',
       });
     });

@@ -20,8 +20,9 @@ const ui = {
   sigCard: el('sigCard'), sigEnabled: el('sigEnabled'), sigForm: el('sigForm'),
   sigPlacementTop: el('sigPlacementTop'), sigPlacementBottom: el('sigPlacementBottom'),
   sigLinkLabel: el('sigLinkLabel'), sigLinkInput: el('sigLinkInput'),
-  sigTemplateInput: el('sigTemplateInput'), sigResetBtn: el('sigResetBtn'),
-  sigPreview: el('sigPreview'),
+  sigTemplateInput: el('sigTemplateInput'), sigTemplateUrduInput: el('sigTemplateUrduInput'),
+  sigPreviewLangEn: el('sigPreviewLangEn'), sigPreviewLangUr: el('sigPreviewLangUr'),
+  sigResetBtn: el('sigResetBtn'), sigPreview: el('sigPreview'),
   // Groq Translation
   groqCard: el('groqCard'), groqBadge: el('groqBadge'),
   groqModelSelect: el('groqModelSelect'),
@@ -490,6 +491,10 @@ const SIG_PRESETS = {
 
 const DEFAULT_SIG_TEMPLATE = SIG_PRESETS.heavy;
 
+const DEFAULT_SIG_TEMPLATE_URDU = `━━━━━━━━━━━━━━━━━━━━━━
+  *Voice of People   |   وائس آف پیپل*
+━━━━━━━━━━━━━━━━━━━━━━`;
+
 function getEffectiveChannelName() {
   if (ui.select && ui.select.selectedIndex > 0 && ui.select.value) {
     return ui.select.options[ui.select.selectedIndex].textContent;
@@ -548,7 +553,18 @@ async function renderSigPreview() {
   }
 
   const rawLink = ui.sigLinkInput ? ui.sigLinkInput.value.trim() : '';
-  let tpl = (ui.sigTemplateInput && ui.sigTemplateInput.value) || DEFAULT_SIG_TEMPLATE;
+  const isUrduPreview = Boolean(ui.sigPreviewLangUr && ui.sigPreviewLangUr.checked);
+
+  let tpl = '';
+  if (isUrduPreview) {
+    tpl = (ui.sigTemplateUrduInput && ui.sigTemplateUrduInput.value.trim()) || DEFAULT_SIG_TEMPLATE_URDU;
+    ui.sigPreview.style.direction = 'rtl';
+    ui.sigPreview.style.textAlign = 'right';
+  } else {
+    tpl = (ui.sigTemplateInput && ui.sigTemplateInput.value) || DEFAULT_SIG_TEMPLATE;
+    ui.sigPreview.style.direction = 'ltr';
+    ui.sigPreview.style.textAlign = 'left';
+  }
 
   let previewText = tpl
     .replace(/\{channel\}/gi, chName)
@@ -561,11 +577,23 @@ async function renderSigPreview() {
     previewText = previewText.split('\n').filter((l) => !l.includes('{link}')).join('\n');
   }
 
+  // Prepend BiDi directional marker to match WhatsApp rendering
+  const dirMark = isUrduPreview ? '\u200F' : '\u200E';
+  previewText = previewText.split('\n').map(l => l.trim() ? `${dirMark}${l}` : l).join('\n');
+
   const placement = getSigPlacement();
-  if (placement === 'top') {
-    ui.sigPreview.textContent = `${previewText}\n\n[Sample Tweet Content...]`;
+  if (isUrduPreview) {
+    if (placement === 'top') {
+      ui.sigPreview.textContent = `${previewText}\n\n[یہاں اردو پوسٹ کا متن آئے گا...]`;
+    } else {
+      ui.sigPreview.textContent = `[یہاں اردو پوسٹ کا متن آئے گا...]\n\n${previewText}`;
+    }
   } else {
-    ui.sigPreview.textContent = `[Sample Tweet Content...]\n\n${previewText}`;
+    if (placement === 'top') {
+      ui.sigPreview.textContent = `${previewText}\n\n[Sample Tweet Content...]`;
+    } else {
+      ui.sigPreview.textContent = `[Sample Tweet Content...]\n\n${previewText}`;
+    }
   }
 }
 
@@ -590,13 +618,14 @@ function debouncedSaveSig() {
       sigLinks: links,
       sigLink: linkVal,
       sigTemplate: ui.sigTemplateInput ? ui.sigTemplateInput.value : DEFAULT_SIG_TEMPLATE,
+      sigTemplateUrdu: ui.sigTemplateUrduInput ? ui.sigTemplateUrduInput.value : '',
     });
   }, 250);
 }
 
 async function initSignatureSettings() {
   if (!ui.sigCard) return;
-  const data = await store.get(['sigEnabled', 'sigPlacement', 'sigLink', 'sigLinks', 'sigTemplate', 'selectedChannelId', 'selectedChannelName']);
+  const data = await store.get(['sigEnabled', 'sigPlacement', 'sigLink', 'sigLinks', 'sigTemplate', 'sigTemplateUrdu', 'selectedChannelId', 'selectedChannelName']);
   const enabled = data.sigEnabled !== false;
   if (ui.sigEnabled) ui.sigEnabled.checked = enabled;
 
@@ -619,6 +648,12 @@ async function initSignatureSettings() {
 
   if (ui.sigTemplateInput) {
     ui.sigTemplateInput.value = templateVal;
+  }
+
+  if (ui.sigTemplateUrduInput) {
+    ui.sigTemplateUrduInput.value = (typeof data.sigTemplateUrdu === 'string' && data.sigTemplateUrdu.trim())
+      ? data.sigTemplateUrdu
+      : DEFAULT_SIG_TEMPLATE_URDU;
   }
 
   // Quick style preset buttons
@@ -652,6 +687,13 @@ async function initSignatureSettings() {
     });
   }
 
+  if (ui.sigPreviewLangEn) {
+    ui.sigPreviewLangEn.addEventListener('change', renderSigPreview);
+  }
+  if (ui.sigPreviewLangUr) {
+    ui.sigPreviewLangUr.addEventListener('change', renderSigPreview);
+  }
+
   if (ui.sigLinkInput) {
     ui.sigLinkInput.addEventListener('input', () => {
       renderSigPreview();
@@ -666,10 +708,18 @@ async function initSignatureSettings() {
     });
   }
 
+  if (ui.sigTemplateUrduInput) {
+    ui.sigTemplateUrduInput.addEventListener('input', () => {
+      renderSigPreview();
+      debouncedSaveSig();
+    });
+  }
+
   if (ui.sigResetBtn) {
     ui.sigResetBtn.addEventListener('click', async () => {
       if (ui.sigTemplateInput) ui.sigTemplateInput.value = DEFAULT_SIG_TEMPLATE;
-      await store.set({ sigTemplate: DEFAULT_SIG_TEMPLATE });
+      if (ui.sigTemplateUrduInput) ui.sigTemplateUrduInput.value = DEFAULT_SIG_TEMPLATE_URDU;
+      await store.set({ sigTemplate: DEFAULT_SIG_TEMPLATE, sigTemplateUrdu: DEFAULT_SIG_TEMPLATE_URDU });
       renderSigPreview();
     });
   }

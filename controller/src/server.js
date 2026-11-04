@@ -754,8 +754,14 @@ async function runSend(body) {
       }
     }
     // Append channel branding signature if provided
-    if (body.signature && typeof body.signature === 'string' && body.signature.trim()) {
-      let sig = body.signature.trim();
+    let rawSig = body.signature;
+    const postIsUrdu = isUrduText(outText) || body.translateTo === 'ur';
+    if (postIsUrdu && body.signatureUrdu && typeof body.signatureUrdu === 'string' && body.signatureUrdu.trim()) {
+      rawSig = body.signatureUrdu;
+    }
+
+    if (rawSig && typeof rawSig === 'string' && rawSig.trim()) {
+      let sig = rawSig.trim();
       if (sig.includes('{channel}') || sig.includes('{channelName}')) {
         let chName = '';
         if (channelCache && channelCache.body && Array.isArray(channelCache.body.channels)) {
@@ -770,6 +776,18 @@ async function runSend(body) {
         }
         sig = sig.replace(/\{channel\}/gi, chName || '').replace(/\{channelName\}/gi, chName || '');
       }
+
+      // BiDi directional lock:
+      // Neutral symbols (━, ═, ─) switch direction after LTR text inside RTL messages,
+      // causing bottom lines to jump across the screen to the opposite margin.
+      // Prepending \u200F (RLM) for Urdu or \u200E (LRM) for English binds all lines
+      // to the same margin so they never split or jump!
+      const dirMark = postIsUrdu ? '\u200F' : '\u200E';
+      sig = sig.split('\n').map(line => {
+        if (!line.trim()) return line;
+        return `${dirMark}${line.replace(/[\u200E\u200F]/g, '')}`;
+      }).join('\n');
+
       const isTop = body.signaturePlacement === 'top';
       if (outText && outText.trim()) {
         outText = isTop ? `${sig}\n\n${outText.trim()}` : `${outText.trim()}\n\n${sig}`;
@@ -1227,6 +1245,10 @@ const server = http.createServer(async (req, res) => {
       }
       if (body.signature != null && (typeof body.signature !== 'string' || body.signature.length > 2000)) {
         log('error','send-rejected-bad-request',{badField:'signature'});
+        return json(res, 400, { error: 'bad-request' });
+      }
+      if (body.signatureUrdu != null && (typeof body.signatureUrdu !== 'string' || body.signatureUrdu.length > 2000)) {
+        log('error','send-rejected-bad-request',{badField:'signatureUrdu'});
         return json(res, 400, { error: 'bad-request' });
       }
       if (body.signaturePlacement != null && body.signaturePlacement !== 'top' && body.signaturePlacement !== 'bottom') {
