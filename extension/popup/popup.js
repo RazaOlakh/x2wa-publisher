@@ -489,7 +489,7 @@ const SIG_PRESETS = {
   wings: `─── 📢 *Voice of People* ───`,
 };
 
-const DEFAULT_SIG_TEMPLATE = SIG_PRESETS.heavy;
+const DEFAULT_SIG_TEMPLATE = SIG_PRESETS.clean;
 
 const DEFAULT_SIG_TEMPLATE_URDU = DEFAULT_SIG_TEMPLATE;
 
@@ -627,7 +627,7 @@ async function initSignatureSettings() {
   const enabled = data.sigEnabled !== false;
   if (ui.sigEnabled) ui.sigEnabled.checked = enabled;
 
-  const placement = data.sigPlacement || 'bottom';
+  const placement = data.sigPlacement || 'top';
   if (placement === 'top') {
     if (ui.sigPlacementTop) ui.sigPlacementTop.checked = true;
   } else {
