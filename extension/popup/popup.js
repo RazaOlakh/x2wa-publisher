@@ -491,9 +491,7 @@ const SIG_PRESETS = {
 
 const DEFAULT_SIG_TEMPLATE = SIG_PRESETS.heavy;
 
-const DEFAULT_SIG_TEMPLATE_URDU = `━━━━━━━━━━━━━━━━━━━━━━
-  *Voice of People   |   وائس آف پیپل*
-━━━━━━━━━━━━━━━━━━━━━━`;
+const DEFAULT_SIG_TEMPLATE_URDU = DEFAULT_SIG_TEMPLATE;
 
 function getEffectiveChannelName() {
   if (ui.select && ui.select.selectedIndex > 0 && ui.select.value) {
@@ -579,7 +577,7 @@ async function renderSigPreview() {
 
   // Prepend BiDi directional marker to match WhatsApp rendering
   const dirMark = isUrduPreview ? '\u200F' : '\u200E';
-  previewText = previewText.split('\n').map(l => l.trim() ? `${dirMark}${l}` : l).join('\n');
+  previewText = previewText.split('\n').map(l => l.trim() ? `${dirMark}${l}${dirMark}` : l).join('\n');
 
   const placement = getSigPlacement();
   if (isUrduPreview) {
@@ -650,10 +648,14 @@ async function initSignatureSettings() {
     ui.sigTemplateInput.value = templateVal;
   }
 
+  const isOldUrdu = !data.sigTemplateUrdu || data.sigTemplateUrdu.includes('وائس آف پیپل');
+  const templateUrduVal = isOldUrdu ? DEFAULT_SIG_TEMPLATE_URDU : data.sigTemplateUrdu;
+  if (isOldUrdu) {
+    await store.set({ sigTemplateUrdu: DEFAULT_SIG_TEMPLATE_URDU });
+  }
+
   if (ui.sigTemplateUrduInput) {
-    ui.sigTemplateUrduInput.value = (typeof data.sigTemplateUrdu === 'string' && data.sigTemplateUrdu.trim())
-      ? data.sigTemplateUrdu
-      : DEFAULT_SIG_TEMPLATE_URDU;
+    ui.sigTemplateUrduInput.value = templateUrduVal;
   }
 
   // Quick style preset buttons

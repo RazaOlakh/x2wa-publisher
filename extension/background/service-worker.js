@@ -600,9 +600,7 @@ const DEFAULT_SIG_TEMPLATE = `━━━━━━━━━━━━━━━━�
   *Voice of People*
 ━━━━━━━━━━━━━━━━━━━━━━`;
 
-const DEFAULT_SIG_TEMPLATE_URDU = `━━━━━━━━━━━━━━━━━━━━━━
-  *Voice of People   |   وائس آف پیپل*
-━━━━━━━━━━━━━━━━━━━━━━`;
+const DEFAULT_SIG_TEMPLATE_URDU = DEFAULT_SIG_TEMPLATE;
 
 async function getActiveSignature(targetChannelId, overrideChannelName) {
   return new Promise((resolve) => {
@@ -614,9 +612,10 @@ async function getActiveSignature(targetChannelId, overrideChannelName) {
         ? DEFAULT_SIG_TEMPLATE
         : data.sigTemplate;
 
-      const templateUrdu = (data.sigTemplateUrdu && data.sigTemplateUrdu.trim())
-        ? data.sigTemplateUrdu
-        : DEFAULT_SIG_TEMPLATE_URDU;
+      const isOldUrdu = !data.sigTemplateUrdu || data.sigTemplateUrdu.includes('وائس آف پیپل');
+      const templateUrdu = (isOldUrdu || !data.sigTemplateUrdu || !data.sigTemplateUrdu.trim())
+        ? DEFAULT_SIG_TEMPLATE_URDU
+        : data.sigTemplateUrdu;
 
       const links = data && typeof data.sigLinks === 'object' && data.sigLinks ? data.sigLinks : {};
       let link = '';

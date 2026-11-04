@@ -780,12 +780,13 @@ async function runSend(body) {
       // BiDi directional lock:
       // Neutral symbols (━, ═, ─) switch direction after LTR text inside RTL messages,
       // causing bottom lines to jump across the screen to the opposite margin.
-      // Prepending \u200F (RLM) for Urdu or \u200E (LRM) for English binds all lines
-      // to the same margin so they never split or jump!
+      // Bracketing each line with \u200F (RLM) for Urdu or \u200E (LRM) for English
+      // binds all lines to the same margin so they never split or jump!
       const dirMark = postIsUrdu ? '\u200F' : '\u200E';
       sig = sig.split('\n').map(line => {
         if (!line.trim()) return line;
-        return `${dirMark}${line.replace(/[\u200E\u200F]/g, '')}`;
+        const clean = line.replace(/[\u200E\u200F]/g, '');
+        return `${dirMark}${clean}${dirMark}`;
       }).join('\n');
 
       const isTop = body.signaturePlacement === 'top';
