@@ -477,15 +477,19 @@ if (ui.revAddCancelBtn) {
 
 // ------------------------------------------------ channel signature & branding
 const SIG_PRESETS = {
+  clean: `──────────────────────
+  *Voice of People*
+──────────────────────`,
+  single: `──────────────────────
+  *Voice of People*
+──────────────────────`,
+  textonly: `*Voice of People*`,
   heavy: `━━━━━━━━━━━━━━━━━━━━━━
   *Voice of People*
 ━━━━━━━━━━━━━━━━━━━━━━`,
   double: `══════════════════════
   *Voice of People*
 ══════════════════════`,
-  single: `──────────────────────
-  *Voice of People*
-──────────────────────`,
   wings: `─── 📢 *Voice of People* ───`,
 };
 
