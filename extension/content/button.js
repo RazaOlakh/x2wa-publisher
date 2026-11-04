@@ -654,15 +654,8 @@ function markSent(btn) {
 // first moment of the page; the first one waits, and stays invisible rather
 // than flashing the WhatsApp icon first.
 function restoreSentState(article, btn) {
-  const tweetId = tweetIdFromArticle(article);
-  if (!tweetId) return Promise.resolve();
-  if (sentMap) {
-    if (sentMap[tweetId]) markSent(btn);
-    return Promise.resolve();
-  }
-  return sentMapReady.then(() => {
-    if (btn.isConnected && sentMap[tweetId]) markSent(btn); // may have scrolled away
-  });
+  // Allow duplicate sends: do not mark buttons as permanently sent
+  return Promise.resolve();
 }
 
 // Build one of the send buttons. They are identical apart from the variant
@@ -811,12 +804,10 @@ async function postQuoteShot(btn, v, variant, article, quoteEl, requestId) {
   } finally {
     btn.disabled = false;
   }
-  if (!sent) {
-    setTimeout(() => {
-      const s = btn.dataset.state;
-      if (s !== 'success' && s !== 'working') renderButton(btn, 'idle', 'Post to WhatsApp');
-    }, 4000);
-  }
+  setTimeout(() => {
+    const s = btn.dataset.state;
+    if (s !== 'working') renderButton(btn, 'idle', 'Post to WhatsApp');
+  }, 4000);
 }
 
 async function onPostClick(ev, btn, variant) {
@@ -923,12 +914,10 @@ async function onPostClick(ev, btn, variant) {
   // restored while the send was running. A send still in flight is
   // left alone too, or a second click would be reset out from under
   // itself.
-  if (!sent) {
-    setTimeout(() => {
-      const s = btn.dataset.state;
-      if (s !== 'success' && s !== 'working') renderButton(btn, 'idle', 'Post to WhatsApp');
-    }, 4000);
-  }
+  setTimeout(() => {
+    const s = btn.dataset.state;
+    if (s !== 'working') renderButton(btn, 'idle', 'Post to WhatsApp');
+  }, 4000);
 }
 
 function isExtensionContextValid() {
