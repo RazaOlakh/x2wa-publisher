@@ -69,7 +69,7 @@ async function testGroqModule() {
   ok('system prompt translates acronyms correctly', SYSTEM_PROMPT.includes('PTI → پی ٹی آئی'));
   ok('system prompt transliterates names', SYSTEM_PROMPT.includes('Ali → علی'));
   ok('system prompt preserves URLs, hashtags, mentions', SYSTEM_PROMPT.includes('Keep @handles, usernames, hashtags, URLs, emails'));
-  ok('system prompt forbids explanations or commentary', SYSTEM_PROMPT.includes('Return ONLY the final translated Urdu text without any introductory remarks, notes, or explanations.'));
+  ok('system prompt forbids explanations or commentary', SYSTEM_PROMPT.includes('Return ONLY the final translated text without any introductory remarks, notes, or explanations.'));
 
   console.log('cleanGroqResponse sanitization');
   eq('plain text is trimmed', cleanGroqResponse('   یہ ایک ٹیسٹ ہے۔   '), 'یہ ایک ٹیسٹ ہے۔');
