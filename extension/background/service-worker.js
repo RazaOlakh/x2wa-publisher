@@ -376,6 +376,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       // post, so authentication, channel eligibility, media handling,
       // duplicate protection and error reporting are all the ones already
       // in use.
+      const sig = await getActiveSignature();
       const payload = {
         tweetId: shotId,
         tweetUrl: (msg.post && msg.post.tweetUrl) || null,
@@ -384,6 +385,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         mediaFailures: [],
         channelId,
         kind: 'screenshot',
+        ...(sig ? { signature: sig } : {}),
       };
       // The "post in Urdu" button asks the controller to translate the text
       // before sending it - including the caption that travels with a
@@ -490,6 +492,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         mediaFailures.push({ index: 0, type: 'video', videoId: null, error: 'video-source-unavailable' });
       }
 
+      const sig = await getActiveSignature();
       const payload = {
         tweetId: p.tweetId,
         tweetUrl: p.tweetUrl,
@@ -500,6 +503,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         // Kept under the old key too so an older controller still sees them.
         imageFailures: mediaFailures,
         channelId: await getDefaultChannel(),
+        ...(sig ? { signature: sig } : {}),
       };
       // The "post in Urdu" button asks the controller to translate the text
       // before sending it. Forwarded as-is; the controller validates it.
@@ -580,5 +584,39 @@ function unescapeJsString(s) {
 async function getDefaultChannel() {
   return new Promise((resolve) => {
     chrome.storage.local.get(['defaultChannel','selectedChannelId'], (r) => resolve(r.selectedChannelId || r.defaultChannel || ''));
+  });
+}
+
+const DEFAULT_SIG_TEMPLATE = `╭───────────────────────
+│ 👉 Follow *{channel}* for more updates:
+│ 🔗 {link}
+╰───────────────────────`;
+
+async function getActiveSignature(overrideChannelName) {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(['sigEnabled', 'sigLink', 'sigTemplate', 'selectedChannelName'], (data) => {
+      if (data && data.sigEnabled === false) return resolve(null);
+
+      const template = (data && typeof data.sigTemplate === 'string' && data.sigTemplate.trim())
+        ? data.sigTemplate
+        : DEFAULT_SIG_TEMPLATE;
+
+      const link = (data && typeof data.sigLink === 'string') ? data.sigLink.trim() : '';
+      const channelName = overrideChannelName || (data && typeof data.selectedChannelName === 'string' ? data.selectedChannelName.trim() : '');
+
+      let sig = template;
+      if (channelName) {
+        sig = sig.replace(/\{channel\}/gi, channelName).replace(/\{channelName\}/gi, channelName);
+      }
+      if (link) {
+        sig = sig.replace(/\{link\}/gi, link);
+      } else {
+        // If no link configured, cleanly strip lines containing {link} so empty placeholder doesn't post
+        sig = sig.split('\n').filter((line) => !line.includes('{link}')).join('\n');
+      }
+
+      sig = sig.trim();
+      resolve(sig || null);
+    });
   });
 }

@@ -753,6 +753,29 @@ async function runSend(body) {
         }
       }
     }
+    // Append channel branding signature if provided
+    if (body.signature && typeof body.signature === 'string' && body.signature.trim()) {
+      let sig = body.signature.trim();
+      if (sig.includes('{channel}') || sig.includes('{channelName}')) {
+        let chName = '';
+        if (channelCache && channelCache.body && Array.isArray(channelCache.body.channels)) {
+          const found = channelCache.body.channels.find(c => c.id === channelId);
+          if (found && found.name) chName = found.name;
+        }
+        if (!chName && client) {
+          try {
+            const chat = await client.getChatById(channelId);
+            if (chat && chat.name) chName = chat.name;
+          } catch {}
+        }
+        sig = sig.replace(/\{channel\}/gi, chName || '').replace(/\{channelName\}/gi, chName || '');
+      }
+      if (outText && outText.trim()) {
+        outText = `${outText.trim()}\n\n${sig}`;
+      } else {
+        outText = sig;
+      }
+    }
     if (Array.isArray(media) && media.length > 0) {
       for (let i = 0; i < media.length; i++) {
         const m = media[i];
@@ -1199,6 +1222,10 @@ const server = http.createServer(async (req, res) => {
       }
       if (body.author != null && (typeof body.author !== 'string' || body.author.length > 200)) {
         log('error','send-rejected-bad-request',{badField:'author'});
+        return json(res, 400, { error: 'bad-request' });
+      }
+      if (body.signature != null && (typeof body.signature !== 'string' || body.signature.length > 2000)) {
+        log('error','send-rejected-bad-request',{badField:'signature'});
         return json(res, 400, { error: 'bad-request' });
       }
       log('info','send-request-validated',{requestId:body.requestId,tweetId:body.tweetId,mediaTypes:body.media.map(m=>m.type)});

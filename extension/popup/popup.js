@@ -16,6 +16,10 @@ const ui = {
   verDetail: el('verDetail'), verNote: el('verNote'),
   checkUpd: el('checkUpdBtn'), update: el('updateBtn'),
   pull: el('updateBtn'), push: el('pushBtn'), sync: el('syncBtn'),
+  // Channel Branding & Signature
+  sigCard: el('sigCard'), sigEnabled: el('sigEnabled'), sigForm: el('sigForm'),
+  sigLinkInput: el('sigLinkInput'), sigTemplateInput: el('sigTemplateInput'),
+  sigResetBtn: el('sigResetBtn'), sigPreview: el('sigPreview'),
   // Groq Translation
   groqCard: el('groqCard'), groqBadge: el('groqBadge'),
   groqModelSelect: el('groqModelSelect'),
@@ -129,11 +133,13 @@ ui.select.addEventListener('change', async () => {
   if (!id) {
     await store.remove(['selectedChannelId', 'selectedChannelName']);
     setNote(ui.channelNote, 'Choose the channel that posts should go to.', 'idle');
+    renderSigPreview();
     return;
   }
   const name = ui.select.options[ui.select.selectedIndex].textContent;
   await store.set({ selectedChannelId: id, selectedChannelName: name });
   setNote(ui.channelNote, `Posts will go to “${name}”.`, 'ok');
+  renderSigPreview();
 });
 
 // Disconnect asks for confirmation because it invalidates the saved
@@ -462,6 +468,105 @@ if (ui.revAddCancelBtn) {
     if (ui.revAddBtn) ui.revAddBtn.textContent = '+ Add override';
     setNote(ui.revAddNote, '', 'idle');
   });
+}
+
+// ------------------------------------------------ channel signature & branding
+const DEFAULT_SIG_TEMPLATE = `╭───────────────────────
+│ 👉 Follow *{channel}* for more updates:
+│ 🔗 {link}
+╰───────────────────────`;
+
+function getEffectiveChannelName() {
+  if (ui.select && ui.select.selectedIndex > 0 && ui.select.value) {
+    return ui.select.options[ui.select.selectedIndex].textContent;
+  }
+  return '';
+}
+
+async function renderSigPreview() {
+  if (!ui.sigPreview) return;
+  const isEnabled = ui.sigEnabled ? ui.sigEnabled.checked : true;
+  if (!isEnabled) {
+    ui.sigPreview.textContent = '(Branding signature disabled)';
+    ui.sigPreview.style.opacity = '0.5';
+    if (ui.sigForm) ui.sigForm.style.opacity = '0.5';
+    return;
+  }
+  if (ui.sigForm) ui.sigForm.style.opacity = '1';
+  ui.sigPreview.style.opacity = '1';
+
+  let chName = getEffectiveChannelName();
+  if (!chName) {
+    const data = await store.get(['selectedChannelName']);
+    chName = (data && data.selectedChannelName) || 'My Channel';
+  }
+
+  const rawLink = ui.sigLinkInput ? ui.sigLinkInput.value.trim() : '';
+  const displayLink = rawLink || 'https://whatsapp.com/channel/...';
+  let tpl = (ui.sigTemplateInput && ui.sigTemplateInput.value) || DEFAULT_SIG_TEMPLATE;
+
+  let previewText = tpl
+    .replace(/\{channel\}/gi, chName)
+    .replace(/\{channelName\}/gi, chName)
+    .replace(/\{link\}/gi, displayLink);
+
+  ui.sigPreview.textContent = previewText;
+}
+
+let sigSaveTimer = null;
+function debouncedSaveSig() {
+  clearTimeout(sigSaveTimer);
+  sigSaveTimer = setTimeout(async () => {
+    await store.set({
+      sigEnabled: ui.sigEnabled ? ui.sigEnabled.checked : true,
+      sigLink: ui.sigLinkInput ? ui.sigLinkInput.value.trim() : '',
+      sigTemplate: ui.sigTemplateInput ? ui.sigTemplateInput.value : DEFAULT_SIG_TEMPLATE,
+    });
+  }, 250);
+}
+
+async function initSignatureSettings() {
+  if (!ui.sigCard) return;
+  const data = await store.get(['sigEnabled', 'sigLink', 'sigTemplate']);
+  const enabled = data.sigEnabled !== false;
+  if (ui.sigEnabled) ui.sigEnabled.checked = enabled;
+  if (ui.sigLinkInput) ui.sigLinkInput.value = data.sigLink || '';
+  if (ui.sigTemplateInput) {
+    ui.sigTemplateInput.value = (typeof data.sigTemplate === 'string' && data.sigTemplate.trim())
+      ? data.sigTemplate
+      : DEFAULT_SIG_TEMPLATE;
+  }
+
+  if (ui.sigEnabled) {
+    ui.sigEnabled.addEventListener('change', async () => {
+      await store.set({ sigEnabled: ui.sigEnabled.checked });
+      renderSigPreview();
+    });
+  }
+
+  if (ui.sigLinkInput) {
+    ui.sigLinkInput.addEventListener('input', () => {
+      renderSigPreview();
+      debouncedSaveSig();
+    });
+  }
+
+  if (ui.sigTemplateInput) {
+    ui.sigTemplateInput.addEventListener('input', () => {
+      renderSigPreview();
+      debouncedSaveSig();
+    });
+  }
+
+  if (ui.sigResetBtn) {
+    ui.sigResetBtn.addEventListener('click', async () => {
+      if (ui.sigTemplateInput) ui.sigTemplateInput.value = DEFAULT_SIG_TEMPLATE;
+      await store.set({ sigTemplate: DEFAULT_SIG_TEMPLATE });
+      renderSigPreview();
+    });
+  }
+
+  renderSigPreview();
 }
 
 // --------------------------------------------------------------- groq configuration
@@ -802,6 +907,7 @@ async function doRefresh() {
 
       const { selectedChannelId } = await store.get(['selectedChannelId']);
       const kept = renderChannels(channels, selectedChannelId);
+      renderSigPreview();
 
       if (channels.length === 0) {
         if (selectedChannelId) {
@@ -1203,7 +1309,11 @@ if (ui.sync) {
   setNote(ui.verNote, updateNotice.text + (updateNotice.reloadExtension ? ' The extension was reloaded.' : ''), 'ok');
 })();
 
-document.addEventListener('DOMContentLoaded', refresh);
+document.addEventListener('DOMContentLoaded', () => {
+  initSignatureSettings();
+  refresh();
+});
+initSignatureSettings();
 // Re-check while the popup is open so "Connecting…" resolves on its own.
 let timer = setInterval(refresh, 2000);
 window.addEventListener('unload', () => clearInterval(timer));

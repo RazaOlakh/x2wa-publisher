@@ -125,6 +125,34 @@
     </div>
   </section>
 
+  <!-- Channel Branding & Signature -->
+  <section class="card" id="sigCard">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+      <span class="status-title" style="font-size:12.5px;">Channel Branding & Signature</span>
+      <label style="display:inline-flex; align-items:center; gap:5px; font-size:12px; cursor:pointer;">
+        <input type="checkbox" id="sigEnabled" checked />
+        <span>Enabled</span>
+      </label>
+    </div>
+
+    <div id="sigForm">
+      <label class="field" for="sigLinkInput" style="font-size:11.5px;">Channel Invite Link</label>
+      <input type="url" id="sigLinkInput" placeholder="https://whatsapp.com/channel/..." style="width:100%; font-size:12px; padding:6px 8px; border-radius:6px; border:1px solid var(--line); margin-top:2px; margin-bottom:8px; background:var(--bg); color:var(--ink);" />
+
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:2px;">
+        <label class="field" for="sigTemplateInput" style="font-size:11.5px; margin:0;">Signature Template (editable)</label>
+        <button id="sigResetBtn" type="button" style="flex:0 0 auto; padding:2px 8px; font-size:11px;">Reset default</button>
+      </div>
+      <textarea id="sigTemplateInput" rows="4" style="width:100%; font-family:monospace; font-size:11.5px; padding:6px 8px; border-radius:6px; border:1px solid var(--line); resize:vertical; background:var(--panel); color:var(--ink); line-height:1.4; margin-top:3px; margin-bottom:6px;"></textarea>
+      <div style="font-size:11px; color:var(--muted); margin-bottom:6px;">
+        Use <code>{channel}</code> for channel name, <code>{link}</code> for invite link.
+      </div>
+
+      <label class="field" style="font-size:11px; margin-bottom:3px;">Live Preview</label>
+      <div id="sigPreview" style="background:var(--panel); border:1px dashed var(--line); border-radius:6px; padding:8px; font-size:11.5px; font-family:monospace; white-space:pre-wrap; line-height:1.4; color:var(--ink);"></div>
+    </div>
+  </section>
+
   <!-- Urdu translation engine (Groq GPT-OSS 120B / Google fallback) -->
   <section class="card" id="groqCard">
     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
