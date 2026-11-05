@@ -794,18 +794,17 @@ async function runSend(body) {
       }
 
       // BiDi directional lock:
-      // Neutral symbols (━, ═, ─) switch direction after LTR text inside RTL messages,
-      // causing bottom lines to jump across the screen to the opposite margin.
-      // Bracketing each line with \u200F (RLM) for Urdu or \u200E (LRM) for English
-      // binds all lines to the same margin so they never split or jump!
-      const dirMark = postIsUrdu ? '\u200F' : '\u200E';
+      // The channel name and divider line are strictly locked to the top right corner.
+      // Bracketing each line with \u200F (RLM) forces every line to resolve to RTL,
+      // anchoring the channel watermark cleanly to the top right corner above author/post text.
+      const dirMark = '\u200F';
       sig = sig.split('\n').map(line => {
         if (!line.trim()) return line;
         const clean = line.replace(/[\u200E\u200F]/g, '');
         return `${dirMark}${clean}${dirMark}`;
       }).join('\n');
 
-      const isTop = body.signaturePlacement === 'top';
+      const isTop = body.signaturePlacement !== 'bottom';
       if (outText && outText.trim()) {
         outText = isTop ? `${sig}\n\n${outText.trim()}` : `${outText.trim()}\n\n${sig}`;
       } else {

@@ -20,7 +20,7 @@ const ui = {
   sigCard: el('sigCard'), sigEnabled: el('sigEnabled'), sigForm: el('sigForm'),
   sigPlacementTop: el('sigPlacementTop'), sigPlacementBottom: el('sigPlacementBottom'),
   sigLinkLabel: el('sigLinkLabel'), sigLinkInput: el('sigLinkInput'),
-  sigTemplateInput: el('sigTemplateInput'), sigTemplateUrduInput: el('sigTemplateUrduInput'),
+  sigTemplateLabel: el('sigTemplateLabel'), sigTemplateInput: el('sigTemplateInput'),
   sigPreviewLangEn: el('sigPreviewLangEn'), sigPreviewLangUr: el('sigPreviewLangUr'),
   sigResetBtn: el('sigResetBtn'), sigPreview: el('sigPreview'),
   // Groq Translation
@@ -475,27 +475,14 @@ if (ui.revAddCancelBtn) {
   });
 }
 
-// ------------------------------------------------ channel signature & branding
-const SIG_PRESETS = {
-  clean: `──────────────────────
-  *Voice of People*
-──────────────────────`,
-  single: `──────────────────────
-  *Voice of People*
-──────────────────────`,
-  textonly: `*Voice of People*`,
-  heavy: `━━━━━━━━━━━━━━━━━━━━━━
-  *Voice of People*
-━━━━━━━━━━━━━━━━━━━━━━`,
-  double: `══════════════════════
-  *Voice of People*
-══════════════════════`,
-  wings: `─── 📢 *Voice of People* ───`,
-};
+// ------------------------------------------------ channel watermark & branding
+function getDefaultTemplateForChannel(name) {
+  const ch = name || '{channelName}';
+  return `*${ch}*\n──────────────────────`;
+}
 
-const DEFAULT_SIG_TEMPLATE = SIG_PRESETS.clean;
-
-const DEFAULT_SIG_TEMPLATE_URDU = DEFAULT_SIG_TEMPLATE;
+const DEFAULT_SIG_TEMPLATE = `*{channelName}*
+──────────────────────`;
 
 function getEffectiveChannelName() {
   if (ui.select && ui.select.selectedIndex > 0 && ui.select.value) {
@@ -511,28 +498,43 @@ function getEffectiveChannelId() {
   return '';
 }
 
-function getSigPlacement() {
-  if (ui.sigPlacementTop && ui.sigPlacementTop.checked) return 'top';
-  return 'bottom';
-}
-
 async function syncChannelLinkUI(chId, chName) {
-  if (!ui.sigLinkInput) return;
-  const name = chName || getEffectiveChannelName();
+  const name = chName || getEffectiveChannelName() || 'Voice of People';
+  const id = chId || getEffectiveChannelId();
+
   if (ui.sigLinkLabel) {
     ui.sigLinkLabel.innerHTML = name
       ? `Channel Invite Link for “${name}” <span style="color:var(--muted); font-weight:normal;">(optional)</span>`
       : 'Channel Invite Link <span style="color:var(--muted); font-weight:normal;">(optional)</span>';
   }
-  const id = chId || getEffectiveChannelId();
-  const data = await store.get(['sigLinks', 'sigLink']);
-  const links = data && typeof data.sigLinks === 'object' && data.sigLinks ? data.sigLinks : {};
-  if (id && links[id] !== undefined) {
-    ui.sigLinkInput.value = links[id] || '';
-  } else if (data && typeof data.sigLink === 'string' && data.sigLink) {
-    ui.sigLinkInput.value = data.sigLink;
-  } else {
-    ui.sigLinkInput.value = '';
+  if (ui.sigTemplateLabel) {
+    ui.sigTemplateLabel.innerHTML = name
+      ? `Watermark Design for “${name}”`
+      : 'Watermark Design (separate for each channel)';
+  }
+
+  const data = await store.get(['sigLinks', 'sigLink', 'sigTemplates', 'sigTemplate']);
+  const links = (data && typeof data.sigLinks === 'object' && data.sigLinks) ? data.sigLinks : {};
+  const templates = (data && typeof data.sigTemplates === 'object' && data.sigTemplates) ? data.sigTemplates : {};
+
+  if (ui.sigLinkInput) {
+    if (id && links[id] !== undefined) {
+      ui.sigLinkInput.value = links[id] || '';
+    } else if (data && typeof data.sigLink === 'string') {
+      ui.sigLinkInput.value = data.sigLink;
+    } else {
+      ui.sigLinkInput.value = '';
+    }
+  }
+
+  if (ui.sigTemplateInput) {
+    if (id && templates[id] && templates[id].trim()) {
+      ui.sigTemplateInput.value = templates[id];
+    } else if (data && typeof data.sigTemplate === 'string' && data.sigTemplate.trim() && !data.sigTemplate.includes('━━') && !data.sigTemplate.includes('│')) {
+      ui.sigTemplateInput.value = data.sigTemplate;
+    } else {
+      ui.sigTemplateInput.value = getDefaultTemplateForChannel(name);
+    }
   }
 }
 
@@ -540,7 +542,7 @@ async function renderSigPreview() {
   if (!ui.sigPreview) return;
   const isEnabled = ui.sigEnabled ? ui.sigEnabled.checked : true;
   if (!isEnabled) {
-    ui.sigPreview.textContent = '(Branding signature disabled)';
+    ui.sigPreview.textContent = '(Watermark disabled)';
     ui.sigPreview.style.opacity = '0.5';
     if (ui.sigForm) ui.sigForm.style.opacity = '0.5';
     return;
@@ -551,51 +553,41 @@ async function renderSigPreview() {
   let chName = getEffectiveChannelName();
   if (!chName) {
     const data = await store.get(['selectedChannelName']);
-    chName = (data && data.selectedChannelName) || 'My Channel';
+    chName = (data && data.selectedChannelName) || 'Voice of People';
   }
 
   const rawLink = ui.sigLinkInput ? ui.sigLinkInput.value.trim() : '';
   const isUrduPreview = Boolean(ui.sigPreviewLangUr && ui.sigPreviewLangUr.checked);
 
-  let tpl = '';
-  if (isUrduPreview) {
-    tpl = (ui.sigTemplateUrduInput && ui.sigTemplateUrduInput.value.trim()) || DEFAULT_SIG_TEMPLATE_URDU;
-    ui.sigPreview.style.direction = 'rtl';
-    ui.sigPreview.style.textAlign = 'right';
-  } else {
-    tpl = (ui.sigTemplateInput && ui.sigTemplateInput.value) || DEFAULT_SIG_TEMPLATE;
-    ui.sigPreview.style.direction = 'ltr';
-    ui.sigPreview.style.textAlign = 'left';
-  }
+  let tpl = (ui.sigTemplateInput && ui.sigTemplateInput.value) || getDefaultTemplateForChannel(chName);
 
   let previewText = tpl
     .replace(/\{channel\}/gi, chName)
     .replace(/\{channelName\}/gi, chName);
 
   if (rawLink) {
-    previewText = previewText.replace(/\{link\}/gi, rawLink);
+    if (previewText.includes('{link}')) {
+      previewText = previewText.replace(/\{link\}/gi, rawLink);
+    } else {
+      previewText = `${previewText}\n${rawLink}`;
+    }
   } else {
     // Link is optional: cleanly strip out lines containing {link}
     previewText = previewText.split('\n').filter((l) => !l.includes('{link}')).join('\n');
   }
 
-  // Prepend BiDi directional marker to match WhatsApp rendering
-  const dirMark = isUrduPreview ? '\u200F' : '\u200E';
-  previewText = previewText.split('\n').map(l => l.trim() ? `${dirMark}${l}${dirMark}` : l).join('\n');
+  // Prepend BiDi directional marker (\u200F) so watermark lines lock strictly to top right corner!
+  const dirMark = '\u200F';
+  const watermark = previewText.split('\n').map(l => l.trim() ? `${dirMark}${l.replace(/[\u200E\u200F]/g, '')}${dirMark}` : l).join('\n');
 
-  const placement = getSigPlacement();
   if (isUrduPreview) {
-    if (placement === 'top') {
-      ui.sigPreview.textContent = `${previewText}\n\n[یہاں اردو پوسٹ کا متن آئے گا...]`;
-    } else {
-      ui.sigPreview.textContent = `[یہاں اردو پوسٹ کا متن آئے گا...]\n\n${previewText}`;
-    }
+    ui.sigPreview.style.direction = 'rtl';
+    ui.sigPreview.style.textAlign = 'right';
+    ui.sigPreview.textContent = `${watermark}\n\nAMJAD KHAN | امجد خان\n\nعمران خان کی بہن روبینہ خان نے انکشاف کیا ہے کہ خان صاحب کی طبیعت ٹھیک نہیں اس لئے فوری طور پر ہسپتال منتقل کیا جائے۔`;
   } else {
-    if (placement === 'top') {
-      ui.sigPreview.textContent = `${previewText}\n\n[Sample Tweet Content...]`;
-    } else {
-      ui.sigPreview.textContent = `[Sample Tweet Content...]\n\n${previewText}`;
-    }
+    ui.sigPreview.style.direction = 'ltr';
+    ui.sigPreview.style.textAlign = 'left';
+    ui.sigPreview.textContent = `${watermark}\n\nAbdul El-Sayed proudly introduces himself as America’s first Muslim senator.`;
   }
 }
 
@@ -608,87 +600,41 @@ function debouncedSaveSig() {
       const stored = await store.get(['selectedChannelId']);
       chId = (stored && stored.selectedChannelId) || '';
     }
-    const data = await store.get(['sigLinks']);
+    const data = await store.get(['sigLinks', 'sigTemplates']);
     const links = (data && typeof data.sigLinks === 'object' && data.sigLinks) ? { ...data.sigLinks } : {};
+    const templates = (data && typeof data.sigTemplates === 'object' && data.sigTemplates) ? { ...data.sigTemplates } : {};
+
     const linkVal = ui.sigLinkInput ? ui.sigLinkInput.value.trim() : '';
+    const templateVal = ui.sigTemplateInput ? ui.sigTemplateInput.value : '';
+
     if (chId) {
       links[chId] = linkVal;
+      templates[chId] = templateVal;
     }
     await store.set({
       sigEnabled: ui.sigEnabled ? ui.sigEnabled.checked : true,
-      sigPlacement: getSigPlacement(),
+      sigPlacement: 'top',
       sigLinks: links,
       sigLink: linkVal,
-      sigTemplate: ui.sigTemplateInput ? ui.sigTemplateInput.value : DEFAULT_SIG_TEMPLATE,
-      sigTemplateUrdu: ui.sigTemplateUrduInput ? ui.sigTemplateUrduInput.value : '',
+      sigTemplates: templates,
+      sigTemplate: templateVal,
     });
   }, 250);
 }
 
 async function initSignatureSettings() {
   if (!ui.sigCard) return;
-  const data = await store.get(['sigEnabled', 'sigPlacement', 'sigLink', 'sigLinks', 'sigTemplate', 'sigTemplateUrdu', 'selectedChannelId', 'selectedChannelName']);
+  const data = await store.get(['sigEnabled', 'selectedChannelId', 'selectedChannelName']);
   const enabled = data.sigEnabled !== false;
   if (ui.sigEnabled) ui.sigEnabled.checked = enabled;
-
-  const placement = data.sigPlacement || 'top';
-  if (placement === 'top') {
-    if (ui.sigPlacementTop) ui.sigPlacementTop.checked = true;
-  } else {
-    if (ui.sigPlacementBottom) ui.sigPlacementBottom.checked = true;
-  }
 
   const chId = getEffectiveChannelId() || data.selectedChannelId || '';
   const chName = getEffectiveChannelName() || data.selectedChannelName || '';
   await syncChannelLinkUI(chId, chName);
 
-  const isOldDefault = !data.sigTemplate || data.sigTemplate.includes('│') || data.sigTemplate.includes('━━') || data.sigTemplate.includes('{channel}') || data.sigTemplate.includes('{channelName}');
-  const templateVal = isOldDefault ? DEFAULT_SIG_TEMPLATE : data.sigTemplate;
-  if (isOldDefault) {
-    await store.set({ sigTemplate: DEFAULT_SIG_TEMPLATE });
-  }
-
-  if (ui.sigTemplateInput) {
-    ui.sigTemplateInput.value = templateVal;
-  }
-
-  const isOldUrdu = !data.sigTemplateUrdu || data.sigTemplateUrdu.includes('وائس آف پیپل') || data.sigTemplateUrdu.includes('━━');
-  const templateUrduVal = isOldUrdu ? DEFAULT_SIG_TEMPLATE_URDU : data.sigTemplateUrdu;
-  if (isOldUrdu) {
-    await store.set({ sigTemplateUrdu: DEFAULT_SIG_TEMPLATE_URDU });
-  }
-
-  if (ui.sigTemplateUrduInput) {
-    ui.sigTemplateUrduInput.value = templateUrduVal;
-  }
-
-  // Quick style preset buttons
-  document.querySelectorAll('.sig-preset-btn').forEach((btn) => {
-    btn.addEventListener('click', async () => {
-      const presetKey = btn.getAttribute('data-preset');
-      const tpl = SIG_PRESETS[presetKey] || DEFAULT_SIG_TEMPLATE;
-      if (ui.sigTemplateInput) ui.sigTemplateInput.value = tpl;
-      await store.set({ sigTemplate: tpl });
-      renderSigPreview();
-    });
-  });
-
   if (ui.sigEnabled) {
     ui.sigEnabled.addEventListener('change', async () => {
       await store.set({ sigEnabled: ui.sigEnabled.checked });
-      renderSigPreview();
-    });
-  }
-
-  if (ui.sigPlacementTop) {
-    ui.sigPlacementTop.addEventListener('change', () => {
-      debouncedSaveSig();
-      renderSigPreview();
-    });
-  }
-  if (ui.sigPlacementBottom) {
-    ui.sigPlacementBottom.addEventListener('change', () => {
-      debouncedSaveSig();
       renderSigPreview();
     });
   }
@@ -714,18 +660,19 @@ async function initSignatureSettings() {
     });
   }
 
-  if (ui.sigTemplateUrduInput) {
-    ui.sigTemplateUrduInput.addEventListener('input', () => {
-      renderSigPreview();
-      debouncedSaveSig();
-    });
-  }
-
   if (ui.sigResetBtn) {
     ui.sigResetBtn.addEventListener('click', async () => {
-      if (ui.sigTemplateInput) ui.sigTemplateInput.value = DEFAULT_SIG_TEMPLATE;
-      if (ui.sigTemplateUrduInput) ui.sigTemplateUrduInput.value = DEFAULT_SIG_TEMPLATE_URDU;
-      await store.set({ sigTemplate: DEFAULT_SIG_TEMPLATE, sigTemplateUrdu: DEFAULT_SIG_TEMPLATE_URDU });
+      const chId = getEffectiveChannelId();
+      const chName = getEffectiveChannelName();
+      const defaultTpl = getDefaultTemplateForChannel(chName);
+      if (ui.sigTemplateInput) ui.sigTemplateInput.value = defaultTpl;
+
+      const data = await store.get(['sigTemplates']);
+      const templates = (data && typeof data.sigTemplates === 'object' && data.sigTemplates) ? { ...data.sigTemplates } : {};
+      if (chId) {
+        templates[chId] = defaultTpl;
+      }
+      await store.set({ sigTemplates: templates, sigTemplate: defaultTpl });
       renderSigPreview();
     });
   }

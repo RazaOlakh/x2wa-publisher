@@ -596,28 +596,33 @@ async function getDefaultChannel() {
   });
 }
 
-const DEFAULT_SIG_TEMPLATE = `──────────────────────
-  *Voice of People*
+const DEFAULT_SIG_TEMPLATE = `*{channelName}*
 ──────────────────────`;
 
 const DEFAULT_SIG_TEMPLATE_URDU = DEFAULT_SIG_TEMPLATE;
 
 async function getActiveSignature(targetChannelId, overrideChannelName) {
   return new Promise((resolve) => {
-    chrome.storage.local.get(['sigEnabled', 'sigPlacement', 'sigLink', 'sigLinks', 'sigTemplate', 'sigTemplateUrdu', 'selectedChannelName'], (data) => {
+    chrome.storage.local.get([
+      'sigEnabled', 'sigPlacement', 'sigLink', 'sigLinks',
+      'sigTemplate', 'sigTemplates', 'selectedChannelName'
+    ], (data) => {
       if (data && data.sigEnabled === false) return resolve(null);
 
-      const isOldDefault = !data.sigTemplate || data.sigTemplate.includes('│') || data.sigTemplate.includes('━━') || data.sigTemplate.includes('{channel}') || data.sigTemplate.includes('{channelName}');
-      const template = (isOldDefault || !data.sigTemplate || !data.sigTemplate.trim())
-        ? DEFAULT_SIG_TEMPLATE
-        : data.sigTemplate;
+      const templates = (data && typeof data.sigTemplates === 'object' && data.sigTemplates) ? data.sigTemplates : {};
+      const links = (data && typeof data.sigLinks === 'object' && data.sigLinks) ? data.sigLinks : {};
 
-      const isOldUrdu = !data.sigTemplateUrdu || data.sigTemplateUrdu.includes('وائس آف پیپل') || data.sigTemplateUrdu.includes('━━');
-      const templateUrdu = (isOldUrdu || !data.sigTemplateUrdu || !data.sigTemplateUrdu.trim())
-        ? DEFAULT_SIG_TEMPLATE_URDU
-        : data.sigTemplateUrdu;
+      const channelName = overrideChannelName || (data && typeof data.selectedChannelName === 'string' ? data.selectedChannelName.trim() : '') || 'Voice of People';
 
-      const links = data && typeof data.sigLinks === 'object' && data.sigLinks ? data.sigLinks : {};
+      let template = '';
+      if (targetChannelId && templates[targetChannelId] && templates[targetChannelId].trim()) {
+        template = templates[targetChannelId].trim();
+      } else if (data && typeof data.sigTemplate === 'string' && data.sigTemplate.trim() && !data.sigTemplate.includes('━━') && !data.sigTemplate.includes('│')) {
+        template = data.sigTemplate.trim();
+      } else {
+        template = `*${channelName}*\n──────────────────────`;
+      }
+
       let link = '';
       if (targetChannelId && links[targetChannelId] !== undefined) {
         link = (links[targetChannelId] || '').trim();
@@ -625,15 +630,17 @@ async function getActiveSignature(targetChannelId, overrideChannelName) {
         link = data.sigLink.trim();
       }
 
-      const channelName = overrideChannelName || (data && typeof data.selectedChannelName === 'string' ? data.selectedChannelName.trim() : '');
-
       function renderTemplate(tpl) {
         let text = tpl;
         if (channelName) {
           text = text.replace(/\{channel\}/gi, channelName).replace(/\{channelName\}/gi, channelName);
         }
         if (link) {
-          text = text.replace(/\{link\}/gi, link);
+          if (text.includes('{link}')) {
+            text = text.replace(/\{link\}/gi, link);
+          } else {
+            text = `${text}\n${link}`;
+          }
         } else {
           text = text.split('\n').filter((line) => !line.includes('{link}')).join('\n');
         }
@@ -641,13 +648,12 @@ async function getActiveSignature(targetChannelId, overrideChannelName) {
       }
 
       const sig = renderTemplate(template);
-      const sigUrdu = renderTemplate(templateUrdu);
+      if (!sig) return resolve(null);
 
-      if (!sig && !sigUrdu) return resolve(null);
       resolve({
-        signature: sig || sigUrdu,
-        signatureUrdu: sigUrdu || sig,
-        placement: (data && data.sigPlacement === 'bottom') ? 'bottom' : 'top',
+        signature: sig,
+        signatureUrdu: sig,
+        placement: 'top',
       });
     });
   });

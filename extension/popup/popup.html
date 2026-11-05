@@ -125,10 +125,10 @@
     </div>
   </section>
 
-  <!-- Channel Branding & Signature -->
+  <!-- Channel Branding & Watermark -->
   <section class="card" id="sigCard">
     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-      <span class="status-title" style="font-size:12.5px;">Channel Branding & Signature</span>
+      <span class="status-title" style="font-size:12.5px;">Channel Watermark & Branding</span>
       <label style="display:inline-flex; align-items:center; gap:5px; font-size:12px; cursor:pointer;">
         <input type="checkbox" id="sigEnabled" checked />
         <span>Enabled</span>
@@ -136,59 +136,29 @@
     </div>
 
     <div id="sigForm">
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-        <label class="field" style="font-size:11.5px; margin:0;">Placement</label>
-        <div style="display:inline-flex; gap:12px; font-size:12px;">
-          <label style="display:inline-flex; align-items:center; gap:4px; cursor:pointer;">
-            <input type="radio" name="sigPlacement" value="top" id="sigPlacementTop" checked />
-            <span>Top (Header)</span>
-          </label>
-          <label style="display:inline-flex; align-items:center; gap:4px; cursor:pointer;">
-            <input type="radio" name="sigPlacement" value="bottom" id="sigPlacementBottom" />
-            <span>Bottom (Footer)</span>
-          </label>
-        </div>
-      </div>
-
-      <label class="field" for="sigLinkInput" id="sigLinkLabel" style="font-size:11.5px;">Channel Invite Link <span style="color:var(--muted); font-weight:normal;">(optional)</span></label>
+      <label class="field" for="sigLinkInput" id="sigLinkLabel" style="font-size:11.5px;">Channel Invite Link <span style="color:var(--muted); font-weight:normal;">(optional · separate for each channel)</span></label>
       <input type="url" id="sigLinkInput" placeholder="Optional: https://whatsapp.com/channel/..." style="width:100%; font-size:12px; padding:6px 8px; border-radius:6px; border:1px solid var(--line); margin-top:2px; margin-bottom:8px; background:var(--bg); color:var(--ink);" />
 
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
-        <label class="field" for="sigTemplateInput" style="font-size:11.5px; margin:0;">Signature Template (editable)</label>
+        <label class="field" for="sigTemplateInput" id="sigTemplateLabel" style="font-size:11.5px; margin:0;">Watermark Design <span style="color:var(--muted); font-weight:normal;">(separate for each channel)</span></label>
         <button id="sigResetBtn" type="button" style="flex:0 0 auto; padding:2px 8px; font-size:11px;">Reset default</button>
       </div>
 
-      <div style="display:flex; gap:5px; margin-bottom:6px; flex-wrap:wrap;">
-        <button type="button" class="sig-preset-btn" data-preset="textonly" style="padding:2px 7px; font-size:10.5px; background:var(--panel); border:1px solid var(--line); border-radius:4px; cursor:pointer;">Text Only (No Lines)</button>
-        <button type="button" class="sig-preset-btn" data-preset="clean" style="padding:2px 7px; font-size:10.5px; background:var(--panel); border:1px solid var(--line); border-radius:4px; cursor:pointer;">Clean Line ──</button>
-        <button type="button" class="sig-preset-btn" data-preset="heavy" style="padding:2px 7px; font-size:10.5px; background:var(--panel); border:1px solid var(--line); border-radius:4px; cursor:pointer;">Heavy Bar ━━</button>
-        <button type="button" class="sig-preset-btn" data-preset="double" style="padding:2px 7px; font-size:10.5px; background:var(--panel); border:1px solid var(--line); border-radius:4px; cursor:pointer;">Double Line ══</button>
-        <button type="button" class="sig-preset-btn" data-preset="wings" style="padding:2px 7px; font-size:10.5px; background:var(--panel); border:1px solid var(--line); border-radius:4px; cursor:pointer;">Winged ──•──</button>
-      </div>
-
-      <textarea id="sigTemplateInput" rows="3" style="width:100%; font-family:monospace; font-size:11.5px; padding:6px 8px; border-radius:6px; border:1px solid var(--line); resize:vertical; background:var(--panel); color:var(--ink); line-height:1.4; margin-bottom:4px;"></textarea>
-      <div style="font-size:11px; color:var(--muted); margin-bottom:6px;">
-        English post signature. Supports <code>{link}</code> for optional invite link.
-      </div>
-
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:2px;">
-        <label class="field" for="sigTemplateUrduInput" style="font-size:11.5px; margin:0;">Urdu Post Signature (optional)</label>
-      </div>
-      <textarea id="sigTemplateUrduInput" rows="3" placeholder="Defaults to English *Voice of People* with both lines right-aligned..." style="width:100%; font-family:monospace; font-size:11.5px; padding:6px 8px; border-radius:6px; border:1px solid var(--line); resize:vertical; background:var(--panel); color:var(--ink); line-height:1.4; margin-bottom:4px;"></textarea>
-      <div style="font-size:11px; color:var(--muted); margin-bottom:6px;">
-        Locked to RTL so divider lines never split across the screen.
+      <textarea id="sigTemplateInput" rows="2" style="width:100%; font-family:monospace; font-size:11.5px; padding:6px 8px; border-radius:6px; border:1px solid var(--line); resize:vertical; background:var(--panel); color:var(--ink); line-height:1.4; margin-bottom:4px;"></textarea>
+      <div style="font-size:11px; color:var(--muted); margin-bottom:8px;">
+        Channel name is positioned at the top right corner with a divider line below it. Supports <code>{channelName}</code> and optional <code>{link}</code>.
       </div>
 
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:3px;">
         <label class="field" style="font-size:11px; margin:0;">Live Preview</label>
         <div style="display:inline-flex; gap:8px; font-size:11px;">
           <label style="display:inline-flex; align-items:center; gap:3px; cursor:pointer;">
-            <input type="radio" name="sigPreviewLang" value="en" id="sigPreviewLangEn" checked />
-            <span>English</span>
+            <input type="radio" name="sigPreviewLang" value="ur" id="sigPreviewLangUr" checked />
+            <span>Urdu Post</span>
           </label>
           <label style="display:inline-flex; align-items:center; gap:3px; cursor:pointer;">
-            <input type="radio" name="sigPreviewLang" value="ur" id="sigPreviewLangUr" />
-            <span>Urdu</span>
+            <input type="radio" name="sigPreviewLang" value="en" id="sigPreviewLangEn" />
+            <span>English Post</span>
           </label>
         </div>
       </div>
