@@ -585,7 +585,9 @@ async function renderSigPreview() {
 
   let previewText = tpl
     .replace(/\{channel\}/gi, chName)
-    .replace(/\{channelName\}/gi, chName);
+    .replace(/\{channelName\}/gi, chName)
+    .replace(/\{authorName\}/gi, '`Author Name`')
+    .replace(/\{author\}/gi, '`Author Name`');
 
   if (rawLink) {
     if (previewText.includes('{link}')) {
@@ -622,9 +624,9 @@ async function renderSigPreview() {
   ui.sigPreview.style.textAlign = 'start';
 
   if (isUrduPreview) {
-    ui.sigPreview.textContent = `${watermark}\n\nAMJAD KHAN | امجد خان\n\nعمران خان کی بہن روبینہ خان نے انکشاف کیا ہے کہ خان صاحب کی طبیعت ٹھیک نہیں اس لئے فوری طور پر ہسپتال منتقل کیا جائے۔`;
+    ui.sigPreview.textContent = `${watermark}\n\n` + '`AMJAD KHAN   |   امجد خان`' + '\n\nعمران خان کی بہن روبینہ خان نے انکشاف کیا ہے کہ خان صاحب کی طبیعت ٹھیک نہیں اس لئے فوری طور پر ہسپتال منتقل کیا جائے۔';
   } else {
-    ui.sigPreview.textContent = `${watermark}\n\nAbdul El-Sayed proudly introduces himself as America’s first Muslim senator.`;
+    ui.sigPreview.textContent = `${watermark}\n\n` + '`Abdul El-Sayed`' + '\n\nAbdul El-Sayed proudly introduces himself as America’s first Muslim senator.';
   }
 }
 

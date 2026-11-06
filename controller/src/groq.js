@@ -84,7 +84,7 @@ function isGroqConfigured(env = process.env, overrides = {}) {
 }
 
 // Strips model thinking/reasoning tags and enclosing quotation wrappers.
-function cleanGroqResponse(rawText) {
+function cleanGroqResponse(rawText, options) {
   if (typeof rawText !== 'string') return null;
   // Strip <think>...</think> reasoning blocks if present in model output
   let text = rawText.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
@@ -102,13 +102,18 @@ function cleanGroqResponse(rawText) {
     if (unquoted.length > 0) text = unquoted;
   }
   // Strip trailing colon from the author header line if present and ensure enclosed in backticks
+  const rawAuthor = options && options.author && typeof options.author === 'string' ? options.author.replace(/^`+|`+$/g, '').trim() : '';
   const lines = text.split('\n');
-  if (lines.length > 0 && lines[0].includes('|')) {
+  if (lines.length > 0) {
     let firstLine = lines[0].replace(/[:\u061B\u05C3]\s*$/, '').trim();
-    firstLine = firstLine.replace(/([^\s|`])\s*\|\s*([^\s|`])/g, '$1   |   $2');
     const cleanFirst = firstLine.replace(/^`+|`+$/g, '').trim();
-    lines[0] = `\`${cleanFirst}\``;
-    text = lines.join('\n');
+    if (cleanFirst.includes('|') || (rawAuthor && (cleanFirst.toLowerCase() === rawAuthor.toLowerCase() || lines.length > 1))) {
+      let formatted = cleanFirst.replace(/([^\s|`])\s*\|\s*([^\s|`])/g, '$1   |   $2');
+      if (cleanFirst.includes('|') || (rawAuthor && cleanFirst.toLowerCase() === rawAuthor.toLowerCase())) {
+        lines[0] = `\`${formatted}\``;
+        text = lines.join('\n');
+      }
+    }
   }
   // Ensure exactly three spaces before and after the midline ("   |   ")
   text = text.replace(/([^\s|`])\s*\|\s*([^\s|`])/g, '$1   |   $2');
@@ -116,7 +121,7 @@ function cleanGroqResponse(rawText) {
 }
 
 // Extracts translated text from Groq Chat Completions API response.
-function readGroqTranslation(data) {
+function readGroqTranslation(data, options) {
   if (!data || typeof data !== 'object') return null;
   const choices = data.choices;
   if (!Array.isArray(choices) || choices.length === 0) return null;
@@ -126,7 +131,7 @@ function readGroqTranslation(data) {
   if (!msg || typeof msg !== 'object') return null;
   const content = msg.content;
   if (typeof content !== 'string') return null;
-  return cleanGroqResponse(content);
+  return cleanGroqResponse(content, options);
 }
 
 // Constructs Chat Completions payload for Groq.
@@ -220,7 +225,7 @@ async function translateWithGroq(text, options, deps) {
     }
 
     const data = await res.json();
-    const translated = readGroqTranslation(data);
+    const translated = readGroqTranslation(data, options);
     const firstChoice = (data && Array.isArray(data.choices) && data.choices[0] && data.choices[0].message) || {};
     if (!translated) {
       const err = new Error('groq-empty-response');

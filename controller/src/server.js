@@ -754,24 +754,22 @@ async function runSend(body) {
       // If the post is in Urdu, write author name in both English and Urdu: `English Name   |   Urdu Name`
       // If the post is in English, author name remains in English only: `English Name`
       const sep = text.indexOf('\n\n');
-      if (sep > 0) {
-        const header = text.slice(0, sep).trim();
-        const bodyContent = text.slice(sep + 2).trim();
-        const authorTrimmed = body.author.trim();
-        const cleanHeader = header.replace(/^`+|`+$/g, '').trim();
-        const isAuthorHeader = cleanHeader.toLowerCase() === authorTrimmed.toLowerCase() || cleanHeader === authorTrimmed;
-        if (isAuthorHeader) {
-          if (isUrduText(bodyContent)) {
-            try {
-              const dualAuthor = await formatAuthorNameDual(body.author);
-              if (dualAuthor) {
-                const cleanDual = dualAuthor.replace(/^`+|`+$/g, '').trim();
-                outText = `\`${cleanDual}\`\n\n${bodyContent}`;
-              }
-            } catch {}
-          } else {
-            outText = `\`${cleanHeader}\`\n\n${bodyContent}`;
-          }
+      const header = (sep > 0 ? text.slice(0, sep) : text).trim();
+      const bodyContent = sep > 0 ? text.slice(sep + 2).trim() : '';
+      const authorTrimmed = body.author.replace(/^`+|`+$/g, '').trim();
+      const cleanHeader = header.replace(/^`+|`+$/g, '').trim();
+      const isAuthorHeader = cleanHeader.toLowerCase() === authorTrimmed.toLowerCase() || cleanHeader === authorTrimmed;
+      if (isAuthorHeader) {
+        if (isUrduText(bodyContent || cleanHeader)) {
+          try {
+            const dualAuthor = await formatAuthorNameDual(authorTrimmed);
+            if (dualAuthor) {
+              const cleanDual = dualAuthor.replace(/^`+|`+$/g, '').trim();
+              outText = bodyContent ? `\`${cleanDual}\`\n\n${bodyContent}` : `\`${cleanDual}\``;
+            }
+          } catch {}
+        } else {
+          outText = bodyContent ? `\`${cleanHeader}\`\n\n${bodyContent}` : `\`${cleanHeader}\``;
         }
       }
     }

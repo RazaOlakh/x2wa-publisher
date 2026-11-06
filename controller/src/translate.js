@@ -382,13 +382,14 @@ async function translatePostTextWithMeta(text, target, author, deps) {
   if (sepIdx > 0) {
     const firstLine = text.slice(0, sepIdx).trim();
     const rest = text.slice(sepIdx + 2).trim();
-    const authorMatches = rawAuthor && (firstLine.toLowerCase() === rawAuthor.toLowerCase() || firstLine === rawAuthor);
-    const isUrduAuthorHeader = isUrduScript(firstLine) && !/[A-Za-z]/.test(firstLine);
+    const cleanFirst = firstLine.replace(/^`+|`+$/g, '').trim();
+    const authorMatches = rawAuthor && (cleanFirst.toLowerCase() === rawAuthor.toLowerCase() || cleanFirst === rawAuthor);
+    const isUrduAuthorHeader = isUrduScript(cleanFirst) && !/[A-Za-z]/.test(cleanFirst);
     if (isUrduAuthorHeader) {
-      rawAuthor = firstLine;
+      rawAuthor = cleanFirst;
       bodyText = rest;
-    } else if (authorMatches || (!rawAuthor && firstLine.length <= 60 && !firstLine.includes('\n'))) {
-      if (!rawAuthor) rawAuthor = firstLine;
+    } else if (authorMatches || (!rawAuthor && cleanFirst.length <= 60 && !cleanFirst.includes('\n'))) {
+      if (!rawAuthor) rawAuthor = cleanFirst;
       bodyText = rest;
     }
   }
@@ -409,9 +410,10 @@ async function translatePostTextWithMeta(text, target, author, deps) {
   // Fallback path: Google Translate (when Groq is unconfigured or disabled)
   if (cleanAuthor) {
     const transliteratedAuthor = await transliterateText(cleanAuthor, lang, deps);
+    const cleanTrans = (transliteratedAuthor || cleanAuthor).replace(/^`+|`+$/g, '').trim();
     const bodyRes = await translateTextWithMeta(bodyText, lang, deps);
     return {
-      text: transliteratedAuthor + '\n\n' + bodyRes.text,
+      text: `\`${cleanTrans}\`` + '\n\n' + bodyRes.text,
       provider: bodyRes.provider,
       model: bodyRes.model,
       authorTransliterated: true,
