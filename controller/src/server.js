@@ -751,21 +751,27 @@ async function runSend(body) {
       }
     } else if (body.author && typeof text === 'string') {
       // For author name button (no translateTo):
-      // If the post is in Urdu, write author name in both English and Urdu: "English Name   |   Urdu Name"
-      // If the post is in English, author name remains in English only.
+      // If the post is in Urdu, write author name in both English and Urdu: `English Name   |   Urdu Name`
+      // If the post is in English, author name remains in English only: `English Name`
       const sep = text.indexOf('\n\n');
       if (sep > 0) {
         const header = text.slice(0, sep).trim();
         const bodyContent = text.slice(sep + 2).trim();
         const authorTrimmed = body.author.trim();
-        const isAuthorHeader = header.toLowerCase() === authorTrimmed.toLowerCase() || header === authorTrimmed;
-        if (isAuthorHeader && isUrduText(bodyContent)) {
-          try {
-            const dualAuthor = await formatAuthorNameDual(body.author);
-            if (dualAuthor) {
-              outText = `${dualAuthor}\n\n${bodyContent}`;
-            }
-          } catch {}
+        const cleanHeader = header.replace(/^`+|`+$/g, '').trim();
+        const isAuthorHeader = cleanHeader.toLowerCase() === authorTrimmed.toLowerCase() || cleanHeader === authorTrimmed;
+        if (isAuthorHeader) {
+          if (isUrduText(bodyContent)) {
+            try {
+              const dualAuthor = await formatAuthorNameDual(body.author);
+              if (dualAuthor) {
+                const cleanDual = dualAuthor.replace(/^`+|`+$/g, '').trim();
+                outText = `\`${cleanDual}\`\n\n${bodyContent}`;
+              }
+            } catch {}
+          } else {
+            outText = `\`${cleanHeader}\`\n\n${bodyContent}`;
+          }
         }
       }
     }
@@ -793,15 +799,32 @@ async function runSend(body) {
         sig = sig.replace(/\{channel\}/gi, chName || '').replace(/\{channelName\}/gi, chName || '');
       }
 
-      // BiDi directional lock:
-      // The channel name and divider line are strictly locked to the top right corner.
-      // Bracketing each line with \u200F (RLM) forces every line to resolve to RTL,
-      // anchoring the channel watermark cleanly to the top right corner above author/post text.
-      const dirMark = '\u200F';
+      if (sig.includes('{author}') || sig.includes('{authorName}')) {
+        const rawAuthor = (body.author && typeof body.author === 'string') ? body.author : '';
+        const cleanAuthor = rawAuthor.replace(/^`+|`+$/g, '').trim();
+        const formattedAuthor = cleanAuthor ? `\`${cleanAuthor}\`` : '';
+        sig = sig.replace(/\{authorName\}/gi, formattedAuthor).replace(/\{author\}/gi, formattedAuthor);
+      }
+
+      // Alignment & BiDi directional formatting:
+      // Supports 'center' (default), 'left', or 'right' with identical syntax for both English and Urdu.
+      const align = (body.signatureAlign || 'center').toLowerCase();
+      const targetWidth = 34;
+
       sig = sig.split('\n').map(line => {
         if (!line.trim()) return line;
-        const clean = line.replace(/[\u200E\u200F]/g, '');
-        return `${dirMark}${clean}${dirMark}`;
+        const clean = line.replace(/[\u200E\u200F]/g, '').trim();
+        if (align === 'left') {
+          return `\u200E${clean}\u200E`;
+        } else if (align === 'right') {
+          return `\u200F${clean}\u200F`;
+        } else {
+          // Center: indent with non-breaking spaces and wrap with LRM for consistent centering
+          const visLen = clean.replace(/[*_~`]/g, '').length;
+          const padCount = Math.max(2, Math.round((targetWidth - visLen) / 2));
+          const pad = '\u00A0'.repeat(padCount);
+          return `\u200E${pad}${clean}\u200E`;
+        }
       }).join('\n');
 
       const isTop = body.signaturePlacement !== 'bottom';
@@ -1269,6 +1292,10 @@ const server = http.createServer(async (req, res) => {
       }
       if (body.signaturePlacement != null && body.signaturePlacement !== 'top' && body.signaturePlacement !== 'bottom') {
         log('error','send-rejected-bad-request',{badField:'signaturePlacement'});
+        return json(res, 400, { error: 'bad-request' });
+      }
+      if (body.signatureAlign != null && body.signatureAlign !== 'center' && body.signatureAlign !== 'left' && body.signatureAlign !== 'right') {
+        log('error','send-rejected-bad-request',{badField:'signatureAlign'});
         return json(res, 400, { error: 'bad-request' });
       }
       log('info','send-request-validated',{requestId:body.requestId,tweetId:body.tweetId,mediaTypes:body.media.map(m=>m.type)});

@@ -20,6 +20,7 @@ const ui = {
   sigCard: el('sigCard'), sigEnabled: el('sigEnabled'), sigForm: el('sigForm'),
   sigPlacementTop: el('sigPlacementTop'), sigPlacementBottom: el('sigPlacementBottom'),
   sigLinkLabel: el('sigLinkLabel'), sigLinkInput: el('sigLinkInput'),
+  sigAlign_center: el('sigAlign_center'), sigAlign_left: el('sigAlign_left'), sigAlign_right: el('sigAlign_right'),
   sigTemplateLabel: el('sigTemplateLabel'), sigTemplateInput: el('sigTemplateInput'),
   sigPreviewLangEn: el('sigPreviewLangEn'), sigPreviewLangUr: el('sigPreviewLangUr'),
   sigResetBtn: el('sigResetBtn'), sigPreview: el('sigPreview'),
@@ -478,11 +479,10 @@ if (ui.revAddCancelBtn) {
 // ------------------------------------------------ channel watermark & branding
 function getDefaultTemplateForChannel(name) {
   const ch = name || '{channelName}';
-  return `*${ch}*\n──────────────────────`;
+  return `*${ch}*`;
 }
 
-const DEFAULT_SIG_TEMPLATE = `*{channelName}*
-──────────────────────`;
+const DEFAULT_SIG_TEMPLATE = `*{channelName}*`;
 
 function getEffectiveChannelName() {
   if (ui.select && ui.select.selectedIndex > 0 && ui.select.value) {
@@ -496,6 +496,23 @@ function getEffectiveChannelId() {
     return ui.select.value;
   }
   return '';
+}
+
+function getSigAlignment() {
+  if (ui.sigAlign_left && ui.sigAlign_left.checked) return 'left';
+  if (ui.sigAlign_right && ui.sigAlign_right.checked) return 'right';
+  return 'center';
+}
+
+function setSigAlignmentUI(align) {
+  const val = (align || 'center').toLowerCase();
+  if (val === 'left') {
+    if (ui.sigAlign_left) ui.sigAlign_left.checked = true;
+  } else if (val === 'right') {
+    if (ui.sigAlign_right) ui.sigAlign_right.checked = true;
+  } else {
+    if (ui.sigAlign_center) ui.sigAlign_center.checked = true;
+  }
 }
 
 async function syncChannelLinkUI(chId, chName) {
@@ -513,9 +530,14 @@ async function syncChannelLinkUI(chId, chName) {
       : 'Watermark Design (separate for each channel)';
   }
 
-  const data = await store.get(['sigLinks', 'sigLink', 'sigTemplates', 'sigTemplate']);
+  const data = await store.get(['sigLinks', 'sigLink', 'sigTemplates', 'sigTemplate', 'sigAligns', 'sigAlign']);
   const links = (data && typeof data.sigLinks === 'object' && data.sigLinks) ? data.sigLinks : {};
   const templates = (data && typeof data.sigTemplates === 'object' && data.sigTemplates) ? data.sigTemplates : {};
+  const aligns = (data && typeof data.sigAligns === 'object' && data.sigAligns) ? data.sigAligns : {};
+
+  // Sync alignment setting
+  const activeAlign = (id && aligns[id]) ? aligns[id] : (data.sigAlign || 'center');
+  setSigAlignmentUI(activeAlign);
 
   if (ui.sigLinkInput) {
     if (id && links[id] !== undefined) {
@@ -530,7 +552,7 @@ async function syncChannelLinkUI(chId, chName) {
   if (ui.sigTemplateInput) {
     if (id && templates[id] && templates[id].trim()) {
       ui.sigTemplateInput.value = templates[id];
-    } else if (data && typeof data.sigTemplate === 'string' && data.sigTemplate.trim() && !data.sigTemplate.includes('━━') && !data.sigTemplate.includes('│')) {
+    } else if (data && typeof data.sigTemplate === 'string' && data.sigTemplate.trim() && !data.sigTemplate.includes('━━') && !data.sigTemplate.includes('│') && !data.sigTemplate.includes('──')) {
       ui.sigTemplateInput.value = data.sigTemplate;
     } else {
       ui.sigTemplateInput.value = getDefaultTemplateForChannel(name);
@@ -576,17 +598,32 @@ async function renderSigPreview() {
     previewText = previewText.split('\n').filter((l) => !l.includes('{link}')).join('\n');
   }
 
-  // Prepend BiDi directional marker (\u200F) so watermark lines lock strictly to top right corner!
-  const dirMark = '\u200F';
-  const watermark = previewText.split('\n').map(l => l.trim() ? `${dirMark}${l.replace(/[\u200E\u200F]/g, '')}${dirMark}` : l).join('\n');
+  // Alignment formatting (same logic as controller/src/server.js and service worker)
+  const align = getSigAlignment();
+  const targetWidth = 34;
+
+  const watermark = previewText.split('\n').map(line => {
+    if (!line.trim()) return line;
+    const clean = line.replace(/[\u200E\u200F]/g, '').trim();
+    if (align === 'left') {
+      return `\u200E${clean}\u200E`;
+    } else if (align === 'right') {
+      return `\u200F${clean}\u200F`;
+    } else {
+      // Center: indent with non-breaking spaces and wrap with LRM for consistent centering
+      const visLen = clean.replace(/[*_~`]/g, '').length;
+      const padCount = Math.max(2, Math.round((targetWidth - visLen) / 2));
+      const pad = '\u00A0'.repeat(padCount);
+      return `\u200E${pad}${clean}\u200E`;
+    }
+  }).join('\n');
+
+  ui.sigPreview.style.unicodeBidi = 'plaintext';
+  ui.sigPreview.style.textAlign = 'start';
 
   if (isUrduPreview) {
-    ui.sigPreview.style.direction = 'rtl';
-    ui.sigPreview.style.textAlign = 'right';
     ui.sigPreview.textContent = `${watermark}\n\nAMJAD KHAN | امجد خان\n\nعمران خان کی بہن روبینہ خان نے انکشاف کیا ہے کہ خان صاحب کی طبیعت ٹھیک نہیں اس لئے فوری طور پر ہسپتال منتقل کیا جائے۔`;
   } else {
-    ui.sigPreview.style.direction = 'ltr';
-    ui.sigPreview.style.textAlign = 'left';
     ui.sigPreview.textContent = `${watermark}\n\nAbdul El-Sayed proudly introduces himself as America’s first Muslim senator.`;
   }
 }
@@ -600,16 +637,19 @@ function debouncedSaveSig() {
       const stored = await store.get(['selectedChannelId']);
       chId = (stored && stored.selectedChannelId) || '';
     }
-    const data = await store.get(['sigLinks', 'sigTemplates']);
+    const data = await store.get(['sigLinks', 'sigTemplates', 'sigAligns']);
     const links = (data && typeof data.sigLinks === 'object' && data.sigLinks) ? { ...data.sigLinks } : {};
     const templates = (data && typeof data.sigTemplates === 'object' && data.sigTemplates) ? { ...data.sigTemplates } : {};
+    const aligns = (data && typeof data.sigAligns === 'object' && data.sigAligns) ? { ...data.sigAligns } : {};
 
     const linkVal = ui.sigLinkInput ? ui.sigLinkInput.value.trim() : '';
     const templateVal = ui.sigTemplateInput ? ui.sigTemplateInput.value : '';
+    const alignVal = getSigAlignment();
 
     if (chId) {
       links[chId] = linkVal;
       templates[chId] = templateVal;
+      aligns[chId] = alignVal;
     }
     await store.set({
       sigEnabled: ui.sigEnabled ? ui.sigEnabled.checked : true,
@@ -618,6 +658,8 @@ function debouncedSaveSig() {
       sigLink: linkVal,
       sigTemplates: templates,
       sigTemplate: templateVal,
+      sigAligns: aligns,
+      sigAlign: alignVal,
     });
   }, 250);
 }
@@ -638,6 +680,15 @@ async function initSignatureSettings() {
       renderSigPreview();
     });
   }
+
+  [ui.sigAlign_center, ui.sigAlign_left, ui.sigAlign_right].forEach(radio => {
+    if (radio) {
+      radio.addEventListener('change', () => {
+        renderSigPreview();
+        debouncedSaveSig();
+      });
+    }
+  });
 
   if (ui.sigPreviewLangEn) {
     ui.sigPreviewLangEn.addEventListener('change', renderSigPreview);
@@ -666,13 +717,21 @@ async function initSignatureSettings() {
       const chName = getEffectiveChannelName();
       const defaultTpl = getDefaultTemplateForChannel(chName);
       if (ui.sigTemplateInput) ui.sigTemplateInput.value = defaultTpl;
+      setSigAlignmentUI('center');
 
-      const data = await store.get(['sigTemplates']);
+      const data = await store.get(['sigTemplates', 'sigAligns']);
       const templates = (data && typeof data.sigTemplates === 'object' && data.sigTemplates) ? { ...data.sigTemplates } : {};
+      const aligns = (data && typeof data.sigAligns === 'object' && data.sigAligns) ? { ...data.sigAligns } : {};
       if (chId) {
         templates[chId] = defaultTpl;
+        aligns[chId] = 'center';
       }
-      await store.set({ sigTemplates: templates, sigTemplate: defaultTpl });
+      await store.set({
+        sigTemplates: templates,
+        sigTemplate: defaultTpl,
+        sigAligns: aligns,
+        sigAlign: 'center',
+      });
       renderSigPreview();
     });
   }

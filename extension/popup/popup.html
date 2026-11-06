@@ -136,6 +136,24 @@
     </div>
 
     <div id="sigForm">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+        <label class="field" style="font-size:11.5px; margin:0;">Channel Name Alignment</label>
+        <div style="display:inline-flex; gap:10px; font-size:12px;">
+          <label style="display:inline-flex; align-items:center; gap:4px; cursor:pointer;">
+            <input type="radio" name="sigAlign" value="center" id="sigAlign_center" checked />
+            <span>Center (Default)</span>
+          </label>
+          <label style="display:inline-flex; align-items:center; gap:4px; cursor:pointer;">
+            <input type="radio" name="sigAlign" value="left" id="sigAlign_left" />
+            <span>Left</span>
+          </label>
+          <label style="display:inline-flex; align-items:center; gap:4px; cursor:pointer;">
+            <input type="radio" name="sigAlign" value="right" id="sigAlign_right" />
+            <span>Right</span>
+          </label>
+        </div>
+      </div>
+
       <label class="field" for="sigLinkInput" id="sigLinkLabel" style="font-size:11.5px;">Channel Invite Link <span style="color:var(--muted); font-weight:normal;">(optional · separate for each channel)</span></label>
       <input type="url" id="sigLinkInput" placeholder="Optional: https://whatsapp.com/channel/..." style="width:100%; font-size:12px; padding:6px 8px; border-radius:6px; border:1px solid var(--line); margin-top:2px; margin-bottom:8px; background:var(--bg); color:var(--ink);" />
 
@@ -146,7 +164,7 @@
 
       <textarea id="sigTemplateInput" rows="2" style="width:100%; font-family:monospace; font-size:11.5px; padding:6px 8px; border-radius:6px; border:1px solid var(--line); resize:vertical; background:var(--panel); color:var(--ink); line-height:1.4; margin-bottom:4px;"></textarea>
       <div style="font-size:11px; color:var(--muted); margin-bottom:8px;">
-        Channel name is positioned at the top right corner with a divider line below it. Supports <code>{channelName}</code> and optional <code>{link}</code>.
+        Writes the channel name at the top (Center, Left, or Right) with identical syntax for both English and Urdu without lines. Supports <code>{channelName}</code> and optional <code>{link}</code>.
       </div>
 
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:3px;">
@@ -162,7 +180,7 @@
           </label>
         </div>
       </div>
-      <div id="sigPreview" style="background:var(--panel); border:1px dashed var(--line); border-radius:6px; padding:8px; font-size:11.5px; font-family:monospace; white-space:pre-wrap; line-height:1.4; color:var(--ink);"></div>
+      <div id="sigPreview" style="background:var(--panel); border:1px dashed var(--line); border-radius:6px; padding:8px; font-size:11.5px; font-family:monospace; white-space:pre-wrap; line-height:1.4; color:var(--ink); unicode-bidi:plaintext;"></div>
     </div>
   </section>
 

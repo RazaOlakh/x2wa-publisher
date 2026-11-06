@@ -37,14 +37,14 @@ function formatModelDisplayName(modelId) {
 const SYSTEM_PROMPT = `You are an expert English-to-Urdu translator specialising in natural, contemporary Pakistani Urdu. Translate the complete text into fluent, natural Urdu while preserving its meaning, context, tone, humour, sarcasm, and formatting.
 
 Rules:
-- Author Name: If an author display name is provided at the start (e.g. "Author: ..."), write it at the very top in both English and Urdu separated by a midline with exactly three spaces before and after ("   |   ") on its own line followed by a newline. Do NOT include a colon (:). Format: "English Name   |   Urdu Name".
+- Author Name: If an author display name is provided at the start (e.g. "Author: ..."), write it at the very top in both English and Urdu enclosed in backticks (\`English Name   |   Urdu Name\`) on its own line followed by a newline. Do NOT include a colon (:). Format: "\`English Name   |   Urdu Name\`".
   Examples:
-  - Author: Ali → Ali   |   علی
-  - Author: Muhammad Siddiq → Muhammad Siddiq   |   محمد صدیق
-  - Author: Imran Khan → Imran Khan   |   عمران خان
-  - Author: PTI → PTI   |   پی ٹی آئی
-  - Author: PTI Official → PTI Official   |   پی ٹی آئی آفیشل
-  - Author: Adv. Salman Raja → Adv. Salman Raja   |   ایڈووکیٹ سلمان راجہ
+  - Author: Ali → \`Ali   |   علی\`
+  - Author: Muhammad Siddiq → \`Muhammad Siddiq   |   محمد صدیق\`
+  - Author: Imran Khan → \`Imran Khan   |   عمران خان\`
+  - Author: PTI → \`PTI   |   پی ٹی آئی\`
+  - Author: PTI Official → \`PTI Official   |   پی ٹی آئی آفیشل\`
+  - Author: Adv. Salman Raja → \`Adv. Salman Raja   |   ایڈووکیٹ سلمان راجہ\`
 - Names: Write personal names in both languages, in English and Urdu as well, separated by a midline with three spaces before and after ("   |   "). Like: Ali   |   علی, Siddiq   |   صدیق, Muhammad   |   محمد, Imran Khan   |   عمران خان.
 - Body Translation: Faithfully translate the complete body text into fluent Urdu without omitting, summarizing, or dropping repeated names.
 - Acronyms and initialisms: Write initialisms letter-by-letter in Urdu script (e.g., PTI → پی ٹی آئی, PMLN → پی ایم ایل این). Recognise professional titles contextually (e.g., ADV. → ایڈووکیٹ).
@@ -101,14 +101,17 @@ function cleanGroqResponse(rawText) {
     const unquoted = text.slice(1, -1).trim();
     if (unquoted.length > 0) text = unquoted;
   }
-  // Strip trailing colon from the author header line if present (e.g. "Ali | علی:" -> "Ali | علی")
+  // Strip trailing colon from the author header line if present and ensure enclosed in backticks
   const lines = text.split('\n');
-  if (lines.length > 0 && lines[0].includes('|') && /[:\u061B\u05C3]\s*$/.test(lines[0])) {
-    lines[0] = lines[0].replace(/[:\u061B\u05C3]\s*$/, '').trim();
+  if (lines.length > 0 && lines[0].includes('|')) {
+    let firstLine = lines[0].replace(/[:\u061B\u05C3]\s*$/, '').trim();
+    firstLine = firstLine.replace(/([^\s|`])\s*\|\s*([^\s|`])/g, '$1   |   $2');
+    const cleanFirst = firstLine.replace(/^`+|`+$/g, '').trim();
+    lines[0] = `\`${cleanFirst}\``;
     text = lines.join('\n');
   }
   // Ensure exactly three spaces before and after the midline ("   |   ")
-  text = text.replace(/([^\s|])\s*\|\s*([^\s|])/g, '$1   |   $2');
+  text = text.replace(/([^\s|`])\s*\|\s*([^\s|`])/g, '$1   |   $2');
   return text.length > 0 ? text : null;
 }
 
@@ -246,24 +249,25 @@ async function translateWithGroq(text, options, deps) {
   }
 }
 
-const AUTHOR_DUAL_SYSTEM_PROMPT = `You are an expert English-to-Urdu transliterator. Given an author or display name (in English, Urdu, or mixed), output the name in both English and Urdu script separated by a midline with exactly three spaces before and after:
-Format: "English Name   |   Urdu Name"
+const AUTHOR_DUAL_SYSTEM_PROMPT = `You are an expert English-to-Urdu transliterator. Given an author or display name (in English, Urdu, or mixed), output the name in both English and Urdu script enclosed in backticks separated by a midline with exactly three spaces before and after:
+Format: "\`English Name   |   Urdu Name\`"
 Do NOT include a colon, quotation marks, or explanations. Return ONLY the formatted name.
 
 Examples:
-- Ali → Ali   |   علی
-- عمران خان → Imran Khan   |   عمران خان
-- Muhammad Siddiq → Muhammad Siddiq   |   محمد صدیق
-- PTI → PTI   |   پی ٹی آئی
-- PTI Official → PTI Official   |   پی ٹی آئی آفیشل
-- Adv. Salman Raja → Adv. Salman Raja   |   ایڈووکیٹ سلمان راجہ
-- Geo News Urdu → Geo News Urdu   |   جیو نیوز اردو`;
+- Ali → \`Ali   |   علی\`
+- عمران خان → \`Imran Khan   |   عمران خان\`
+- Muhammad Siddiq → \`Muhammad Siddiq   |   محمد صدیق\`
+- PTI → \`PTI   |   پی ٹی آئی\`
+- PTI Official → \`PTI Official   |   پی ٹی آئی آفیشل\`
+- Adv. Salman Raja → \`Adv. Salman Raja   |   ایڈووکیٹ سلمان راجہ\`
+- Geo News Urdu → \`Geo News Urdu   |   جیو نیوز اردو\``;
 
 async function formatAuthorNameDual(name, deps) {
   if (!name || typeof name !== 'string' || !name.trim()) return '';
-  const trimmed = name.trim();
+  const trimmed = name.trim().replace(/^`+|`+$/g, '').trim();
   if (trimmed.includes('|')) {
-    return trimmed.replace(/([^\s|])\s*\|\s*([^\s|])/g, '$1   |   $2');
+    const formatted = trimmed.replace(/([^\s|`])\s*\|\s*([^\s|`])/g, '$1   |   $2');
+    return `\`${formatted}\``;
   }
   const env = (deps && deps.env) || process.env;
   if (isGroqConfigured(env, deps)) {
@@ -274,13 +278,14 @@ async function formatAuthorNameDual(name, deps) {
       }, deps);
       if (res && res.text) {
         let text = res.text.trim();
-        text = text.replace(/([^\s|])\s*\|\s*([^\s|])/g, '$1   |   $2');
+        text = text.replace(/([^\s|`])\s*\|\s*([^\s|`])/g, '$1   |   $2');
         text = text.replace(/[:\u061B\u05C3]\s*$/, '').trim();
-        if (text.includes('|')) return text;
+        const clean = text.replace(/^`+|`+$/g, '').trim();
+        if (clean.includes('|')) return `\`${clean}\``;
       }
     } catch {}
   }
-  return trimmed;
+  return `\`${trimmed}\``;
 }
 
 module.exports = {

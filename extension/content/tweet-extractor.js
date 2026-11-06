@@ -126,12 +126,15 @@ function isUrduText(text) {
 }
 
 // The line that goes above a post when it is sent in "name the author" mode:
-// the author's name, and nothing else. The name is written in the post's own
-// language (see button.js - an Urdu post's name is translated first), so an
-// English post is headed "Imran Khan" and an Urdu one "عمران خان". Empty when
-// there is no name to show.
+// the author's name, enclosed in backticks (`authorName`). The name is written
+// in the post's own language (see button.js - an Urdu post's name is translated
+// first), so an English post is headed "`Imran Khan`" and an Urdu one "`عمران خان`".
+// Empty when there is no name to show.
 function authorHeader(name) {
-  return normalizeAuthorName(name);
+  const clean = normalizeAuthorName(name);
+  if (!clean) return '';
+  const unquoted = clean.replace(/^`+|`+$/g, '').trim();
+  return unquoted ? `\`${unquoted}\`` : '';
 }
 
 // Put the author's name above the post. The rest of the text is only trimmed at
