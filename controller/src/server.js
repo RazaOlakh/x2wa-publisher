@@ -807,7 +807,9 @@ async function runSend(body) {
       // Alignment & BiDi directional formatting:
       // Supports 'center' (default), 'left', or 'right' with identical syntax for both English and Urdu.
       const align = (body.signatureAlign || 'center').toLowerCase();
-      const targetWidth = 34;
+      const customIndent = typeof body.signatureIndent === 'number' && !isNaN(body.signatureIndent)
+        ? Math.max(0, Math.min(100, Math.round(body.signatureIndent)))
+        : null;
 
       sig = sig.split('\n').map(line => {
         if (!line.trim()) return line;
@@ -818,8 +820,14 @@ async function runSend(body) {
           return `\u200F${clean}\u200F`;
         } else {
           // Center: indent with non-breaking spaces and wrap with LRM for consistent centering
-          const visLen = clean.replace(/[*_~`]/g, '').length;
-          const padCount = Math.max(2, Math.round((targetWidth - visLen) / 2));
+          let padCount = 24;
+          if (customIndent !== null) {
+            padCount = customIndent;
+          } else {
+            const visLen = clean.replace(/[*_~`]/g, '').length;
+            // Target width ~65 characters (doubled/tripled for optical centering on WhatsApp bubbles)
+            padCount = Math.max(8, Math.round((65 - visLen) / 2));
+          }
           const pad = '\u00A0'.repeat(padCount);
           return `\u200E${pad}${clean}\u200E`;
         }
@@ -1294,6 +1302,10 @@ const server = http.createServer(async (req, res) => {
       }
       if (body.signatureAlign != null && body.signatureAlign !== 'center' && body.signatureAlign !== 'left' && body.signatureAlign !== 'right') {
         log('error','send-rejected-bad-request',{badField:'signatureAlign'});
+        return json(res, 400, { error: 'bad-request' });
+      }
+      if (body.signatureIndent != null && (typeof body.signatureIndent !== 'number' || isNaN(body.signatureIndent) || body.signatureIndent < 0 || body.signatureIndent > 150)) {
+        log('error','send-rejected-bad-request',{badField:'signatureIndent'});
         return json(res, 400, { error: 'bad-request' });
       }
       log('info','send-request-validated',{requestId:body.requestId,tweetId:body.tweetId,mediaTypes:body.media.map(m=>m.type)});

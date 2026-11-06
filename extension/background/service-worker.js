@@ -390,6 +390,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           signatureUrdu: sigData.signatureUrdu,
           signaturePlacement: sigData.placement,
           signatureAlign: sigData.align || 'center',
+          signatureIndent: typeof sigData.indent === 'number' ? sigData.indent : 24,
         } : {}),
       };
       // The "post in Urdu" button asks the controller to translate the text
@@ -514,6 +515,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           signatureUrdu: sigData.signatureUrdu,
           signaturePlacement: sigData.placement,
           signatureAlign: sigData.align || 'center',
+          signatureIndent: typeof sigData.indent === 'number' ? sigData.indent : 24,
         } : {}),
       };
       // The "post in Urdu" button asks the controller to translate the text
@@ -605,7 +607,7 @@ const DEFAULT_SIG_TEMPLATE_URDU = DEFAULT_SIG_TEMPLATE;
 async function getActiveSignature(targetChannelId, overrideChannelName) {
   return new Promise((resolve) => {
     chrome.storage.local.get([
-      'sigEnabled', 'sigPlacement', 'sigAlign', 'sigAligns',
+      'sigEnabled', 'sigPlacement', 'sigAlign', 'sigAligns', 'sigIndent', 'sigIndents',
       'sigLink', 'sigLinks', 'sigTemplate', 'sigTemplates',
       'selectedChannelName'
     ], (data) => {
@@ -614,6 +616,7 @@ async function getActiveSignature(targetChannelId, overrideChannelName) {
       const templates = (data && typeof data.sigTemplates === 'object' && data.sigTemplates) ? data.sigTemplates : {};
       const links = (data && typeof data.sigLinks === 'object' && data.sigLinks) ? data.sigLinks : {};
       const aligns = (data && typeof data.sigAligns === 'object' && data.sigAligns) ? data.sigAligns : {};
+      const indents = (data && typeof data.sigIndents === 'object' && data.sigIndents) ? data.sigIndents : {};
 
       const channelName = overrideChannelName || (data && typeof data.selectedChannelName === 'string' ? data.selectedChannelName.trim() : '') || 'Voice of People';
 
@@ -631,6 +634,13 @@ async function getActiveSignature(targetChannelId, overrideChannelName) {
         align = aligns[targetChannelId];
       } else if (data && data.sigAlign) {
         align = data.sigAlign;
+      }
+
+      let indent = 24;
+      if (targetChannelId && typeof indents[targetChannelId] === 'number') {
+        indent = indents[targetChannelId];
+      } else if (typeof data.sigIndent === 'number') {
+        indent = data.sigIndent;
       }
 
       let link = '';
@@ -665,6 +675,7 @@ async function getActiveSignature(targetChannelId, overrideChannelName) {
         signatureUrdu: sig,
         placement: 'top',
         align: align || 'center',
+        indent: indent,
       });
     });
   });

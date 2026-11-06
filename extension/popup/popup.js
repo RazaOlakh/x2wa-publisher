@@ -21,6 +21,7 @@ const ui = {
   sigPlacementTop: el('sigPlacementTop'), sigPlacementBottom: el('sigPlacementBottom'),
   sigLinkLabel: el('sigLinkLabel'), sigLinkInput: el('sigLinkInput'),
   sigAlign_center: el('sigAlign_center'), sigAlign_left: el('sigAlign_left'), sigAlign_right: el('sigAlign_right'),
+  sigIndentRow: el('sigIndentRow'), sigIndentSlider: el('sigIndentSlider'), sigIndentInput: el('sigIndentInput'),
   sigTemplateLabel: el('sigTemplateLabel'), sigTemplateInput: el('sigTemplateInput'),
   sigPreviewLangEn: el('sigPreviewLangEn'), sigPreviewLangUr: el('sigPreviewLangUr'),
   sigResetBtn: el('sigResetBtn'), sigPreview: el('sigPreview'),
@@ -515,6 +516,25 @@ function setSigAlignmentUI(align) {
   }
 }
 
+function getSigIndent() {
+  if (ui.sigIndentInput && !isNaN(parseInt(ui.sigIndentInput.value, 10))) {
+    return Math.max(0, Math.min(100, parseInt(ui.sigIndentInput.value, 10)));
+  }
+  return 24;
+}
+
+function setSigIndentUI(val) {
+  const num = typeof val === 'number' && !isNaN(val) ? Math.max(0, Math.min(100, val)) : 24;
+  if (ui.sigIndentInput) ui.sigIndentInput.value = num;
+  if (ui.sigIndentSlider) ui.sigIndentSlider.value = num;
+}
+
+function updateIndentRowVisibility() {
+  if (!ui.sigIndentRow) return;
+  const isCenter = getSigAlignment() === 'center';
+  ui.sigIndentRow.style.display = isCenter ? 'flex' : 'none';
+}
+
 async function syncChannelLinkUI(chId, chName) {
   const name = chName || getEffectiveChannelName() || 'Voice of People';
   const id = chId || getEffectiveChannelId();
@@ -530,14 +550,19 @@ async function syncChannelLinkUI(chId, chName) {
       : 'Watermark Design (separate for each channel)';
   }
 
-  const data = await store.get(['sigLinks', 'sigLink', 'sigTemplates', 'sigTemplate', 'sigAligns', 'sigAlign']);
+  const data = await store.get(['sigLinks', 'sigLink', 'sigTemplates', 'sigTemplate', 'sigAligns', 'sigAlign', 'sigIndents', 'sigIndent']);
   const links = (data && typeof data.sigLinks === 'object' && data.sigLinks) ? data.sigLinks : {};
   const templates = (data && typeof data.sigTemplates === 'object' && data.sigTemplates) ? data.sigTemplates : {};
   const aligns = (data && typeof data.sigAligns === 'object' && data.sigAligns) ? data.sigAligns : {};
+  const indents = (data && typeof data.sigIndents === 'object' && data.sigIndents) ? data.sigIndents : {};
 
   // Sync alignment setting
   const activeAlign = (id && aligns[id]) ? aligns[id] : (data.sigAlign || 'center');
   setSigAlignmentUI(activeAlign);
+
+  const activeIndent = (id && typeof indents[id] === 'number') ? indents[id] : (typeof data.sigIndent === 'number' ? data.sigIndent : 24);
+  setSigIndentUI(activeIndent);
+  updateIndentRowVisibility();
 
   if (ui.sigLinkInput) {
     if (id && links[id] !== undefined) {
@@ -602,7 +627,7 @@ async function renderSigPreview() {
 
   // Alignment formatting (same logic as controller/src/server.js and service worker)
   const align = getSigAlignment();
-  const targetWidth = 34;
+  const indentCount = getSigIndent();
 
   const watermark = previewText.split('\n').map(line => {
     if (!line.trim()) return line;
@@ -613,9 +638,7 @@ async function renderSigPreview() {
       return `\u200F${clean}\u200F`;
     } else {
       // Center: indent with non-breaking spaces and wrap with LRM for consistent centering
-      const visLen = clean.replace(/[*_~`]/g, '').length;
-      const padCount = Math.max(2, Math.round((targetWidth - visLen) / 2));
-      const pad = '\u00A0'.repeat(padCount);
+      const pad = '\u00A0'.repeat(indentCount);
       return `\u200E${pad}${clean}\u200E`;
     }
   }).join('\n');
@@ -639,19 +662,22 @@ function debouncedSaveSig() {
       const stored = await store.get(['selectedChannelId']);
       chId = (stored && stored.selectedChannelId) || '';
     }
-    const data = await store.get(['sigLinks', 'sigTemplates', 'sigAligns']);
+    const data = await store.get(['sigLinks', 'sigTemplates', 'sigAligns', 'sigIndents']);
     const links = (data && typeof data.sigLinks === 'object' && data.sigLinks) ? { ...data.sigLinks } : {};
     const templates = (data && typeof data.sigTemplates === 'object' && data.sigTemplates) ? { ...data.sigTemplates } : {};
     const aligns = (data && typeof data.sigAligns === 'object' && data.sigAligns) ? { ...data.sigAligns } : {};
+    const indents = (data && typeof data.sigIndents === 'object' && data.sigIndents) ? { ...data.sigIndents } : {};
 
     const linkVal = ui.sigLinkInput ? ui.sigLinkInput.value.trim() : '';
     const templateVal = ui.sigTemplateInput ? ui.sigTemplateInput.value : '';
     const alignVal = getSigAlignment();
+    const indentVal = getSigIndent();
 
     if (chId) {
       links[chId] = linkVal;
       templates[chId] = templateVal;
       aligns[chId] = alignVal;
+      indents[chId] = indentVal;
     }
     await store.set({
       sigEnabled: ui.sigEnabled ? ui.sigEnabled.checked : true,
@@ -662,6 +688,8 @@ function debouncedSaveSig() {
       sigTemplate: templateVal,
       sigAligns: aligns,
       sigAlign: alignVal,
+      sigIndents: indents,
+      sigIndent: indentVal,
     });
   }, 250);
 }
@@ -683,9 +711,28 @@ async function initSignatureSettings() {
     });
   }
 
+  if (ui.sigIndentSlider) {
+    ui.sigIndentSlider.addEventListener('input', () => {
+      if (ui.sigIndentInput) ui.sigIndentInput.value = ui.sigIndentSlider.value;
+      renderSigPreview();
+      debouncedSaveSig();
+    });
+  }
+  if (ui.sigIndentInput) {
+    ui.sigIndentInput.addEventListener('input', () => {
+      let val = parseInt(ui.sigIndentInput.value, 10);
+      if (isNaN(val)) val = 24;
+      val = Math.max(0, Math.min(100, val));
+      if (ui.sigIndentSlider) ui.sigIndentSlider.value = val;
+      renderSigPreview();
+      debouncedSaveSig();
+    });
+  }
+
   [ui.sigAlign_center, ui.sigAlign_left, ui.sigAlign_right].forEach(radio => {
     if (radio) {
       radio.addEventListener('change', () => {
+        updateIndentRowVisibility();
         renderSigPreview();
         debouncedSaveSig();
       });
@@ -720,19 +767,25 @@ async function initSignatureSettings() {
       const defaultTpl = getDefaultTemplateForChannel(chName);
       if (ui.sigTemplateInput) ui.sigTemplateInput.value = defaultTpl;
       setSigAlignmentUI('center');
+      setSigIndentUI(24);
+      updateIndentRowVisibility();
 
-      const data = await store.get(['sigTemplates', 'sigAligns']);
+      const data = await store.get(['sigTemplates', 'sigAligns', 'sigIndents']);
       const templates = (data && typeof data.sigTemplates === 'object' && data.sigTemplates) ? { ...data.sigTemplates } : {};
       const aligns = (data && typeof data.sigAligns === 'object' && data.sigAligns) ? { ...data.sigAligns } : {};
+      const indents = (data && typeof data.sigIndents === 'object' && data.sigIndents) ? { ...data.sigIndents } : {};
       if (chId) {
         templates[chId] = defaultTpl;
         aligns[chId] = 'center';
+        indents[chId] = 24;
       }
       await store.set({
         sigTemplates: templates,
         sigTemplate: defaultTpl,
         sigAligns: aligns,
         sigAlign: 'center',
+        sigIndents: indents,
+        sigIndent: 24,
       });
       renderSigPreview();
     });
