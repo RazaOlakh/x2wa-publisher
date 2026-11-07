@@ -37,14 +37,14 @@ function formatModelDisplayName(modelId) {
 const SYSTEM_PROMPT = `You are an expert English-to-Urdu translator specialising in natural, contemporary Pakistani Urdu. Translate the complete text into fluent, natural Urdu while preserving its meaning, context, tone, humour, sarcasm, and formatting.
 
 Rules:
-- Author Name: If an author display name is provided at the start (e.g. "Author: ..."), write it at the very top in both English and Urdu enclosed in backticks (\`English Name   |   Urdu Name\`) on its own line followed by a newline. Do NOT include a colon (:). Format: "\`English Name   |   Urdu Name\`".
+- Author Name: If an author display name is provided at the start (e.g. "Author: ..."), write it at the very top in both Urdu and English enclosed in backticks (\`Urdu Name   |   English Name\`) on its own line followed by a newline (so in RTL layout Urdu is visually on the right and English is on the left). Do NOT include a colon (:). Format: "\`Urdu Name   |   English Name\`".
   Examples:
-  - Author: Ali → \`Ali   |   علی\`
-  - Author: Muhammad Siddiq → \`Muhammad Siddiq   |   محمد صدیق\`
-  - Author: Imran Khan → \`Imran Khan   |   عمران خان\`
-  - Author: PTI → \`PTI   |   پی ٹی آئی\`
-  - Author: PTI Official → \`PTI Official   |   پی ٹی آئی آفیشل\`
-  - Author: Adv. Salman Raja → \`Adv. Salman Raja   |   ایڈووکیٹ سلمان راجہ\`
+  - Author: Ali → \`علی   |   Ali\`
+  - Author: Muhammad Siddiq → \`محمد صدیق   |   Muhammad Siddiq\`
+  - Author: Imran Khan → \`عمران خان   |   Imran Khan\`
+  - Author: PTI → \`پی ٹی آئی   |   PTI\`
+  - Author: PTI Official → \`پی ٹی آئی آفیشل   |   PTI Official\`
+  - Author: Adv. Salman Raja → \`ایڈووکیٹ سلمان راجہ   |   Adv. Salman Raja\`
 - Names: Write personal names in both languages, in English and Urdu as well, separated by a midline with three spaces before and after ("   |   "). Like: Ali   |   علی, Siddiq   |   صدیق, Muhammad   |   محمد, Imran Khan   |   عمران خان.
 - Body Translation: Faithfully translate the complete body text into fluent Urdu without omitting, summarizing, or dropping repeated names.
 - Acronyms and initialisms: Write initialisms letter-by-letter in Urdu script (e.g., PTI → پی ٹی آئی, PMLN → پی ایم ایل این). Recognise professional titles contextually (e.g., ADV. → ایڈووکیٹ).
@@ -83,6 +83,37 @@ function isGroqConfigured(env = process.env, overrides = {}) {
   return typeof apiKey === 'string' && apiKey.trim().length > 0;
 }
 
+// Formats dual-language author header for Urdu posts so that in RTL display,
+// Urdu name is visually on the RIGHT and English name is on the LEFT.
+function formatDualAuthorForUrdu(str) {
+  if (!str || typeof str !== 'string') return '';
+  const clean = str.replace(/^[\u200E\u200F`]+|[\u200E\u200F`]+$/g, '').trim();
+  if (!clean.includes('|')) {
+    return `\u200F\`${clean}\`\u200F`;
+  }
+  const parts = clean.split('|').map(p => p.trim());
+  if (parts.length >= 2) {
+    let p1 = parts[0];
+    let p2 = parts[1];
+    const p1HasUrdu = /[\u0600-\u06FF]/.test(p1);
+    const p2HasUrdu = /[\u0600-\u06FF]/.test(p2);
+    let urduPart, englishPart;
+    if (p1HasUrdu && !p2HasUrdu) {
+      urduPart = p1;
+      englishPart = p2;
+    } else if (!p1HasUrdu && p2HasUrdu) {
+      urduPart = p2;
+      englishPart = p1;
+    } else {
+      urduPart = parts[0];
+      englishPart = parts[1];
+    }
+    // In RTL paragraph, putting Urdu first causes it to display on the RIGHT, and English on the LEFT:
+    return `\u200F\`${urduPart}   |   ${englishPart}\`\u200F`;
+  }
+  return `\u200F\`${clean}\`\u200F`;
+}
+
 // Strips model thinking/reasoning tags and enclosing quotation wrappers.
 function cleanGroqResponse(rawText, options) {
   if (typeof rawText !== 'string') return null;
@@ -108,10 +139,8 @@ function cleanGroqResponse(rawText, options) {
     let firstLine = lines[0].replace(/[:\u061B\u05C3]\s*$/, '').trim();
     const cleanFirst = firstLine.replace(/^[\u200E\u200F`]+|[\u200E\u200F`]+$/g, '').trim();
     if (cleanFirst.includes('|') || (rawAuthor && (cleanFirst.toLowerCase() === rawAuthor.toLowerCase() || lines.length > 1))) {
-      let formatted = cleanFirst.replace(/([^\s|`])\s*\|\s*([^\s|`])/g, '$1   |   $2');
       if (cleanFirst.includes('|') || (rawAuthor && cleanFirst.toLowerCase() === rawAuthor.toLowerCase())) {
-        // Urdu post: author line strictly on the RIGHT side (\u200F)
-        lines[0] = `\u200F\`${formatted}\`\u200F`;
+        lines[0] = formatDualAuthorForUrdu(cleanFirst);
         text = lines.join('\n');
       }
     }
@@ -255,25 +284,24 @@ async function translateWithGroq(text, options, deps) {
   }
 }
 
-const AUTHOR_DUAL_SYSTEM_PROMPT = `You are an expert English-to-Urdu transliterator. Given an author or display name (in English, Urdu, or mixed), output the name in both English and Urdu script enclosed in backticks separated by a midline with exactly three spaces before and after:
-Format: "\`English Name   |   Urdu Name\`"
+const AUTHOR_DUAL_SYSTEM_PROMPT = `You are an expert English-to-Urdu transliterator. Given an author or display name (in English, Urdu, or mixed), output the name in both Urdu and English script enclosed in backticks separated by a midline with exactly three spaces before and after so that in RTL display Urdu is on the right and English is on the left:
+Format: "\`Urdu Name   |   English Name\`"
 Do NOT include a colon, quotation marks, or explanations. Return ONLY the formatted name.
 
 Examples:
-- Ali → \`Ali   |   علی\`
-- عمران خان → \`Imran Khan   |   عمران خان\`
-- Muhammad Siddiq → \`Muhammad Siddiq   |   محمد صدیق\`
-- PTI → \`PTI   |   پی ٹی آئی\`
-- PTI Official → \`PTI Official   |   پی ٹی آئی آفیشل\`
-- Adv. Salman Raja → \`Adv. Salman Raja   |   ایڈووکیٹ سلمان راجہ\`
-- Geo News Urdu → \`Geo News Urdu   |   جیو نیوز اردو\``;
+- Ali → \`علی   |   Ali\`
+- عمران خان → \`عمران خان   |   Imran Khan\`
+- Muhammad Siddiq → \`محمد صدیق   |   Muhammad Siddiq\`
+- PTI → \`پی ٹی آئی   |   PTI\`
+- PTI Official → \`پی ٹی آئی آفیشل   |   PTI Official\`
+- Adv. Salman Raja → \`ایڈووکیٹ سلمان راجہ   |   Adv. Salman Raja\`
+- Geo News Urdu → \`جیو نیوز اردو   |   Geo News Urdu\``;
 
 async function formatAuthorNameDual(name, deps) {
   if (!name || typeof name !== 'string' || !name.trim()) return '';
   const trimmed = name.trim().replace(/^[\u200E\u200F`]+|[\u200E\u200F`]+$/g, '').trim();
   if (trimmed.includes('|')) {
-    const formatted = trimmed.replace(/([^\s|`])\s*\|\s*([^\s|`])/g, '$1   |   $2');
-    return `\u200F\`${formatted}\`\u200F`;
+    return formatDualAuthorForUrdu(trimmed);
   }
   const env = (deps && deps.env) || process.env;
   if (isGroqConfigured(env, deps)) {
@@ -284,10 +312,9 @@ async function formatAuthorNameDual(name, deps) {
       }, deps);
       if (res && res.text) {
         let text = res.text.trim();
-        text = text.replace(/([^\s|`])\s*\|\s*([^\s|`])/g, '$1   |   $2');
         text = text.replace(/[:\u061B\u05C3]\s*$/, '').trim();
         const clean = text.replace(/^[\u200E\u200F`]+|[\u200E\u200F`]+$/g, '').trim();
-        if (clean.includes('|')) return `\u200F\`${clean}\`\u200F`;
+        if (clean.includes('|')) return formatDualAuthorForUrdu(clean);
       }
     } catch {}
   }
@@ -303,6 +330,7 @@ module.exports = {
   SYSTEM_PROMPT,
   PURE_SYSTEM_PROMPT,
   AUTHOR_DUAL_SYSTEM_PROMPT,
+  formatDualAuthorForUrdu,
   formatAuthorNameDual,
   getGroqConfig,
   isGroqConfigured,

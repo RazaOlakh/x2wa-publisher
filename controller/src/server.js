@@ -99,6 +99,7 @@ const {
   SUPPORTED_MODELS: GROQ_SUPPORTED_MODELS,
   formatModelDisplayName: formatGroqModelDisplayName,
   isGroqConfigured,
+  formatDualAuthorForUrdu,
   formatAuthorNameDual,
 } = require('./groq');
 
@@ -765,7 +766,7 @@ async function runSend(body) {
             const dualAuthor = await formatAuthorNameDual(authorTrimmed);
             if (dualAuthor) {
               const cleanDual = dualAuthor.replace(/^[\u200E\u200F`]+|[\u200E\u200F`]+$/g, '').trim();
-              const rightAuthor = `\u200F\`${cleanDual}\`\u200F`;
+              const rightAuthor = formatDualAuthorForUrdu(cleanDual);
               outText = bodyContent ? `${rightAuthor}\n\n${bodyContent}` : rightAuthor;
             }
           } catch {}
@@ -790,7 +791,7 @@ async function runSend(body) {
         if (isAuthorFirstLine) {
           const isUrduPost = isUrduText(bodyContent || cleanFirst) || body.translateTo === 'ur';
           if (isUrduPost) {
-            outText = `\u200F\`${cleanFirst}\`\u200F\n\n${bodyContent}`;
+            outText = `${formatDualAuthorForUrdu(cleanFirst)}\n\n${bodyContent}`;
           } else {
             outText = `\u200E\`${cleanFirst}\`\u200E\n\n${bodyContent}`;
           }
@@ -824,7 +825,7 @@ async function runSend(body) {
       if (sig.includes('{author}') || sig.includes('{authorName}')) {
         const rawAuthor = (body.author && typeof body.author === 'string') ? body.author : '';
         const cleanAuthor = rawAuthor.replace(/^[\u200E\u200F`]+|[\u200E\u200F`]+$/g, '').trim();
-        const formattedAuthor = cleanAuthor ? (postIsUrdu ? `\u200F\`${cleanAuthor}\`\u200F` : `\u200E\`${cleanAuthor}\`\u200E`) : '';
+        const formattedAuthor = cleanAuthor ? (postIsUrdu ? formatDualAuthorForUrdu(cleanAuthor) : `\u200E\`${cleanAuthor}\`\u200E`) : '';
         sig = sig.replace(/\{authorName\}/gi, formattedAuthor).replace(/\{author\}/gi, formattedAuthor);
       }
 
@@ -1249,6 +1250,12 @@ const server = http.createServer(async (req, res) => {
           charsIn: body.text.length,
           charsOut: result.text.length,
         });
+        if (result && result.text && result.source !== 'empty') {
+          const formatted = (result.text && body.text && result.text.toLowerCase() !== body.text.toLowerCase())
+            ? formatDualAuthorForUrdu(`${result.text} | ${body.text}`)
+            : formatDualAuthorForUrdu(result.text);
+          return json(res, 200, { ...result, text: formatted });
+        }
         return json(res, 200, result);
       } catch (e) {
         log('warn', 'transliterate-http-failed', { error: errMsg(e) });

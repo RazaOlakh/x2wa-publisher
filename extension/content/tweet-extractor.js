@@ -135,7 +135,29 @@ function authorHeader(name, isUrdu = false) {
   if (!clean) return '';
   const unquoted = clean.replace(/^[\u200E\u200F`]+|[\u200E\u200F`]+$/g, '').trim();
   if (!unquoted) return '';
-  return isUrdu ? `\u200F\`${unquoted}\`\u200F` : `\u200E\`${unquoted}\`\u200E`;
+  if (isUrdu) {
+    if (unquoted.includes('|')) {
+      const parts = unquoted.split('|').map(p => p.replace(/^[\u200E\u200F`]+|[\u200E\u200F`]+$/g, '').trim());
+      if (parts.length >= 2) {
+        const p1 = parts[0];
+        const p2 = parts[1];
+        const p1HasUrdu = ARABIC_SCRIPT_LETTER.test(p1);
+        const p2HasUrdu = ARABIC_SCRIPT_LETTER.test(p2);
+        let urduPart = p1;
+        let englishPart = p2;
+        if (p1HasUrdu && !p2HasUrdu) {
+          urduPart = p1;
+          englishPart = p2;
+        } else if (!p1HasUrdu && p2HasUrdu) {
+          urduPart = p2;
+          englishPart = p1;
+        }
+        return `\u200F\`${urduPart}   |   ${englishPart}\`\u200F`;
+      }
+    }
+    return `\u200F\`${unquoted}\`\u200F`;
+  }
+  return `\u200E\`${unquoted}\`\u200E`;
 }
 
 // Put the author's name above the post. The rest of the text is only trimmed at

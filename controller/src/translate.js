@@ -25,7 +25,7 @@ const CLIENT = 'dict-chrome-ex';
 const USER_AGENT =
   'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
 
-const { translateWithGroq, isGroqConfigured, getGroqConfig, formatModelDisplayName } = require('./groq');
+const { translateWithGroq, isGroqConfigured, getGroqConfig, formatModelDisplayName, formatDualAuthorForUrdu } = require('./groq');
 
 function getLogger(deps) {
   if (deps && typeof deps.log === 'function') return deps.log;
@@ -412,7 +412,15 @@ async function translatePostTextWithMeta(text, target, author, deps) {
     const transliteratedAuthor = await transliterateText(cleanAuthor, lang, deps);
     const cleanTrans = (transliteratedAuthor || cleanAuthor).replace(/^[\u200E\u200F`]+|[\u200E\u200F`]+$/g, '').trim();
     const bodyRes = await translateTextWithMeta(bodyText, lang, deps);
-    const authorLine = (lang === 'ur') ? `\u200F\`${cleanTrans}\`\u200F` : `\u200E\`${cleanTrans}\`\u200E`;
+    let authorLine;
+    if (lang === 'ur') {
+      const dualText = (cleanTrans && cleanAuthor && cleanTrans.toLowerCase() !== cleanAuthor.toLowerCase())
+        ? `${cleanTrans} | ${cleanAuthor}`
+        : cleanTrans;
+      authorLine = formatDualAuthorForUrdu(dualText);
+    } else {
+      authorLine = `\u200E\`${cleanTrans}\`\u200E`;
+    }
     return {
       text: `${authorLine}\n\n${bodyRes.text}`,
       provider: bodyRes.provider,

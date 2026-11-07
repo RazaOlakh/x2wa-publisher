@@ -671,8 +671,8 @@ async function renderSigPreview() {
   const bottomLink = (!linkInTemplate && linkPos === 'bottom' && rawLink) ? `\n\n${rawLink}` : '';
 
   if (isUrduPreview) {
-    // Author name for Urdu stays on the RIGHT side (\u200F)
-    const authorLine = '\u200F`AMJAD KHAN   |   امجد خان`\u200F';
+    // Author name for Urdu stays on the RIGHT side (\u200F), Urdu name on right, English on left
+    const authorLine = '\u200F`امجد خان   |   AMJAD KHAN`\u200F';
     const bodyText = 'عمران خان کی بہن روبینہ خان نے انکشاف کیا ہے کہ خان صاحب کی طبیعت ٹھیک نہیں اس لئے فوری طور پر ہسپتال منتقل کیا جائے۔';
     ui.sigPreview.textContent = `${watermark}\n\n${authorLine}\n\n${bodyText}${bottomLink}`;
   } else {
