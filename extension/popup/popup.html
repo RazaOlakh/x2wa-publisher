@@ -168,6 +168,20 @@
       <label class="field" for="sigLinkInput" id="sigLinkLabel" style="font-size:11.5px;">Channel Invite Link <span style="color:var(--muted); font-weight:normal;">(optional · separate for each channel)</span></label>
       <input type="url" id="sigLinkInput" placeholder="Optional: https://whatsapp.com/channel/..." style="width:100%; font-size:12px; padding:6px 8px; border-radius:6px; border:1px solid var(--line); margin-top:2px; margin-bottom:8px; background:var(--bg); color:var(--ink);" />
 
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+        <label class="field" style="font-size:11.5px; margin:0;">Link Position</label>
+        <div style="display:inline-flex; gap:10px; font-size:12px;">
+          <label style="display:inline-flex; align-items:center; gap:4px; cursor:pointer;">
+            <input type="radio" name="sigLinkPos" value="bottom" id="sigLinkPos_bottom" checked />
+            <span>Bottom (End of post)</span>
+          </label>
+          <label style="display:inline-flex; align-items:center; gap:4px; cursor:pointer;">
+            <input type="radio" name="sigLinkPos" value="top" id="sigLinkPos_top" />
+            <span>Top (Under watermark)</span>
+          </label>
+        </div>
+      </div>
+
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
         <label class="field" for="sigTemplateInput" id="sigTemplateLabel" style="font-size:11.5px; margin:0;">Watermark Design <span style="color:var(--muted); font-weight:normal;">(separate for each channel)</span></label>
         <button id="sigResetBtn" type="button" style="flex:0 0 auto; padding:2px 8px; font-size:11px;">Reset default</button>

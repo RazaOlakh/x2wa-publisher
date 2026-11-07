@@ -751,25 +751,49 @@ async function runSend(body) {
       }
     } else if (body.author && typeof text === 'string') {
       // For author name button (no translateTo):
-      // If the post is in Urdu, write author name in both English and Urdu: `English Name   |   Urdu Name`
-      // If the post is in English, author name remains in English only: `English Name`
+      // If the post is in Urdu, write author name in both English and Urdu: `English Name   |   Urdu Name` (RIGHT side)
+      // If the post is in English, author name remains in English only: `English Name` (LEFT side)
       const sep = text.indexOf('\n\n');
       const header = (sep > 0 ? text.slice(0, sep) : text).trim();
       const bodyContent = sep > 0 ? text.slice(sep + 2).trim() : '';
-      const authorTrimmed = body.author.replace(/^`+|`+$/g, '').trim();
-      const cleanHeader = header.replace(/^`+|`+$/g, '').trim();
+      const authorTrimmed = body.author.replace(/^[\u200E\u200F`]+|[\u200E\u200F`]+$/g, '').trim();
+      const cleanHeader = header.replace(/^[\u200E\u200F`]+|[\u200E\u200F`]+$/g, '').trim();
       const isAuthorHeader = cleanHeader.toLowerCase() === authorTrimmed.toLowerCase() || cleanHeader === authorTrimmed;
       if (isAuthorHeader) {
         if (isUrduText(bodyContent || cleanHeader)) {
           try {
             const dualAuthor = await formatAuthorNameDual(authorTrimmed);
             if (dualAuthor) {
-              const cleanDual = dualAuthor.replace(/^`+|`+$/g, '').trim();
-              outText = bodyContent ? `\`${cleanDual}\`\n\n${bodyContent}` : `\`${cleanDual}\``;
+              const cleanDual = dualAuthor.replace(/^[\u200E\u200F`]+|[\u200E\u200F`]+$/g, '').trim();
+              const rightAuthor = `\u200F\`${cleanDual}\`\u200F`;
+              outText = bodyContent ? `${rightAuthor}\n\n${bodyContent}` : rightAuthor;
             }
           } catch {}
         } else {
-          outText = bodyContent ? `\`${cleanHeader}\`\n\n${bodyContent}` : `\`${cleanHeader}\``;
+          const leftAuthor = `\u200E\`${cleanHeader}\`\u200E`;
+          outText = bodyContent ? `${leftAuthor}\n\n${bodyContent}` : leftAuthor;
+        }
+      }
+    }
+
+    // Ensure author line alignment adheres strictly:
+    // - Urdu post: author line on RIGHT side (\u200F)
+    // - English post: author line on LEFT side (\u200E)
+    if (outText && typeof outText === 'string') {
+      const sep = outText.indexOf('\n\n');
+      if (sep > 0) {
+        const firstLine = outText.slice(0, sep).trim();
+        const cleanFirst = firstLine.replace(/^[\u200E\u200F`]+|[\u200E\u200F`]+$/g, '').trim();
+        const bodyContent = outText.slice(sep + 2).trim();
+        const rawAuthor = (body.author && typeof body.author === 'string') ? body.author.replace(/^[\u200E\u200F`]+|[\u200E\u200F`]+$/g, '').trim() : '';
+        const isAuthorFirstLine = cleanFirst.includes('|') || (rawAuthor && cleanFirst.toLowerCase() === rawAuthor.toLowerCase());
+        if (isAuthorFirstLine) {
+          const isUrduPost = isUrduText(bodyContent || cleanFirst) || body.translateTo === 'ur';
+          if (isUrduPost) {
+            outText = `\u200F\`${cleanFirst}\`\u200F\n\n${bodyContent}`;
+          } else {
+            outText = `\u200E\`${cleanFirst}\`\u200E\n\n${bodyContent}`;
+          }
         }
       }
     }
@@ -799,8 +823,8 @@ async function runSend(body) {
 
       if (sig.includes('{author}') || sig.includes('{authorName}')) {
         const rawAuthor = (body.author && typeof body.author === 'string') ? body.author : '';
-        const cleanAuthor = rawAuthor.replace(/^`+|`+$/g, '').trim();
-        const formattedAuthor = cleanAuthor ? `\`${cleanAuthor}\`` : '';
+        const cleanAuthor = rawAuthor.replace(/^[\u200E\u200F`]+|[\u200E\u200F`]+$/g, '').trim();
+        const formattedAuthor = cleanAuthor ? (postIsUrdu ? `\u200F\`${cleanAuthor}\`\u200F` : `\u200E\`${cleanAuthor}\`\u200E`) : '';
         sig = sig.replace(/\{authorName\}/gi, formattedAuthor).replace(/\{author\}/gi, formattedAuthor);
       }
 
@@ -838,6 +862,19 @@ async function runSend(body) {
         outText = isTop ? `${sig}\n\n${outText.trim()}` : `${outText.trim()}\n\n${sig}`;
       } else {
         outText = sig;
+      }
+    }
+
+    // Append channel invite link if provided and not already in outText
+    if (body.channelLink && typeof body.channelLink === 'string' && body.channelLink.trim()) {
+      const link = body.channelLink.trim();
+      if (!outText.includes(link)) {
+        if (body.channelLinkPos === 'top') {
+          outText = `${link}\n\n${outText}`;
+        } else {
+          // Bottom (default): at the very end of the post
+          outText = outText && outText.trim() ? `${outText.trim()}\n\n${link}` : link;
+        }
       }
     }
     if (Array.isArray(media) && media.length > 0) {
@@ -1306,6 +1343,14 @@ const server = http.createServer(async (req, res) => {
       }
       if (body.signatureIndent != null && (typeof body.signatureIndent !== 'number' || isNaN(body.signatureIndent) || body.signatureIndent < 0 || body.signatureIndent > 150)) {
         log('error','send-rejected-bad-request',{badField:'signatureIndent'});
+        return json(res, 400, { error: 'bad-request' });
+      }
+      if (body.channelLink != null && (typeof body.channelLink !== 'string' || body.channelLink.length > 500)) {
+        log('error','send-rejected-bad-request',{badField:'channelLink'});
+        return json(res, 400, { error: 'bad-request' });
+      }
+      if (body.channelLinkPos != null && body.channelLinkPos !== 'top' && body.channelLinkPos !== 'bottom') {
+        log('error','send-rejected-bad-request',{badField:'channelLinkPos'});
         return json(res, 400, { error: 'bad-request' });
       }
       log('info','send-request-validated',{requestId:body.requestId,tweetId:body.tweetId,mediaTypes:body.media.map(m=>m.type)});

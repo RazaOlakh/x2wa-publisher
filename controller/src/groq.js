@@ -102,15 +102,16 @@ function cleanGroqResponse(rawText, options) {
     if (unquoted.length > 0) text = unquoted;
   }
   // Strip trailing colon from the author header line if present and ensure enclosed in backticks
-  const rawAuthor = options && options.author && typeof options.author === 'string' ? options.author.replace(/^`+|`+$/g, '').trim() : '';
+  const rawAuthor = options && options.author && typeof options.author === 'string' ? options.author.replace(/^[\u200E\u200F`]+|[\u200E\u200F`]+$/g, '').trim() : '';
   const lines = text.split('\n');
   if (lines.length > 0) {
     let firstLine = lines[0].replace(/[:\u061B\u05C3]\s*$/, '').trim();
-    const cleanFirst = firstLine.replace(/^`+|`+$/g, '').trim();
+    const cleanFirst = firstLine.replace(/^[\u200E\u200F`]+|[\u200E\u200F`]+$/g, '').trim();
     if (cleanFirst.includes('|') || (rawAuthor && (cleanFirst.toLowerCase() === rawAuthor.toLowerCase() || lines.length > 1))) {
       let formatted = cleanFirst.replace(/([^\s|`])\s*\|\s*([^\s|`])/g, '$1   |   $2');
       if (cleanFirst.includes('|') || (rawAuthor && cleanFirst.toLowerCase() === rawAuthor.toLowerCase())) {
-        lines[0] = `\`${formatted}\``;
+        // Urdu post: author line strictly on the RIGHT side (\u200F)
+        lines[0] = `\u200F\`${formatted}\`\u200F`;
         text = lines.join('\n');
       }
     }
@@ -269,10 +270,10 @@ Examples:
 
 async function formatAuthorNameDual(name, deps) {
   if (!name || typeof name !== 'string' || !name.trim()) return '';
-  const trimmed = name.trim().replace(/^`+|`+$/g, '').trim();
+  const trimmed = name.trim().replace(/^[\u200E\u200F`]+|[\u200E\u200F`]+$/g, '').trim();
   if (trimmed.includes('|')) {
     const formatted = trimmed.replace(/([^\s|`])\s*\|\s*([^\s|`])/g, '$1   |   $2');
-    return `\`${formatted}\``;
+    return `\u200F\`${formatted}\`\u200F`;
   }
   const env = (deps && deps.env) || process.env;
   if (isGroqConfigured(env, deps)) {
@@ -285,12 +286,12 @@ async function formatAuthorNameDual(name, deps) {
         let text = res.text.trim();
         text = text.replace(/([^\s|`])\s*\|\s*([^\s|`])/g, '$1   |   $2');
         text = text.replace(/[:\u061B\u05C3]\s*$/, '').trim();
-        const clean = text.replace(/^`+|`+$/g, '').trim();
-        if (clean.includes('|')) return `\`${clean}\``;
+        const clean = text.replace(/^[\u200E\u200F`]+|[\u200E\u200F`]+$/g, '').trim();
+        if (clean.includes('|')) return `\u200F\`${clean}\`\u200F`;
       }
     } catch {}
   }
-  return `\`${trimmed}\``;
+  return `\u200F\`${trimmed}\`\u200F`;
 }
 
 module.exports = {

@@ -128,20 +128,22 @@ function isUrduText(text) {
 // The line that goes above a post when it is sent in "name the author" mode:
 // the author's name, enclosed in backticks (`authorName`). The name is written
 // in the post's own language (see button.js - an Urdu post's name is translated
-// first), so an English post is headed "`Imran Khan`" and an Urdu one "`عمران خان`".
-// Empty when there is no name to show.
-function authorHeader(name) {
+// first), so an English post is headed "`Imran Khan`" (on the left side) and
+// an Urdu one "`عمران خان`" (on the right side). Empty when there is no name to show.
+function authorHeader(name, isUrdu = false) {
   const clean = normalizeAuthorName(name);
   if (!clean) return '';
-  const unquoted = clean.replace(/^`+|`+$/g, '').trim();
-  return unquoted ? `\`${unquoted}\`` : '';
+  const unquoted = clean.replace(/^[\u200E\u200F`]+|[\u200E\u200F`]+$/g, '').trim();
+  if (!unquoted) return '';
+  return isUrdu ? `\u200F\`${unquoted}\`\u200F` : `\u200E\`${unquoted}\`\u200E`;
 }
 
 // Put the author's name above the post. The rest of the text is only trimmed at
 // its ends, so the link-first reorder and any blank lines inside it survive
 // untouched. With no name the text is returned exactly as it was.
 function withAuthorHeader(text, name) {
-  const header = authorHeader(name);
+  const isUrdu = isUrduText(text) || (name && isUrduText(name));
+  const header = authorHeader(name, isUrdu);
   if (!header) return text || '';
   const body = String(text == null ? '' : text).replace(/^\s+|\s+$/g, '');
   return body ? header + '\n\n' + body : header;

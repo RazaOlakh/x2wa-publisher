@@ -20,6 +20,7 @@ const ui = {
   sigCard: el('sigCard'), sigEnabled: el('sigEnabled'), sigForm: el('sigForm'),
   sigPlacementTop: el('sigPlacementTop'), sigPlacementBottom: el('sigPlacementBottom'),
   sigLinkLabel: el('sigLinkLabel'), sigLinkInput: el('sigLinkInput'),
+  sigLinkPos_bottom: el('sigLinkPos_bottom'), sigLinkPos_top: el('sigLinkPos_top'),
   sigAlign_center: el('sigAlign_center'), sigAlign_left: el('sigAlign_left'), sigAlign_right: el('sigAlign_right'),
   sigIndentRow: el('sigIndentRow'), sigIndentSlider: el('sigIndentSlider'), sigIndentInput: el('sigIndentInput'),
   sigTemplateLabel: el('sigTemplateLabel'), sigTemplateInput: el('sigTemplateInput'),
@@ -516,6 +517,20 @@ function setSigAlignmentUI(align) {
   }
 }
 
+function getSigLinkPos() {
+  if (ui.sigLinkPos_top && ui.sigLinkPos_top.checked) return 'top';
+  return 'bottom';
+}
+
+function setSigLinkPosUI(pos) {
+  const val = (pos || 'bottom').toLowerCase();
+  if (val === 'top') {
+    if (ui.sigLinkPos_top) ui.sigLinkPos_top.checked = true;
+  } else {
+    if (ui.sigLinkPos_bottom) ui.sigLinkPos_bottom.checked = true;
+  }
+}
+
 function getSigIndent() {
   if (ui.sigIndentInput && !isNaN(parseInt(ui.sigIndentInput.value, 10))) {
     return Math.max(0, Math.min(100, parseInt(ui.sigIndentInput.value, 10)));
@@ -550,11 +565,12 @@ async function syncChannelLinkUI(chId, chName) {
       : 'Watermark Design (separate for each channel)';
   }
 
-  const data = await store.get(['sigLinks', 'sigLink', 'sigTemplates', 'sigTemplate', 'sigAligns', 'sigAlign', 'sigIndents', 'sigIndent']);
+  const data = await store.get(['sigLinks', 'sigLink', 'sigTemplates', 'sigTemplate', 'sigAligns', 'sigAlign', 'sigIndents', 'sigIndent', 'sigLinkPositions', 'sigLinkPos']);
   const links = (data && typeof data.sigLinks === 'object' && data.sigLinks) ? data.sigLinks : {};
   const templates = (data && typeof data.sigTemplates === 'object' && data.sigTemplates) ? data.sigTemplates : {};
   const aligns = (data && typeof data.sigAligns === 'object' && data.sigAligns) ? data.sigAligns : {};
   const indents = (data && typeof data.sigIndents === 'object' && data.sigIndents) ? data.sigIndents : {};
+  const linkPositions = (data && typeof data.sigLinkPositions === 'object' && data.sigLinkPositions) ? data.sigLinkPositions : {};
 
   // Sync alignment setting
   const activeAlign = (id && aligns[id]) ? aligns[id] : (data.sigAlign || 'center');
@@ -563,6 +579,9 @@ async function syncChannelLinkUI(chId, chName) {
   const activeIndent = (id && typeof indents[id] === 'number') ? indents[id] : (typeof data.sigIndent === 'number' ? data.sigIndent : 24);
   setSigIndentUI(activeIndent);
   updateIndentRowVisibility();
+
+  const activeLinkPos = (id && linkPositions[id]) ? linkPositions[id] : (data.sigLinkPos || 'bottom');
+  setSigLinkPosUI(activeLinkPos);
 
   if (ui.sigLinkInput) {
     if (id && links[id] !== undefined) {
@@ -604,6 +623,7 @@ async function renderSigPreview() {
   }
 
   const rawLink = ui.sigLinkInput ? ui.sigLinkInput.value.trim() : '';
+  const linkPos = getSigLinkPos();
   const isUrduPreview = Boolean(ui.sigPreviewLangUr && ui.sigPreviewLangUr.checked);
 
   let tpl = (ui.sigTemplateInput && ui.sigTemplateInput.value) || getDefaultTemplateForChannel(chName);
@@ -614,10 +634,12 @@ async function renderSigPreview() {
     .replace(/\{authorName\}/gi, '`Author Name`')
     .replace(/\{author\}/gi, '`Author Name`');
 
+  let linkInTemplate = false;
   if (rawLink) {
     if (previewText.includes('{link}')) {
       previewText = previewText.replace(/\{link\}/gi, rawLink);
-    } else {
+      linkInTemplate = true;
+    } else if (linkPos === 'top') {
       previewText = `${previewText}\n${rawLink}`;
     }
   } else {
@@ -646,10 +668,18 @@ async function renderSigPreview() {
   ui.sigPreview.style.unicodeBidi = 'plaintext';
   ui.sigPreview.style.textAlign = 'start';
 
+  const bottomLink = (!linkInTemplate && linkPos === 'bottom' && rawLink) ? `\n\n${rawLink}` : '';
+
   if (isUrduPreview) {
-    ui.sigPreview.textContent = `${watermark}\n\n` + '`AMJAD KHAN   |   امجد خان`' + '\n\nعمران خان کی بہن روبینہ خان نے انکشاف کیا ہے کہ خان صاحب کی طبیعت ٹھیک نہیں اس لئے فوری طور پر ہسپتال منتقل کیا جائے۔';
+    // Author name for Urdu stays on the RIGHT side (\u200F)
+    const authorLine = '\u200F`AMJAD KHAN   |   امجد خان`\u200F';
+    const bodyText = 'عمران خان کی بہن روبینہ خان نے انکشاف کیا ہے کہ خان صاحب کی طبیعت ٹھیک نہیں اس لئے فوری طور پر ہسپتال منتقل کیا جائے۔';
+    ui.sigPreview.textContent = `${watermark}\n\n${authorLine}\n\n${bodyText}${bottomLink}`;
   } else {
-    ui.sigPreview.textContent = `${watermark}\n\n` + '`Abdul El-Sayed`' + '\n\nAbdul El-Sayed proudly introduces himself as America’s first Muslim senator.';
+    // Author name for English stays on the LEFT side (\u200E)
+    const authorLine = '\u200E`Abdul El-Sayed`\u200E';
+    const bodyText = 'Abdul El-Sayed proudly introduces himself as America’s first Muslim senator.';
+    ui.sigPreview.textContent = `${watermark}\n\n${authorLine}\n\n${bodyText}${bottomLink}`;
   }
 }
 
@@ -662,22 +692,25 @@ function debouncedSaveSig() {
       const stored = await store.get(['selectedChannelId']);
       chId = (stored && stored.selectedChannelId) || '';
     }
-    const data = await store.get(['sigLinks', 'sigTemplates', 'sigAligns', 'sigIndents']);
+    const data = await store.get(['sigLinks', 'sigTemplates', 'sigAligns', 'sigIndents', 'sigLinkPositions']);
     const links = (data && typeof data.sigLinks === 'object' && data.sigLinks) ? { ...data.sigLinks } : {};
     const templates = (data && typeof data.sigTemplates === 'object' && data.sigTemplates) ? { ...data.sigTemplates } : {};
     const aligns = (data && typeof data.sigAligns === 'object' && data.sigAligns) ? { ...data.sigAligns } : {};
     const indents = (data && typeof data.sigIndents === 'object' && data.sigIndents) ? { ...data.sigIndents } : {};
+    const linkPositions = (data && typeof data.sigLinkPositions === 'object' && data.sigLinkPositions) ? { ...data.sigLinkPositions } : {};
 
     const linkVal = ui.sigLinkInput ? ui.sigLinkInput.value.trim() : '';
     const templateVal = ui.sigTemplateInput ? ui.sigTemplateInput.value : '';
     const alignVal = getSigAlignment();
     const indentVal = getSigIndent();
+    const linkPosVal = getSigLinkPos();
 
     if (chId) {
       links[chId] = linkVal;
       templates[chId] = templateVal;
       aligns[chId] = alignVal;
       indents[chId] = indentVal;
+      linkPositions[chId] = linkPosVal;
     }
     await store.set({
       sigEnabled: ui.sigEnabled ? ui.sigEnabled.checked : true,
@@ -690,6 +723,8 @@ function debouncedSaveSig() {
       sigAlign: alignVal,
       sigIndents: indents,
       sigIndent: indentVal,
+      sigLinkPositions: linkPositions,
+      sigLinkPos: linkPosVal,
     });
   }, 250);
 }
@@ -710,6 +745,15 @@ async function initSignatureSettings() {
       renderSigPreview();
     });
   }
+
+  [ui.sigLinkPos_bottom, ui.sigLinkPos_top].forEach(radio => {
+    if (radio) {
+      radio.addEventListener('change', () => {
+        renderSigPreview();
+        debouncedSaveSig();
+      });
+    }
+  });
 
   if (ui.sigIndentSlider) {
     ui.sigIndentSlider.addEventListener('input', () => {
@@ -768,16 +812,19 @@ async function initSignatureSettings() {
       if (ui.sigTemplateInput) ui.sigTemplateInput.value = defaultTpl;
       setSigAlignmentUI('center');
       setSigIndentUI(24);
+      setSigLinkPosUI('bottom');
       updateIndentRowVisibility();
 
-      const data = await store.get(['sigTemplates', 'sigAligns', 'sigIndents']);
+      const data = await store.get(['sigTemplates', 'sigAligns', 'sigIndents', 'sigLinkPositions']);
       const templates = (data && typeof data.sigTemplates === 'object' && data.sigTemplates) ? { ...data.sigTemplates } : {};
       const aligns = (data && typeof data.sigAligns === 'object' && data.sigAligns) ? { ...data.sigAligns } : {};
       const indents = (data && typeof data.sigIndents === 'object' && data.sigIndents) ? { ...data.sigIndents } : {};
+      const linkPositions = (data && typeof data.sigLinkPositions === 'object' && data.sigLinkPositions) ? { ...data.sigLinkPositions } : {};
       if (chId) {
         templates[chId] = defaultTpl;
         aligns[chId] = 'center';
         indents[chId] = 24;
+        linkPositions[chId] = 'bottom';
       }
       await store.set({
         sigTemplates: templates,
@@ -786,6 +833,8 @@ async function initSignatureSettings() {
         sigAlign: 'center',
         sigIndents: indents,
         sigIndent: 24,
+        sigLinkPositions: linkPositions,
+        sigLinkPos: 'bottom',
       });
       renderSigPreview();
     });
