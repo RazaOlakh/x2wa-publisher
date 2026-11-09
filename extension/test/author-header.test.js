@@ -113,9 +113,9 @@ console.log('\nthe post\'s own author is read, not a quoted post\'s');
 // --- the header line ---
 console.log('\nthe header line is just the name');
 {
-  eq('the author\'s name is the header', authorHeader('Imran Khan'), 'Imran Khan');
-  eq('surrounding space is trimmed', authorHeader('  Imran Khan  '), 'Imran Khan');
-  eq('an Urdu name is kept as it is', authorHeader('عمران خان'), 'عمران خان');
+  eq('the author\'s name is the header', authorHeader('Imran Khan'), '\u200E`Imran Khan`\u200E');
+  eq('surrounding space is trimmed', authorHeader('  Imran Khan  '), '\u200E`Imran Khan`\u200E');
+  eq('an Urdu name is kept as it is', authorHeader('عمران خان'), '\u200E`عمران خان`\u200E');
   eq('no name means no header', authorHeader(''), '');
   eq('a blank name means no header', authorHeader('   '), '');
   eq('a missing name means no header', authorHeader(null), '');
@@ -141,24 +141,24 @@ console.log('\nthe post\'s language is read from its letters');
 console.log('\nthe name is written in the post\'s language');
 {
   eq('an English post is headed by the English name',
-    withAuthorHeader('Hello there', 'Imran Khan'), 'Imran Khan\n\nHello there');
+    withAuthorHeader('Hello there', 'Imran Khan'), '\u200E`Imran Khan`\u200E\n\nHello there');
   eq('an Urdu post is headed by the Urdu name',
-    withAuthorHeader('یہ بہت اچھی خبر ہے', 'عمران خان'), 'عمران خان\n\nیہ بہت اچھی خبر ہے');
+    withAuthorHeader('یہ بہت اچھی خبر ہے', 'عمران خان'), '\u200F`عمران خان`\u200F\n\nیہ بہت اچھی خبر ہے');
   eq('a missing name means no header in either language', withAuthorHeader('یہ خبر ہے', ''), 'یہ خبر ہے');
   eq('the Urdu name goes above the post, link first untouched',
     withAuthorHeader('example.com\nHello', 'عمران خان'),
-    'عمران خان\n\nexample.com\nHello');
+    '\u200F`عمران خان`\u200F\n\nexample.com\nHello');
 }
 
 // --- putting it in front of the post ---
 console.log('\nthe name goes above the post');
 {
   eq('the name sits above the text',
-    withAuthorHeader('Hello there', 'Imran Khan'), 'Imran Khan\n\nHello there');
+    withAuthorHeader('Hello there', 'Imran Khan'), '\u200E`Imran Khan`\u200E\n\nHello there');
   eq('a post with no text is just the header',
-    withAuthorHeader('', 'Imran Khan'), 'Imran Khan');
+    withAuthorHeader('', 'Imran Khan'), '\u200E`Imran Khan`\u200E');
   eq('the text is trimmed at the seam only',
-    withAuthorHeader('  Hello there  ', 'Imran Khan'), 'Imran Khan\n\nHello there');
+    withAuthorHeader('  Hello there  ', 'Imran Khan'), '\u200E`Imran Khan`\u200E\n\nHello there');
   eq('with no author the text is untouched',
     withAuthorHeader('Hello there', null), 'Hello there');
   eq('a missing text and missing author stays empty', withAuthorHeader('', null), '');
@@ -166,7 +166,7 @@ console.log('\nthe name goes above the post');
   // top of the link, not between it and the words.
   eq('the link stays first, under the name',
     withAuthorHeader('example.com\nHelllo\nhow are your?', 'Imran Khan'),
-    'Imran Khan\n\nexample.com\nHelllo\nhow are your?');
+    '\u200E`Imran Khan`\u200E\n\nexample.com\nHelllo\nhow are your?');
 }
 
 // --- wired into extraction ---

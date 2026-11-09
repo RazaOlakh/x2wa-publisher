@@ -104,6 +104,12 @@ function runPopup({ status, channels, qr, storage, version, update, push, sync }
     if (u.endsWith('/sync')) {
       return jsonResponse(200, sync || { ok: true, synced: true, pulled: true, pushed: true, from: '1234567', to: '7654321', files: 1, ahead: 0, behind: 0 });
     }
+    if (u.endsWith('/groq/config')) {
+      return jsonResponse(200, { configured: false, model: 'openai/gpt-oss-120b' });
+    }
+    if (u.endsWith('/author-corrections')) {
+      return jsonResponse(200, { ok: true, corrections: [] });
+    }
     throw new Error('unexpected fetch ' + u);
   };
 

@@ -297,6 +297,64 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     })();
     return true;
   }
+  // Author Name Correction Manager messages
+  if (msg && msg.type === 'GET_AUTHOR_CORRECTIONS') {
+    (async () => {
+      try {
+        const res = await fetch(`${CONTROLLER}/author-corrections`);
+        const j = await res.json();
+        reply(sendResponse, j);
+      } catch (e) {
+        reply(sendResponse, { ok: false, error: e.message, corrections: [] });
+      }
+    })();
+    return true;
+  }
+  if (msg && msg.type === 'SAVE_AUTHOR_CORRECTION') {
+    (async () => {
+      try {
+        const res = await fetch(`${CONTROLLER}/author-corrections`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            handle: msg.handle,
+            urduName: msg.urduName,
+            originalName: msg.originalName,
+          }),
+        });
+        const j = await res.json();
+        if (j && j.ok) {
+          // Update cached latestTranslation if matching handle
+          chrome.storage.local.get(['latestTranslation'], (r) => {
+            if (r && r.latestTranslation && r.latestTranslation.handle === msg.handle) {
+              const updated = { ...r.latestTranslation, translatedAuthor: msg.urduName };
+              chrome.storage.local.set({ latestTranslation: updated });
+            }
+          });
+        }
+        reply(sendResponse, j);
+      } catch (e) {
+        reply(sendResponse, { ok: false, error: e.message });
+      }
+    })();
+    return true;
+  }
+  if (msg && msg.type === 'DELETE_AUTHOR_CORRECTION') {
+    (async () => {
+      try {
+        const res = await fetch(`${CONTROLLER}/author-corrections`, {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ handle: msg.handle }),
+        });
+        const j = await res.json();
+        reply(sendResponse, j);
+      } catch (e) {
+        reply(sendResponse, { ok: false, error: e.message });
+      }
+    })();
+    return true;
+  }
   // Compare pure translations across all available models
   if (msg && msg.type === 'COMPARE_MODELS' && typeof msg.text === 'string') {
     (async () => {
@@ -506,6 +564,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         tweetId: p.tweetId,
         tweetUrl: p.tweetUrl,
         author: p.author || null,
+        authorHandle: p.authorHandle || null,
         text: p.text,
         media: media.filter((m) => m.source),
         mediaFailures,
@@ -541,6 +600,15 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         body: JSON.stringify(payload),
       });
       const j = await res.json();
+      if (j && (j.ok || j.partial) && j.translation) {
+        const trData = {
+          author: (j.translation && j.translation.author) || p.author || null,
+          handle: (j.translation && j.translation.authorHandle) || p.authorHandle || null,
+          translatedAuthor: (j.translation && j.translation.translatedAuthor) || '',
+          timestamp: Date.now(),
+        };
+        chrome.storage.local.set({ latestTranslation: trData });
+      }
       if (j && j.ok) return reply(sendResponse, { ok: true, jobId: j.jobId, sent: j.sent, ...(j.translation ? { translation: j.translation } : {}) });
       if (j && j.partial) return reply(sendResponse, { ok: false, partial: true, jobId: j.jobId, sent: j.sent, failures: j.failures, error: j.error || 'partial-send' });
       return reply(sendResponse, { ok: false, error: (j && j.error) || 'send-failed', ...(j && j.failures ? { failures: j.failures } : {}) });

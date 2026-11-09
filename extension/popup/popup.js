@@ -33,6 +33,21 @@ const ui = {
   groqCustomModelInput: el('groqCustomModelInput'),
   groqKeyInput: el('groqKeyInput'),
   groqSave: el('groqSaveBtn'), groqClear: el('groqClearBtn'), groqNote: el('groqNote'),
+  // Author Name Corrections
+  correctAuthorBtn: el('correctAuthorBtn'),
+  authorCorrectionForm: el('authorCorrectionForm'),
+  corrAuthorDisplay: el('corrAuthorDisplay'),
+  corrAuthorHandle: el('corrAuthorHandle'),
+  corrLatestTranslated: el('corrLatestTranslated'),
+  corrUrduInput: el('corrUrduInput'),
+  corrSaveBtn: el('corrSaveBtn'),
+  corrCancelBtn: el('corrCancelBtn'),
+  corrNote: el('corrNote'),
+  correctionsCard: el('correctionsCard'),
+  corrCountBadge: el('corrCountBadge'),
+  correctionsList: el('correctionsList'),
+  correctionsEmpty: el('correctionsEmpty'),
+  corrManageNote: el('corrManageNote'),
   // Bottom center translation engine indicator
   transEngineFooter: el('transEngineFooter'),
   transEngineDot: el('transEngineDot'),
@@ -1044,6 +1059,291 @@ if (ui.groqClear) {
   });
 }
 
+// ------------------------------------------------ author name corrections
+let lastCorrectionsJson = null;
+
+async function loadCorrections() {
+  if (!ui.correctionsList) return;
+  try {
+    const r = await req('/author-corrections');
+    if (!r.ok || !r.body || !Array.isArray(r.body.corrections)) {
+      return;
+    }
+    const corrections = r.body.corrections;
+    const jsonStr = JSON.stringify(corrections);
+    if (jsonStr === lastCorrectionsJson) {
+      return;
+    }
+    lastCorrectionsJson = jsonStr;
+    renderCorrectionsList(corrections);
+  } catch {
+    // Controller unreachable or error
+  }
+}
+
+function renderCorrectionsList(corrections) {
+  if (!ui.correctionsList) return;
+  if (ui.corrCountBadge) {
+    ui.corrCountBadge.textContent = `${corrections.length} saved`;
+  }
+  if (!corrections || corrections.length === 0) {
+    if (ui.correctionsEmpty) ui.correctionsEmpty.classList.remove('hidden');
+    ui.correctionsList.innerHTML = '';
+    return;
+  }
+  if (ui.correctionsEmpty) ui.correctionsEmpty.classList.add('hidden');
+  ui.correctionsList.innerHTML = '';
+
+  for (const c of corrections) {
+    const row = document.createElement('div');
+    row.style.cssText = 'padding:7px 10px; background:var(--panel); border:1px solid var(--line); border-radius:6px; display:flex; justify-content:space-between; align-items:center; gap:8px;';
+
+    const info = document.createElement('div');
+    info.style.cssText = 'flex:1; min-width:0;';
+
+    const top = document.createElement('div');
+    top.style.cssText = 'display:flex; align-items:center; gap:6px; font-size:11.5px;';
+
+    const handleSpan = document.createElement('span');
+    handleSpan.style.cssText = 'font-family:monospace; font-weight:600; color:var(--ink);';
+    handleSpan.textContent = c.handle;
+    top.appendChild(handleSpan);
+
+    if (c.originalName) {
+      const origSpan = document.createElement('span');
+      origSpan.style.cssText = 'color:var(--muted); font-size:10.5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:140px;';
+      origSpan.textContent = `(${c.originalName})`;
+      top.appendChild(origSpan);
+    }
+    info.appendChild(top);
+
+    const urduDiv = document.createElement('div');
+    urduDiv.dir = 'rtl';
+    urduDiv.style.cssText = 'font-size:13.5px; font-weight:600; color:var(--ink); margin-top:2px;';
+    urduDiv.textContent = c.urduName;
+    info.appendChild(urduDiv);
+
+    row.appendChild(info);
+
+    const actions = document.createElement('div');
+    actions.style.cssText = 'display:inline-flex; align-items:center; gap:5px; flex:0 0 auto;';
+
+    const editBtn = document.createElement('button');
+    editBtn.type = 'button';
+    editBtn.textContent = 'Edit';
+    editBtn.style.cssText = 'padding:2px 7px; font-size:11px; border-radius:4px; border:1px solid var(--line); background:var(--bg); color:var(--ink); cursor:pointer;';
+    actions.appendChild(editBtn);
+
+    const delBtn = document.createElement('button');
+    delBtn.type = 'button';
+    delBtn.textContent = 'Delete';
+    delBtn.style.cssText = 'padding:2px 7px; font-size:11px; border-radius:4px; border:1px solid var(--line); background:var(--bg); color:#e02424; cursor:pointer;';
+    actions.appendChild(delBtn);
+
+    row.appendChild(actions);
+
+    // Edit button click -> inline editor
+    editBtn.addEventListener('click', () => {
+      row.innerHTML = '';
+      row.style.cssText = 'padding:8px 10px; background:var(--panel); border:1px solid var(--line); border-radius:6px; display:flex; flex-direction:column; gap:6px;';
+
+      const editTop = document.createElement('div');
+      editTop.style.cssText = 'font-size:11px; color:var(--muted);';
+      editTop.textContent = `Editing: ${c.handle}${c.originalName ? ' (' + c.originalName + ')' : ''}`;
+      row.appendChild(editTop);
+
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.dir = 'rtl';
+      input.value = c.urduName;
+      input.style.cssText = 'width:100%; font-size:13.5px; padding:4px 8px; border-radius:4px; border:1px solid var(--line); background:var(--bg); color:var(--ink);';
+      row.appendChild(input);
+
+      const btnRow = document.createElement('div');
+      btnRow.style.cssText = 'display:flex; gap:6px; justify-content:flex-end;';
+
+      const saveEditBtn = document.createElement('button');
+      saveEditBtn.type = 'button';
+      saveEditBtn.className = 'primary';
+      saveEditBtn.textContent = 'Save';
+      saveEditBtn.style.cssText = 'padding:3px 10px; font-size:11px;';
+
+      const cancelEditBtn = document.createElement('button');
+      cancelEditBtn.type = 'button';
+      cancelEditBtn.textContent = 'Cancel';
+      cancelEditBtn.style.cssText = 'padding:3px 8px; font-size:11px;';
+
+      btnRow.appendChild(cancelEditBtn);
+      btnRow.appendChild(saveEditBtn);
+      row.appendChild(btnRow);
+
+      input.focus();
+      input.select();
+
+      cancelEditBtn.addEventListener('click', () => {
+        lastCorrectionsJson = null;
+        renderCorrectionsList(corrections);
+      });
+
+      saveEditBtn.addEventListener('click', async () => {
+        const newUrdu = input.value.trim();
+        if (!newUrdu) {
+          input.focus();
+          return;
+        }
+        saveEditBtn.disabled = true;
+        try {
+          const r = await req('/author-corrections', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              handle: c.handle,
+              urduName: newUrdu,
+              originalName: c.originalName,
+            }),
+          });
+          if (r.ok && r.body && r.body.ok) {
+            lastCorrectionsJson = null;
+            await loadCorrections();
+            if (ui.corrManageNote) setNote(ui.corrManageNote, `Updated correction for ${c.handle}.`, 'ok');
+          } else {
+            if (ui.corrManageNote) setNote(ui.corrManageNote, (r.body && r.body.error) || 'Failed to update correction.', 'error');
+            saveEditBtn.disabled = false;
+          }
+        } catch (e) {
+          if (ui.corrManageNote) setNote(ui.corrManageNote, formatFetchError(e, 'Update failed'), 'error');
+          saveEditBtn.disabled = false;
+        }
+      });
+    });
+
+    // Delete button click
+    delBtn.addEventListener('click', async () => {
+      delBtn.disabled = true;
+      try {
+        const r = await req('/author-corrections', {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ handle: c.handle }),
+        });
+        if (r.ok && r.body && r.body.ok) {
+          lastCorrectionsJson = null;
+          await loadCorrections();
+          if (ui.corrManageNote) setNote(ui.corrManageNote, `Deleted correction for ${c.handle}.`, 'idle');
+        } else {
+          if (ui.corrManageNote) setNote(ui.corrManageNote, (r.body && r.body.error) || 'Failed to delete correction.', 'error');
+          delBtn.disabled = false;
+        }
+      } catch (e) {
+        if (ui.corrManageNote) setNote(ui.corrManageNote, formatFetchError(e, 'Delete failed'), 'error');
+        delBtn.disabled = false;
+      }
+    });
+
+    ui.correctionsList.appendChild(row);
+  }
+}
+
+function initAuthorCorrections() {
+  if (ui.correctAuthorBtn) {
+    ui.correctAuthorBtn.addEventListener('click', async () => {
+      if (!ui.authorCorrectionForm) return;
+      const isOpen = !ui.authorCorrectionForm.classList.contains('hidden');
+      if (isOpen) {
+        ui.authorCorrectionForm.classList.add('hidden');
+        setNote(ui.corrNote, '', 'idle');
+        return;
+      }
+
+      // Check stored latest translation
+      const { latestTranslation } = await store.get(['latestTranslation']);
+      if (latestTranslation && latestTranslation.handle) {
+        const h = latestTranslation.handle.startsWith('@') ? latestTranslation.handle : `@${latestTranslation.handle}`;
+        if (ui.corrAuthorDisplay) ui.corrAuthorDisplay.textContent = latestTranslation.author || latestTranslation.handle;
+        if (ui.corrAuthorHandle) ui.corrAuthorHandle.textContent = h;
+        if (ui.corrLatestTranslated) ui.corrLatestTranslated.textContent = latestTranslation.translatedAuthor || '—';
+        if (ui.corrUrduInput) ui.corrUrduInput.value = latestTranslation.translatedAuthor || '';
+        ui.authorCorrectionForm.dataset.handle = h;
+        ui.authorCorrectionForm.dataset.author = latestTranslation.author || '';
+        ui.authorCorrectionForm.classList.remove('hidden');
+        setNote(ui.corrNote, '', 'idle');
+        if (ui.corrUrduInput) {
+          ui.corrUrduInput.focus();
+          ui.corrUrduInput.select();
+        }
+      } else {
+        if (ui.corrAuthorDisplay) ui.corrAuthorDisplay.textContent = 'None yet';
+        if (ui.corrAuthorHandle) ui.corrAuthorHandle.textContent = '';
+        if (ui.corrLatestTranslated) ui.corrLatestTranslated.textContent = '—';
+        if (ui.corrUrduInput) ui.corrUrduInput.value = '';
+        ui.authorCorrectionForm.dataset.handle = '';
+        ui.authorCorrectionForm.dataset.author = '';
+        ui.authorCorrectionForm.classList.remove('hidden');
+        setNote(ui.corrNote, 'No recent post translated yet. Send a post first to prefill.', 'idle');
+      }
+    });
+  }
+
+  if (ui.corrCancelBtn) {
+    ui.corrCancelBtn.addEventListener('click', () => {
+      if (ui.authorCorrectionForm) ui.authorCorrectionForm.classList.add('hidden');
+      setNote(ui.corrNote, '', 'idle');
+    });
+  }
+
+  if (ui.corrSaveBtn) {
+    ui.corrSaveBtn.addEventListener('click', async () => {
+      const handle = (ui.authorCorrectionForm && ui.authorCorrectionForm.dataset.handle || '').trim();
+      const author = (ui.authorCorrectionForm && ui.authorCorrectionForm.dataset.author || '').trim();
+      const urduName = (ui.corrUrduInput && ui.corrUrduInput.value || '').trim();
+
+      if (!handle) {
+        setNote(ui.corrNote, 'No author handle available for this post.', 'warn');
+        return;
+      }
+      if (!urduName) {
+        setNote(ui.corrNote, 'Please enter preferred Urdu spelling.', 'warn');
+        if (ui.corrUrduInput) ui.corrUrduInput.focus();
+        return;
+      }
+
+      ui.corrSaveBtn.disabled = true;
+      try {
+        setNote(ui.corrNote, 'Saving correction to controller…', 'idle');
+        const r = await req('/author-corrections', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            handle,
+            urduName,
+            originalName: author,
+          }),
+        });
+        if (r.ok && r.body && r.body.ok) {
+          setNote(ui.corrNote, `Saved! Future tweets from ${handle} will use “${urduName}”.`, 'ok');
+          const { latestTranslation } = await store.get(['latestTranslation']);
+          if (latestTranslation && latestTranslation.handle === handle) {
+            latestTranslation.translatedAuthor = urduName;
+            await store.set({ latestTranslation });
+          }
+          lastCorrectionsJson = null;
+          await loadCorrections();
+          setTimeout(() => {
+            if (ui.authorCorrectionForm) ui.authorCorrectionForm.classList.add('hidden');
+            setNote(ui.corrNote, '', 'idle');
+          }, 2000);
+        } else {
+          setNote(ui.corrNote, (r.body && r.body.error) || 'Failed to save correction.', 'error');
+        }
+      } catch (e) {
+        setNote(ui.corrNote, formatFetchError(e, 'Error saving correction'), 'error');
+      } finally {
+        ui.corrSaveBtn.disabled = false;
+      }
+    });
+  }
+}
+
 // --------------------------------------------------------------- refresh
 let refreshingPromise = null;
 function refresh() {
@@ -1063,6 +1363,7 @@ async function doRefresh() {
   // Local and cheap: safe to ask on every tick, unlike a network fetch.
   renderVersion(await versionStatus());
   await refreshGroq();
+  await loadCorrections();
 
   if (s.state === 'unavailable') {
     hideQr();
@@ -1587,9 +1888,11 @@ if (ui.sync) {
 
 document.addEventListener('DOMContentLoaded', () => {
   initSignatureSettings();
-  refresh();
+  initAuthorCorrections();
+  return refresh();
 });
 initSignatureSettings();
+initAuthorCorrections();
 // Re-check while the popup is open so "Connecting…" resolves on its own.
 let timer = setInterval(refresh, 2000);
 window.addEventListener('unload', () => clearInterval(timer));

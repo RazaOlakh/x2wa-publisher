@@ -789,16 +789,23 @@ async function runSend(body) {
       const t0 = Date.now();
       log('info','translate-start',{requestId,jobId,channelId,target,chars:text.length});
       try {
-        const translation = await translatePostTextWithMeta(text, target, body.author, { log });
+        const translation = await translatePostTextWithMeta(text, target, body.author, {
+          log,
+          authorHandle: body.authorHandle || body.handle || null,
+        });
         outText = translation.text;
         translationMeta = {
           provider: translation.provider,
           model: translation.model,
           target,
           ts: Date.now(),
+          author: translation.author || body.author || null,
+          authorHandle: translation.authorHandle || body.authorHandle || body.handle || null,
+          translatedAuthor: translation.translatedAuthor || '',
+          authorCorrectionApplied: Boolean(translation.authorCorrectionApplied),
         };
         lastTranslationInfo = translationMeta;
-        log('info','translate-done',{requestId,jobId,target,provider:translation.provider,model:translation.model,charsIn:text.length,charsOut:outText.length,ms:Date.now()-t0});
+        log('info','translate-done',{requestId,jobId,target,provider:translation.provider,model:translation.model,charsIn:text.length,charsOut:outText.length,ms:Date.now()-t0,authorCorrectionApplied:translationMeta.authorCorrectionApplied});
       } catch (e) {
         duplicateLog.set(key, { ts: now, status: 'failed', jobId });
         jobs.set(jobId, { status: 'failed', error: 'translate-failed' });
@@ -807,6 +814,20 @@ async function runSend(body) {
         return { ok: false, error: 'translate-failed', jobId, retryable: true };
       }
     } else if (body.author && typeof text === 'string') {
+      const authorHandle = body.authorHandle || body.handle || null;
+      const correction = authorHandle && typeof overridesStore.getCorrection === 'function'
+        ? overridesStore.getCorrection(authorHandle)
+        : (overridesStore.lookup(body.author, authorHandle));
+      const authorTrimmed = body.author.replace(/^[\u200E\u200F`]+|[\u200E\u200F`]+$/g, '').trim();
+      const sep = text.indexOf('\n\n');
+      const header = (sep > 0 ? text.slice(0, sep) : text).trim();
+      const bodyContent = sep > 0 ? text.slice(sep + 2).trim() : '';
+
+      if (correction && correction.transliteration) {
+        const preferredUrdu = correction.transliteration.trim();
+        const rightAuthor = formatDualAuthorForUrdu(`${preferredUrdu} | ${authorTrimmed}`);
+        outText = bodyContent ? `${rightAuthor}\n\n${bodyContent}` : rightAuthor;
+      } else {
       // For author name button (no translateTo):
       // If the post is in Urdu, write author name in both English and Urdu: `English Name   |   Urdu Name` (RIGHT side)
       // If the post is in English, author name remains in English only: `English Name` (LEFT side)
@@ -832,6 +853,7 @@ async function runSend(body) {
         }
       }
     }
+  }
 
     // Ensure author line alignment adheres strictly:
     // - Urdu post: author line on RIGHT side (\u200F)
@@ -1373,6 +1395,58 @@ const server = http.createServer(async (req, res) => {
         return json(res, 500, { ok: false, error: 'delete-failed' });
       }
     }
+    // --- Author Name Correction Manager Endpoints ---
+    if (req.method === 'GET' && (url.pathname === '/author-corrections' || url.pathname === '/transliterate/corrections')) {
+      const corrections = typeof overridesStore.listCorrections === 'function' ? overridesStore.listCorrections() : [];
+      return json(res, 200, { ok: true, corrections });
+    }
+    if (req.method === 'POST' && (url.pathname === '/author-corrections' || url.pathname === '/transliterate/corrections')) {
+      let body;
+      try { body = JSON.parse(await readBody(req)); }
+      catch { return json(res, 400, { ok: false, error: 'bad-request' }); }
+      if (!body || typeof body !== 'object') {
+        return json(res, 400, { ok: false, error: 'bad-request' });
+      }
+      const handle = body.handle || body.username || body.authorHandle;
+      const urduName = body.urduName || body.transliteration || body.urdu;
+      const originalName = body.originalName || body.original || body.author || '';
+      if (!handle || typeof handle !== 'string' || !handle.trim()) {
+        return json(res, 400, { ok: false, error: 'missing-handle' });
+      }
+      if (!urduName || typeof urduName !== 'string' || !urduName.trim()) {
+        return json(res, 400, { ok: false, error: 'missing-urdu-name' });
+      }
+      if (urduName.length > MAX_NAME_CHARS) {
+        return json(res, 400, { ok: false, error: 'value-too-long' });
+      }
+      try {
+        const entry = await overridesStore.setCorrection({ handle, urduName, originalName });
+        log('info', 'author-correction-saved', { handle: entry.handle, urduName: entry.transliteration });
+        return json(res, 200, { ok: true, entry });
+      } catch (e) {
+        log('warn', 'author-correction-save-failed', { error: errMsg(e) });
+        return json(res, 500, { ok: false, error: (e && e.message) || 'save-failed' });
+      }
+    }
+    if (req.method === 'DELETE' && (url.pathname === '/author-corrections' || url.pathname === '/transliterate/corrections')) {
+      let body = {};
+      try {
+        const raw = await readBody(req);
+        if (raw && raw.trim()) body = JSON.parse(raw);
+      } catch {}
+      const handle = body.handle || body.username || url.searchParams.get('handle') || url.searchParams.get('username');
+      if (!handle) {
+        return json(res, 400, { ok: false, error: 'missing-handle' });
+      }
+      try {
+        const r = await overridesStore.deleteCorrection(handle);
+        log('info', 'author-correction-deleted', { handle, removed: r.removed });
+        return json(res, 200, { ok: true, removed: r.removed });
+      } catch (e) {
+        log('warn', 'author-correction-delete-failed', { error: errMsg(e) });
+        return json(res, 500, { ok: false, error: 'delete-failed' });
+      }
+    }
     if (req.method === 'POST' && url.pathname === '/send') {
       if (state !== 'ready') { log('error','send-rejected-whatsapp-not-ready',{state}); return json(res, 409, { error: 'whatsapp-not-ready', state }); }
       const body = JSON.parse(await readBody(req));
@@ -1388,6 +1462,10 @@ const server = http.createServer(async (req, res) => {
       }
       if (body.author != null && (typeof body.author !== 'string' || body.author.length > 200)) {
         log('error','send-rejected-bad-request',{badField:'author'});
+        return json(res, 400, { error: 'bad-request' });
+      }
+      if (body.authorHandle != null && (typeof body.authorHandle !== 'string' || body.authorHandle.length > 100)) {
+        log('error','send-rejected-bad-request',{badField:'authorHandle'});
         return json(res, 400, { error: 'bad-request' });
       }
       if (body.signature != null && (typeof body.signature !== 'string' || body.signature.length > 2000)) {

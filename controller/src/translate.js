@@ -355,8 +355,17 @@ async function transliterateText(text, target, deps) {
     try { return require('./transliterate').defaultStore; } catch { return null; }
   })();
   if (store) {
-    const override = store.lookup(trimmed);
-    if (override && override.transliteration) return override.transliteration;
+    const handle = deps && (deps.handle || deps.authorHandle);
+    const corr = (handle && typeof store.getCorrection === 'function')
+      ? store.getCorrection(handle)
+      : (handle ? store.lookup(trimmed, handle) : null);
+    if (corr && (corr.urduName || corr.transliteration)) {
+      return (corr.urduName || corr.transliteration).trim();
+    }
+    const override = store.lookup(trimmed, handle);
+    if (override && (override.urduName || override.transliteration)) {
+      return (override.urduName || override.transliteration).trim();
+    }
   }
   const lang = target || 'ur';
   const { text: masked, tokens } = maskHandles(trimmed);
@@ -372,11 +381,13 @@ async function transliterateText(text, target, deps) {
 // When translating with AI (Groq), the author display name is specified to the AI model
 // and translated naturally along with the post text in one pure AI translation step.
 // Mechanical transliteration is completely bypassed in favor of natural LLM translation.
-async function translatePostTextWithMeta(text, target, author, deps) {
+// Deterministic author corrections are applied before returning the final result.
+async function translatePostTextWithMeta(text, target, author, deps, options) {
   if (!isTranslatable(text)) return { text: '', provider: 'none', model: null };
   const lang = target || 'ur';
   let bodyText = text;
   let rawAuthor = author && typeof author === 'string' ? author.trim() : '';
+  const authorHandle = (options && (options.handle || options.authorHandle)) || (deps && (deps.handle || deps.authorHandle)) || null;
 
   const sepIdx = text.indexOf('\n\n');
   if (sepIdx > 0) {
@@ -399,17 +410,24 @@ async function translatePostTextWithMeta(text, target, author, deps) {
   // If Groq is configured and active for Urdu, execute pure AI translation with author specified:
   const isUrdu = lang === 'ur';
   const disableGroq = deps && deps.disableGroq === true;
+  const effectiveStore = (options && options.store) || (deps && deps.store) || (function() {
+    try { return require('./transliterate').defaultStore; } catch { return null; }
+  })();
+
+  let res;
   if (isUrdu && !disableGroq && isGroqConfigured(deps && deps.env, deps)) {
-    return translateTextWithMeta(bodyText, lang, {
+    res = await translateTextWithMeta(bodyText, lang, {
       ...(deps || {}),
       author: cleanAuthor || undefined,
       pure: true,
     });
-  }
-
-  // Fallback path: Google Translate (when Groq is unconfigured or disabled)
-  if (cleanAuthor) {
-    const transliteratedAuthor = await transliterateText(cleanAuthor, lang, deps);
+  } else if (cleanAuthor) {
+    // Fallback path: Google Translate (when Groq is unconfigured or disabled)
+    const transliteratedAuthor = await transliterateText(cleanAuthor, lang, {
+      ...(deps || {}),
+      handle: authorHandle,
+      store: effectiveStore,
+    });
     const cleanTrans = (transliteratedAuthor || cleanAuthor).replace(/^[\u200E\u200F`]+|[\u200E\u200F`]+$/g, '').trim();
     const bodyRes = await translateTextWithMeta(bodyText, lang, deps);
     let authorLine;
@@ -417,18 +435,68 @@ async function translatePostTextWithMeta(text, target, author, deps) {
       const dualText = (cleanTrans && cleanAuthor && cleanTrans.toLowerCase() !== cleanAuthor.toLowerCase())
         ? `${cleanTrans} | ${cleanAuthor}`
         : cleanTrans;
-      authorLine = formatDualAuthorForUrdu(dualText);
+      authorLine = (deps && deps.plainAuthor) ? cleanTrans : formatDualAuthorForUrdu(dualText);
     } else {
-      authorLine = `\u200E\`${cleanTrans}\`\u200E`;
+      authorLine = (deps && deps.plainAuthor) ? cleanTrans : `\u200E\`${cleanTrans}\`\u200E`;
     }
-    return {
+    res = {
       text: `${authorLine}\n\n${bodyRes.text}`,
       provider: bodyRes.provider,
       model: bodyRes.model,
       authorTransliterated: true,
     };
+  } else {
+    res = await translateTextWithMeta(bodyText, lang, deps);
   }
-  return translateTextWithMeta(bodyText, lang, deps);
+
+  // --- Translation Pipeline Integration: Deterministic Author Correction ---
+  // Check if author has a saved correction against their stable normalized X username/handle
+  const store = effectiveStore;
+
+  const correction = (store && authorHandle)
+    ? (typeof store.getCorrection === 'function' ? store.getCorrection(authorHandle) : store.lookup(cleanAuthor, authorHandle))
+    : (store && cleanAuthor ? store.lookup(cleanAuthor, null) : null);
+
+  if (correction && (correction.urduName || correction.transliteration)) {
+    const preferredUrdu = (correction.urduName || correction.transliteration).trim();
+    let newAuthorLine;
+    if (lang === 'ur') {
+      const dual = (cleanAuthor && !isUrduScript(cleanAuthor) && cleanAuthor.toLowerCase() !== preferredUrdu.toLowerCase())
+        ? `${preferredUrdu} | ${cleanAuthor}`
+        : preferredUrdu;
+      newAuthorLine = (deps && deps.plainAuthor) ? preferredUrdu : formatDualAuthorForUrdu(dual);
+    } else {
+      newAuthorLine = (deps && deps.plainAuthor) ? preferredUrdu : `\u200E\`${preferredUrdu}\`\u200E`;
+    }
+
+    // Apply correction strictly to the author header line, leaving the tweet body untouched
+    const sep = res.text.indexOf('\n\n');
+    if (sep > 0) {
+      const restBody = res.text.slice(sep + 2);
+      res.text = `${newAuthorLine}\n\n${restBody}`;
+    } else if (cleanAuthor) {
+      res.text = `${newAuthorLine}\n\n${res.text}`;
+    } else {
+      res.text = newAuthorLine;
+    }
+    res.authorCorrectionApplied = true;
+    res.translatedAuthor = preferredUrdu;
+  } else {
+    // If no correction exists, retain AI translation and extract translated author name for metadata
+    const sep = res.text.indexOf('\n\n');
+    if (sep > 0) {
+      const firstLine = res.text.slice(0, sep).replace(/^[\u200E\u200F`]+|[\u200E\u200F`]+$/g, '').trim();
+      const parts = firstLine.split('|').map((p) => p.replace(/^[\u200E\u200F`]+|[\u200E\u200F`]+$/g, '').trim());
+      const urduPart = parts.find((p) => isUrduScript(p)) || parts[0];
+      res.translatedAuthor = urduPart || cleanAuthor;
+    } else {
+      res.translatedAuthor = cleanAuthor;
+    }
+  }
+
+  res.author = cleanAuthor;
+  res.authorHandle = authorHandle;
+  return res;
 }
 
 async function translatePostText(text, target, author, deps) {

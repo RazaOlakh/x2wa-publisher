@@ -271,7 +271,7 @@ console.log('the translation request');
       { json: [['ہیلو دنیا', 'en']] },
     ]);
     const out = await translatePostText('Reborn\n\nHello world', 'ur', 'Reborn', { fetchImpl, retryDelayMs: 0 });
-    eq('author header is transliterated and body translated', out, 'ریبورن\n\nہیلو دنیا');
+    eq('author header is transliterated and body translated', out, '\u200F`ریبورن   |   Reborn`\u200F\n\nہیلو دنیا');
   }
   {
     // Already Urdu author header is not re-translated or corrupted
@@ -279,7 +279,7 @@ console.log('the translation request');
       { json: [['ہیلو دنیا', 'en']] },
     ]);
     const out = await translatePostText('ریبورن\n\nHello world', 'ur', 'Reborn', { fetchImpl, retryDelayMs: 0 });
-    eq('already-Urdu author header is preserved and body translated', out, 'ریبورن\n\nہیلو دنیا');
+    eq('already-Urdu author header is preserved and body translated', out, '\u200F`ریبورن`\u200F\n\nہیلو دنیا');
   }
   {
     // Post without author header translates body normally

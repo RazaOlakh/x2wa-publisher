@@ -220,6 +220,11 @@ class OverridesStore {
         delete overrides[hKey];
         removed = true;
       }
+      const rawHandle = normalizeHandle(handle);
+      if (overrides[rawHandle]) {
+        delete overrides[rawHandle];
+        removed = true;
+      }
     }
 
     if (original) {
@@ -239,6 +244,121 @@ class OverridesStore {
       await this.write({ version: dict.version || 1, overrides });
     }
     return { ok: true, removed };
+  }
+
+  // --- Author Name Correction Manager Methods ---
+
+  // Save or update an author's preferred Urdu spelling keyed by normalized X username/handle
+  async setCorrection({ handle, urduName, originalName }) {
+    if (!handle || typeof handle !== 'string' || !handle.trim()) {
+      throw new Error('invalid-author-handle');
+    }
+    if (!urduName || typeof urduName !== 'string' || !urduName.trim()) {
+      throw new Error('invalid-urdu-name');
+    }
+
+    const normHandle = normalizeHandle(handle);
+    const key = makeHandleKey(normHandle);
+    const dict = this.read();
+    const overrides = { ...(dict.overrides || {}) };
+
+    const cleanUrdu = urduName.trim();
+    const cleanOrig = originalName ? String(originalName).trim() : (overrides[key] && (overrides[key].original || overrides[key].originalName)) || '';
+    const now = Date.now();
+
+    const entry = {
+      handle: normHandle,
+      urduName: cleanUrdu,
+      transliteration: cleanUrdu,
+      original: cleanOrig,
+      originalName: cleanOrig,
+      updatedAt: now,
+    };
+
+    // Stored strictly against the normalized handle key, preventing duplicates
+    overrides[key] = entry;
+
+    await this.write({ version: dict.version || 1, overrides });
+    return { key, ...entry };
+  }
+
+  // Retrieve an author's saved correction by X handle
+  getCorrection(handle) {
+    if (!handle || typeof handle !== 'string' || !handle.trim()) return null;
+    const normHandle = normalizeHandle(handle);
+    const key = makeHandleKey(normHandle);
+    const dict = this.read();
+    const overrides = dict.overrides || {};
+
+    const raw = overrides[key] || overrides[normHandle];
+    if (raw) {
+      const cleanUrdu = raw.urduName || raw.transliteration || '';
+      const cleanOrig = raw.originalName || raw.original || '';
+      return {
+        key: overrides[key] ? key : normHandle,
+        handle: raw.handle || normHandle,
+        urduName: cleanUrdu,
+        transliteration: cleanUrdu,
+        original: cleanOrig,
+        originalName: cleanOrig,
+        updatedAt: raw.updatedAt || null,
+      };
+    }
+    return null;
+  }
+
+  // Delete an author's correction by handle
+  async deleteCorrection(handle) {
+    if (!handle) return false;
+    const normHandle = normalizeHandle(handle);
+    const key = makeHandleKey(normHandle);
+    const dict = this.read();
+    const overrides = { ...(dict.overrides || {}) };
+    let removed = false;
+
+    if (overrides[key]) {
+      delete overrides[key];
+      removed = true;
+    }
+    if (overrides[normHandle]) {
+      delete overrides[normHandle];
+      removed = true;
+    }
+
+    if (removed) {
+      await this.write({ version: dict.version || 1, overrides });
+    }
+    return removed;
+  }
+
+  // List all author name corrections
+  listCorrections() {
+    const dict = this.read();
+    const overrides = dict.overrides || {};
+    const list = [];
+    const seenHandles = new Set();
+
+    for (const [k, v] of Object.entries(overrides)) {
+      if (v && v.transliteration) {
+        const handle = v.handle || (k.startsWith('handle:') ? k.slice(7) : (k.startsWith('@') ? k : null));
+        if (handle) {
+          const norm = normalizeHandle(handle);
+          if (!seenHandles.has(norm)) {
+            seenHandles.add(norm);
+            list.push({
+              key: k,
+              handle: norm,
+              urduName: v.transliteration,
+              originalName: v.original || '',
+              updatedAt: v.updatedAt || null,
+            });
+          }
+        }
+      }
+    }
+
+    list.sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
+    return list;
   }
 
   getAll() {

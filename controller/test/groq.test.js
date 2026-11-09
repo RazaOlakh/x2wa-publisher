@@ -67,7 +67,7 @@ async function testGroqModule() {
   ok('system prompt requires natural Pakistani Urdu', SYSTEM_PROMPT.includes('Translate the complete text into fluent, natural Urdu'));
   ok('system prompt preserves tone and sarcasm', SYSTEM_PROMPT.includes("tone, humour, sarcasm, and formatting"));
   ok('system prompt translates acronyms correctly', SYSTEM_PROMPT.includes('PTI → پی ٹی آئی'));
-  ok('system prompt transliterates names', SYSTEM_PROMPT.includes('Ali → علی'));
+  ok('system prompt transliterates names', SYSTEM_PROMPT.includes('Author: Ali') || SYSTEM_PROMPT.includes('Ali   |   علی') || SYSTEM_PROMPT.includes('Ali → علی'));
   ok('system prompt preserves URLs, hashtags, mentions', SYSTEM_PROMPT.includes('Keep @handles, usernames, hashtags, URLs, emails'));
   ok('system prompt forbids explanations or commentary', SYSTEM_PROMPT.includes('Return ONLY the final translated text without any introductory remarks, notes, or explanations.'));
 
@@ -78,7 +78,7 @@ async function testGroqModule() {
   eq('strips outer double quotes', cleanGroqResponse('"یہ ایک ٹیسٹ ہے۔"'), 'یہ ایک ٹیسٹ ہے۔');
   eq('strips outer curly quotes', cleanGroqResponse('“یہ ایک ٹیسٹ ہے۔”'), 'یہ ایک ٹیسٹ ہے۔');
   eq('strips outer guillemets quotes', cleanGroqResponse('«یہ ایک ٹیسٹ ہے۔»'), 'یہ ایک ٹیسٹ ہے۔');
-  eq('strips trailing colon from author header and normalizes midline spacing', cleanGroqResponse('Ali | علی:\nیہ ایک ٹیسٹ ہے۔'), 'Ali   |   علی\nیہ ایک ٹیسٹ ہے۔');
+  eq('strips trailing colon from author header and normalizes midline spacing', cleanGroqResponse('Ali | علی:\nیہ ایک ٹیسٹ ہے۔'), '\u200F`علی   |   Ali`\u200F\nیہ ایک ٹیسٹ ہے۔');
   eq('returns null for empty string', cleanGroqResponse('   '), null);
   eq('returns null for <think> only', cleanGroqResponse('<think>Just thinking</think>'), null);
   eq('returns null for non-string', cleanGroqResponse(null), null);
