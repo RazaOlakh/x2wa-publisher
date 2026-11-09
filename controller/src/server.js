@@ -149,13 +149,43 @@ const duplicateLog = new Map();
 
 function log(level,event,data){ const rec={ts:new Date().toISOString(),level,component:'controller',event,...(data||{})}; try{ console.log(JSON.stringify(rec)); }catch{ console.log(`${level} ${event}`); } }
 
+function cleanStaleSingletonLocks() {
+  const dirs = [
+    SESSION_DIR,
+    path.join(SESSION_DIR, 'session'),
+    path.join(SESSION_DIR, 'session', 'Default'),
+    path.join(SESSION_DIR, 'Default'),
+  ];
+  const lockNames = ['SingletonLock', 'SingletonCookie', 'SingletonSocket'];
+  for (const dir of dirs) {
+    for (const name of lockNames) {
+      try {
+        const file = path.join(dir, name);
+        if (fs.existsSync(file)) {
+          fs.rmSync(file, { force: true });
+          log('info', 'stale-singleton-removed', { file });
+        }
+      } catch {}
+    }
+  }
+}
+
 // The dedicated WhatsApp account. LocalAuth keeps the session in
 // SESSION_DIR so the next start reconnects without another QR scan.
 function makeClient() {
   // The browser is chosen per platform (CHROME_PATH first, then the platform's
   // usual location). If nothing is found the path is left to puppeteer, which
   // reports a missing browser far more clearly than a path that never existed.
-  const launch = { headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] };
+  const args = ['--no-sandbox', '--disable-setuid-sandbox'];
+  if (process.platform === 'win32') {
+    args.push(
+      '--disable-gpu',
+      '--disable-dev-shm-usage',
+      '--no-first-run',
+      '--no-default-browser-check'
+    );
+  }
+  const launch = { headless: true, args };
   const exe = chromePath();
   if (exe) launch.executablePath = exe;
   return new Client({
@@ -169,6 +199,7 @@ const recentMessages = [];
 
 function startClient(reason) {
   if (client) return;
+  cleanStaleSingletonLocks();
   setState(state === 'ready' ? state : 'starting');
   log('info','client-start',{ reason, sessionDir: SESSION_DIR });
   client = makeClient();
@@ -207,7 +238,7 @@ function startClient(reason) {
   });
   client.initialize().catch((e) => {
     log('error','init-error',{error:e && e.message});
-    if (e && e.message && e.message.includes('already running')) {
+    if (process.platform === 'win32' || (e && e.message && e.message.includes('already running'))) {
       killOrphanedSessionBrowsers();
     }
     markConnectionStale('init-error');
@@ -272,43 +303,43 @@ function restartBackoffMs(attempts) {
 const BROWSER_EXIT_WAIT_MS = 10000;
 
 async function stopClient(c) {
-  if (!c) return;
+  if (!c) {
+    if (process.platform === 'win32') killOrphanedSessionBrowsers();
+    return;
+  }
   let proc = null;
   try {
     const b = c.pupBrowser;
     proc = b && typeof b.process === 'function' ? b.process() : null;
   } catch { /* nothing to wait on */ }
-  // Arm the waiter first: destroy() may be what makes the process exit.
-  let exited = null;
-  if (proc && proc.exitCode === null && !proc.killed) {
-    exited = new Promise((resolve) => {
-      const timer = setTimeout(resolve, BROWSER_EXIT_WAIT_MS);
-      if (timer.unref) timer.unref();
-      proc.once('exit', () => { clearTimeout(timer); resolve(); });
-    });
+
+  const destroyPromise = Promise.resolve().then(() => c.destroy());
+  const timeoutPromise = new Promise((resolve) => setTimeout(resolve, 3000));
+  try {
+    await Promise.race([destroyPromise, timeoutPromise]);
+  } catch (e) {
+    log('warn', 'destroy-error', { error: String((e && e.message) || e) });
   }
-  try { await c.destroy(); }
-  catch (e) { log('warn', 'destroy-error', { error: String((e && e.message) || e) }); }
-  if (exited) {
-    await exited;
-    log('info', 'browser-stopped', { waited: true, exitCode: proc.exitCode });
-  }
-  if (proc && proc.exitCode === null && !proc.killed) {
+
+  if (proc) {
     try {
       if (process.platform === 'win32') {
         execSync(`taskkill /pid ${proc.pid} /t /f`, { stdio: 'ignore' });
-      } else {
+      } else if (proc.exitCode === null && !proc.killed) {
         proc.kill('SIGKILL');
       }
     } catch {}
+  }
+
+  if (process.platform === 'win32') {
+    killOrphanedSessionBrowsers();
   }
 }
 
 function killOrphanedSessionBrowsers() {
   if (process.platform === 'win32') {
     try {
-      const escaped = SESSION_DIR.replace(/'/g, "''");
-      const psScript = `Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -and $_.CommandLine -like '*${escaped}*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`;
+      const psScript = `Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -and ($_.CommandLine -like '*x-whatsapp-poster*' -or $_.CommandLine -like '*whatsapp-session*') } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`;
       const encoded = Buffer.from(psScript, 'utf16le').toString('base64');
       execSync(`powershell -NoProfile -EncodedCommand ${encoded}`, { stdio: 'ignore', timeout: 5000 });
     } catch {}
@@ -318,12 +349,13 @@ function killOrphanedSessionBrowsers() {
 function markConnectionStale(reason) {
   if (restartPending) return;
   restartPending = true;
-  if (reason && String(reason).startsWith('user-restart')) {
+  const isUserRestart = reason && String(reason).startsWith('user-restart');
+  if (isUserRestart) {
     restartAttempts = 0;
   } else {
     restartAttempts += 1;
   }
-  const delay = restartBackoffMs(restartAttempts);
+  const delay = isUserRestart ? 0 : restartBackoffMs(restartAttempts);
   // Report the truth while we rebuild, instead of claiming "ready".
   setState('reconnecting');
   log('warn', 'connection-stale', { reason, attempt: restartAttempts, retryInMs: delay });
@@ -333,9 +365,14 @@ function markConnectionStale(reason) {
     const stale = client;
     client = null;
     lastQr = null; waInfo = null; channelCache = null;
-    await stopClient(stale);
-    restartPending = false;
-    startClient('recover:' + reason);
+    try {
+      await stopClient(stale);
+    } catch (e) {
+      log('warn', 'stop-client-error', { error: String((e && e.message) || e) });
+    } finally {
+      restartPending = false;
+      startClient('recover:' + reason);
+    }
   }, delay);
   if (restartTimer.unref) restartTimer.unref();
 }
@@ -359,6 +396,25 @@ async function heartbeat() {
   if (beat.sleptFor(gap)) {
     log('warn', 'system-resume', { gapMs: Math.round(gap) });
     markConnectionStale('system-resume');
+    return;
+  }
+
+  // Watchdog for reconnecting state: if stuck reconnecting for over 45s, force recover
+  if (state === 'reconnecting' && (now - stateEnteredAt >= 45000)) {
+    log('warn', 'reconnect-stuck', { state, elapsedMs: now - stateEnteredAt });
+    if (restartTimer) { clearTimeout(restartTimer); restartTimer = null; }
+    if (process.platform === 'win32') {
+      killOrphanedSessionBrowsers();
+    }
+    const stale = client;
+    client = null;
+    lastQr = null; waInfo = null; channelCache = null;
+    restartPending = false;
+    restartAttempts = 0;
+    if (stale) {
+      stopClient(stale).catch(() => {});
+    }
+    startClient('watchdog-timeout');
     return;
   }
 
@@ -1040,8 +1096,10 @@ const server = http.createServer(async (req, res) => {
       if (state === 'ready' && !body.force) return json(res, 200, { ok: true, state, alreadyRunning: true });
       if (!client) {
         startClient('popup-request');
-      } else if (body.force || ((state === 'starting' || state === 'authenticated') && (Date.now() - stateEnteredAt >= 15000))) {
-        log('info', 'auth-restart-requested', { state, elapsedMs: Date.now() - stateEnteredAt });
+      } else if (body.force || state !== 'ready') {
+        log('info', 'auth-restart-requested', { state, force: Boolean(body.force), elapsedMs: Date.now() - stateEnteredAt });
+        if (restartTimer) { clearTimeout(restartTimer); restartTimer = null; }
+        restartPending = false;
         markConnectionStale('user-restart:' + state);
       }
       return json(res, 200, { ok: true, state });

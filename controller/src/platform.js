@@ -7,6 +7,7 @@
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
+const { execSync } = require('child_process');
 
 // Per-user application data:
 //   Linux   $XDG_DATA_HOME or ~/.local/share
@@ -86,6 +87,8 @@ function acquireSessionLock(dir) {
       err.pid = pid;
       throw err;
     }
+    console.warn(`[controller] removing stale controller.lock (pid ${pid})`);
+    try { fs.rmSync(lock, { force: true }); } catch {}
   }
   fs.writeFileSync(lock, String(process.pid));
   const release = () => { try { fs.rmSync(lock, { force: true }); } catch {} };
@@ -103,16 +106,28 @@ function isAlive(pid) {
   } catch (e) {
     if (process.platform === 'win32' || e.code !== 'EPERM') return false;
   }
-  try {
-    if (process.platform === 'win32') {
-      const { execSync } = require('child_process');
+  if (process.platform === 'win32') {
+    try {
       const out = execSync(`tasklist /fi "PID eq ${pid}" /fo csv /nh`, {
         encoding: 'utf8',
         stdio: ['ignore', 'pipe', 'ignore'],
-        timeout: 2000,
+        timeout: 3000,
       });
       return out.toLowerCase().includes('node.exe');
+    } catch {
+      try {
+        const out = execSync(`powershell -NoProfile -Command "(Get-Process -Id ${pid} -ErrorAction SilentlyContinue).ProcessName"`, {
+          encoding: 'utf8',
+          timeout: 4000,
+          stdio: ['ignore', 'pipe', 'ignore'],
+        }).trim().toLowerCase();
+        return out === 'node';
+      } catch {
+        return false; // If process not found or error, process is dead
+      }
     }
+  }
+  try {
     if (process.platform === 'linux') {
       const comm = fs.readFileSync(`/proc/${pid}/comm`, 'utf8').trim();
       return comm.startsWith('node');

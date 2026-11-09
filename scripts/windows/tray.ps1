@@ -58,7 +58,7 @@ function Get-ControllerProcess {
 
 function Get-SessionChromeProcesses {
   Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" -ErrorAction SilentlyContinue |
-    Where-Object { $_.CommandLine -and $_.CommandLine -like "*$SessionDir*" }
+    Where-Object { $_.CommandLine -and ($_.CommandLine -like "*x-whatsapp-poster*" -or $_.CommandLine -like "*whatsapp-session*" -or $_.CommandLine -like "*$SessionDir*") }
 }
 
 function Find-Chrome {
@@ -71,12 +71,31 @@ function Find-Chrome {
   return 'C:\Program Files\Google\Chrome\Application\chrome.exe'
 }
 
+function Reconnect-Controller {
+  try {
+    $notify.Text = 'X -> WhatsApp Controller: reconnecting...'
+    $notify.Icon = New-StateIcon (Get-StateColor 'reconnecting')
+  } catch {}
+  try {
+    Invoke-RestMethod -Uri "http://127.0.0.1:$Port/auth/reconnect" -Method POST -Body '{"force":true}' -ContentType 'application/json' -TimeoutSec 3 -ErrorAction Stop | Out-Null
+  } catch {
+    Restart-Controller
+  }
+}
+
 function Restart-Controller {
+  try {
+    $notify.Text = 'X -> WhatsApp Controller: restarting...'
+    $notify.Icon = New-StateIcon (Get-StateColor 'starting')
+  } catch {}
   foreach ($p in @(Get-ControllerProcess)) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }
   foreach ($p in @(Get-SessionChromeProcesses)) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }
-  for ($i = 0; $i -lt 10; $i++) { if (-not (Get-ControllerProcess)) { break }; Start-Sleep -Seconds 1 }
-  Start-Sleep -Seconds 2
-  & powershell -NoProfile -ExecutionPolicy Bypass -File $StartupScript restart | Out-Null
+  $lockFile = Join-Path $SessionDir 'controller.lock'
+  if (Test-Path -LiteralPath $lockFile) { Remove-Item -LiteralPath $lockFile -Force -ErrorAction SilentlyContinue }
+
+  $env:X2WA_RESTARTING_FROM_TRAY = '1'
+  $restartCmd = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command `"`$env:X2WA_RESTARTING_FROM_TRAY='1'; & '$StartupScript' restart -SkipTray`""
+  Start-Process powershell.exe -ArgumentList $restartCmd -WindowStyle Hidden -ErrorAction SilentlyContinue | Out-Null
 }
 
 function Stop-Controller {
@@ -150,7 +169,10 @@ function Update-Tray {
 
 function Exit-Tray {
   if ($timer) { $timer.Stop() }
-  if ($notify) { $notify.Visible = $false; $notify.Dispose() }
+  if ($notify) {
+    $notify.Visible = $false
+    $notify.Dispose()
+  }
   if ($script:winForms) { [System.Windows.Forms.Application]::Exit() }
 }
 
@@ -164,13 +186,14 @@ $notify.Text = 'X -> WhatsApp Controller: stopped'
 $notify.Visible = $true
 
 $menu = New-Object System.Windows.Forms.ContextMenuStrip
-$miRestart = New-Object System.Windows.Forms.ToolStripMenuItem -ArgumentList 'Reconnect / Restart Controller'
+$miReconnect = New-Object System.Windows.Forms.ToolStripMenuItem -ArgumentList 'Reconnect Controller'
+$miRestart = New-Object System.Windows.Forms.ToolStripMenuItem -ArgumentList 'Reconnect / Restart Controller (Full)'
 $miStop = New-Object System.Windows.Forms.ToolStripMenuItem -ArgumentList 'Disconnect / Stop Controller'
 $miSettings = New-Object System.Windows.Forms.ToolStripMenuItem -ArgumentList 'Open Settings / Dashboard'
 $miLogs = New-Object System.Windows.Forms.ToolStripMenuItem -ArgumentList 'View Logs'
 $miSession = New-Object System.Windows.Forms.ToolStripMenuItem -ArgumentList 'Open Session Folder'
 $miExit = New-Object System.Windows.Forms.ToolStripMenuItem -ArgumentList 'Exit'
-foreach ($mi in @($miRestart, $miStop, $miSettings, $miLogs, $miSession, $miExit)) { $menu.Items.Add($mi) | Out-Null }
+foreach ($mi in @($miReconnect, $miRestart, $miStop, $miSettings, $miLogs, $miSession, $miExit)) { $menu.Items.Add($mi) | Out-Null }
 $notify.ContextMenuStrip = $menu
 
 # In PowerShell Windows Forms, native event delegates ($item.add_Click and $timer.add_Tick)
@@ -178,12 +201,21 @@ $notify.ContextMenuStrip = $menu
 # [System.Windows.Forms.Application]::Run() is pumping the Windows message loop.
 # Register-ObjectEvent places events on the PowerShell engine event queue which is
 # blocked during Application::Run().
+$miReconnect.add_Click({ Reconnect-Controller })
 $miRestart.add_Click({ Restart-Controller })
 $miStop.add_Click({ Stop-Controller })
 $miSettings.add_Click({ Open-Settings })
 $miLogs.add_Click({ Open-Logs })
 $miSession.add_Click({ Open-SessionFolder })
 $miExit.add_Click({ Exit-Tray })
+
+# Handle process exit to prevent ghost notification icons
+Register-EngineEvent -SourceIdentifier ([System.Management.Automation.PsEngineEvent]::Exiting) -Action {
+  if ($notify) {
+    $notify.Visible = $false
+    $notify.Dispose()
+  }
+} -ErrorAction SilentlyContinue | Out-Null
 
 $timer = New-Object System.Windows.Forms.Timer
 $timer.Interval = 5000
