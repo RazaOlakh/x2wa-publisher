@@ -52,6 +52,15 @@ if (Test-Path -LiteralPath $icoPath) {
   try { Copy-Item -LiteralPath $icoPath -Destination $dataIcoPath -Force -ErrorAction SilentlyContinue } catch {}
 }
 
+# Install runner scripts permanently to DataRoot so git branch changes never break desktop shortcut
+$dataRerunScript = Join-Path $DataRoot 'rerun-connection.ps1'
+$dataTrayScript  = Join-Path $DataRoot 'tray.ps1'
+try { Copy-Item -LiteralPath $TargetScript -Destination $dataRerunScript -Force -ErrorAction SilentlyContinue } catch {}
+$traySource = Join-Path $ScriptDir 'tray.ps1'
+if (Test-Path -LiteralPath $traySource) {
+  try { Copy-Item -LiteralPath $traySource -Destination $dataTrayScript -Force -ErrorAction SilentlyContinue } catch {}
+}
+
 # Generate silent VBScript launcher wrapper
 $VbsWrapper = Join-Path $ScriptDir 'rerun-connection.vbs'
 $dataVbsWrapper = Join-Path $DataRoot 'rerun-connection.vbs'
@@ -59,12 +68,12 @@ $dataVbsWrapper = Join-Path $DataRoot 'rerun-connection.vbs'
 $vbsContent = @"
 Set WshShell = CreateObject("WScript.Shell")
 Set fso = CreateObject("Scripting.FileSystemObject")
-scriptDir = fso.GetParentFolderName(WScript.ScriptFullName)
-psScript = "$TargetScript"
+appData = WshShell.ExpandEnvironmentStrings("%LOCALAPPDATA%")
+psScript = appData & "\x-whatsapp-poster\rerun-connection.ps1"
 If Not fso.FileExists(psScript) Then
-  psScript = scriptDir & "\rerun-connection.ps1"
+  psScript = "$TargetScript"
 End If
-WshShell.Run "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File """ & psScript & """ -Silent -Force", 0, False
+WshShell.Run "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File """ & psScript & """ -Silent", 0, False
 "@
 
 Set-Content -LiteralPath $VbsWrapper -Value $vbsContent -Encoding ASCII
@@ -112,7 +121,7 @@ $Shortcut = $WshShell.CreateShortcut($ShortcutPath)
 $Shortcut.TargetPath = $wscriptExe
 $Shortcut.Arguments = "`"$targetVbs`""
 $Shortcut.WorkingDirectory = $ScriptDir
-$Shortcut.Description = "Launch, connect, or restart X -> WhatsApp Controller and Tray companion (2-in-1)"
+$Shortcut.Description = "Launch and connect X -> WhatsApp Controller and Tray companion (2-in-1)"
 $Shortcut.IconLocation = $iconLocation
 $Shortcut.WindowStyle = 7
 $Shortcut.Save()
@@ -120,5 +129,5 @@ $Shortcut.Save()
 Write-Host "==> Single 2-in-1 desktop shortcut created successfully!" -ForegroundColor Green
 Write-Host "    Shortcut : $ShortcutPath"
 Write-Host "    Target   : $wscriptExe -> $targetVbs"
-Write-Host "    Script   : $TargetScript -Silent -Force"
+Write-Host "    Script   : $dataRerunScript -Silent"
 Write-Host "    Icon     : $iconLocation"

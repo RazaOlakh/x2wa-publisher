@@ -27,6 +27,17 @@ param()
 
 $ErrorActionPreference = 'Stop'
 
+$DataRoot = Join-Path $env:LOCALAPPDATA 'x-whatsapp-poster'
+$TrayLog = Join-Path $DataRoot 'tray.log'
+function Log-Tray($msg) {
+  try {
+    if (-not (Test-Path -LiteralPath $DataRoot)) { New-Item -ItemType Directory -Path $DataRoot -Force -ErrorAction SilentlyContinue | Out-Null }
+    "[$([DateTime]::Now.ToString('yyyy-MM-dd HH:mm:ss.fff'))] [PID $PID] $msg" | Out-File -FilePath $TrayLog -Append -Encoding utf8
+  } catch {}
+}
+
+Log-Tray "tray.ps1 invoked"
+
 # Ensure any console window hosting this script is hidden immediately
 try {
   $win32Def = @'
@@ -61,12 +72,12 @@ $existing = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
     $_.CommandLine -notlike "*Select-String*"
   }
 if ($existing) {
+  Log-Tray "Exiting because existing instance detected: $(($existing | ForEach-Object { "$($_.ProcessId): $($_.CommandLine)" }) -join ' | ')"
   exit 0
 }
 
 $Port = 47825
 $StatusUri = "http://127.0.0.1:$Port/status"
-$DataRoot = Join-Path $env:LOCALAPPDATA 'x-whatsapp-poster'
 $SessionDir = Join-Path $DataRoot 'whatsapp-session'
 $LogFile = Join-Path $DataRoot 'controller.log'
 $ScriptDir = if ($PSScriptRoot) { $PSScriptRoot } elseif ($MyInvocation.MyCommand -and $MyInvocation.MyCommand.Path) { Split-Path -Parent $MyInvocation.MyCommand.Path } else { (Get-Location).Path }
@@ -203,6 +214,7 @@ function Update-Tray {
 }
 
 function Exit-Tray {
+  Log-Tray "Exit-Tray called"
   if ($timer) { $timer.Stop() }
   if ($notify) {
     $notify.Visible = $false
@@ -211,54 +223,61 @@ function Exit-Tray {
   if ($script:winForms) { [System.Windows.Forms.Application]::Exit() }
 }
 
-Add-Type -AssemblyName System.Windows.Forms
-Add-Type -AssemblyName System.Drawing
+try {
+  Add-Type -AssemblyName System.Windows.Forms
+  Add-Type -AssemblyName System.Drawing
 
-$script:winForms = [System.Windows.Forms.Application]
-$notify = New-Object System.Windows.Forms.NotifyIcon
-$notify.Icon = New-StateIcon (Get-StateColor 'stopped')
-$notify.Text = 'X -> WhatsApp Controller: stopped'
-$notify.Visible = $true
+  $script:winForms = [System.Windows.Forms.Application]
+  $notify = New-Object System.Windows.Forms.NotifyIcon
+  $notify.Icon = New-StateIcon (Get-StateColor 'stopped')
+  $notify.Text = 'X -> WhatsApp Controller: stopped'
+  $notify.Visible = $true
 
-$menu = New-Object System.Windows.Forms.ContextMenuStrip
-$miReconnect = New-Object System.Windows.Forms.ToolStripMenuItem -ArgumentList 'Reconnect Controller'
-$miRestart = New-Object System.Windows.Forms.ToolStripMenuItem -ArgumentList 'Reconnect / Restart Controller (Full)'
-$miStop = New-Object System.Windows.Forms.ToolStripMenuItem -ArgumentList 'Disconnect / Stop Controller'
-$miSettings = New-Object System.Windows.Forms.ToolStripMenuItem -ArgumentList 'Open Settings / Dashboard'
-$miLogs = New-Object System.Windows.Forms.ToolStripMenuItem -ArgumentList 'View Logs'
-$miSession = New-Object System.Windows.Forms.ToolStripMenuItem -ArgumentList 'Open Session Folder'
-$miExit = New-Object System.Windows.Forms.ToolStripMenuItem -ArgumentList 'Exit'
-foreach ($mi in @($miReconnect, $miRestart, $miStop, $miSettings, $miLogs, $miSession, $miExit)) { $menu.Items.Add($mi) | Out-Null }
-$notify.ContextMenuStrip = $menu
+  $menu = New-Object System.Windows.Forms.ContextMenuStrip
+  $miReconnect = New-Object System.Windows.Forms.ToolStripMenuItem -ArgumentList 'Reconnect Controller'
+  $miRestart = New-Object System.Windows.Forms.ToolStripMenuItem -ArgumentList 'Reconnect / Restart Controller (Full)'
+  $miStop = New-Object System.Windows.Forms.ToolStripMenuItem -ArgumentList 'Disconnect / Stop Controller'
+  $miSettings = New-Object System.Windows.Forms.ToolStripMenuItem -ArgumentList 'Open Settings / Dashboard'
+  $miLogs = New-Object System.Windows.Forms.ToolStripMenuItem -ArgumentList 'View Logs'
+  $miSession = New-Object System.Windows.Forms.ToolStripMenuItem -ArgumentList 'Open Session Folder'
+  $miExit = New-Object System.Windows.Forms.ToolStripMenuItem -ArgumentList 'Exit'
+  foreach ($mi in @($miReconnect, $miRestart, $miStop, $miSettings, $miLogs, $miSession, $miExit)) { $menu.Items.Add($mi) | Out-Null }
+  $notify.ContextMenuStrip = $menu
 
-# In PowerShell Windows Forms, native event delegates ($item.add_Click and $timer.add_Tick)
-# are required so that menu actions execute immediately on the UI thread while
-# [System.Windows.Forms.Application]::Run() is pumping the Windows message loop.
-# Register-ObjectEvent places events on the PowerShell engine event queue which is
-# blocked during Application::Run().
-$miReconnect.add_Click({ Reconnect-Controller })
-$miRestart.add_Click({ Restart-Controller })
-$miStop.add_Click({ Stop-Controller })
-$miSettings.add_Click({ Open-Settings })
-$miLogs.add_Click({ Open-Logs })
-$miSession.add_Click({ Open-SessionFolder })
-$miExit.add_Click({ Exit-Tray })
+  # In PowerShell Windows Forms, native event delegates ($item.add_Click and $timer.add_Tick)
+  # are required so that menu actions execute immediately on the UI thread while
+  # [System.Windows.Forms.Application]::Run() is pumping the Windows message loop.
+  # Register-ObjectEvent places events on the PowerShell engine event queue which is
+  # blocked during Application::Run().
+  $miReconnect.add_Click({ Reconnect-Controller })
+  $miRestart.add_Click({ Restart-Controller })
+  $miStop.add_Click({ Stop-Controller })
+  $miSettings.add_Click({ Open-Settings })
+  $miLogs.add_Click({ Open-Logs })
+  $miSession.add_Click({ Open-SessionFolder })
+  $miExit.add_Click({ Exit-Tray })
 
-# Handle process exit to prevent ghost notification icons
-Register-EngineEvent -SourceIdentifier ([System.Management.Automation.PsEngineEvent]::Exiting) -Action {
-  if ($notify) {
-    $notify.Visible = $false
-    $notify.Dispose()
-  }
-} -ErrorAction SilentlyContinue | Out-Null
+  # Handle process exit to prevent ghost notification icons
+  Register-EngineEvent -SourceIdentifier ([System.Management.Automation.PsEngineEvent]::Exiting) -Action {
+    if ($notify) {
+      $notify.Visible = $false
+      $notify.Dispose()
+    }
+  } -ErrorAction SilentlyContinue | Out-Null
 
-$timer = New-Object System.Windows.Forms.Timer
-$timer.Interval = 5000
-$timer.add_Tick({ Update-Tray })
-# Timer tick registration: EventName Tick
-Register-ObjectEvent -InputObject $timer -EventName Tick -Action { Update-Tray } -ErrorAction SilentlyContinue | Out-Null
-$timer.Start()
-Update-Tray
+  $timer = New-Object System.Windows.Forms.Timer
+  $timer.Interval = 5000
+  $timer.add_Tick({ Update-Tray })
+  # Timer tick registration: EventName Tick
+  Register-ObjectEvent -InputObject $timer -EventName Tick -Action { Update-Tray } -ErrorAction SilentlyContinue | Out-Null
+  $timer.Start()
+  Update-Tray
 
-# Keep the tray icon resident until Exit-Tray calls Application.Exit().
-[System.Windows.Forms.Application]::Run()
+  Log-Tray "Entering Application::Run() message loop"
+  # Keep the tray icon resident until Exit-Tray calls Application.Exit().
+  [System.Windows.Forms.Application]::Run()
+  Log-Tray "Application::Run() exited"
+} catch {
+  Log-Tray "FATAL ERROR in tray.ps1: $_ | $($_.ScriptStackTrace)"
+  throw
+}

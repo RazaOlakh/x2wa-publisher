@@ -30,6 +30,16 @@ public class Win32Rerun {
   } catch {}
 }
 
+$ScriptDir = if ($PSScriptRoot) { $PSScriptRoot } elseif ($MyInvocation.MyCommand -and $MyInvocation.MyCommand.Path) { Split-Path -Parent $MyInvocation.MyCommand.Path } else { (Get-Location).Path }
+if (-not $ScriptDir) { $ScriptDir = (Get-Location).Path }
+$Port = 47825
+$DataRoot = Join-Path $env:LOCALAPPDATA 'x-whatsapp-poster'
+$StartupScript = @(
+  (Join-Path $ScriptDir 'install-startup.ps1'),
+  (Join-Path $DataRoot 'install-startup.ps1'),
+  'D:\x2wa-publisher\scripts\windows\install-startup.ps1'
+) | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -First 1
+
 function Show-Notification {
   param(
     [string]$Title,
@@ -41,8 +51,9 @@ function Show-Notification {
     Add-Type -AssemblyName System.Drawing -ErrorAction SilentlyContinue
     $ni = New-Object System.Windows.Forms.NotifyIcon
     $iconCandidates = @(
-      (Join-Path $PSScriptRoot 'x2wa.ico'),
-      (Join-Path $env:LOCALAPPDATA 'x-whatsapp-poster\x2wa.ico')
+      (Join-Path $ScriptDir 'x2wa.ico'),
+      (Join-Path $DataRoot 'x2wa.ico'),
+      'D:\x2wa-publisher\scripts\windows\x2wa.ico'
     ) | Where-Object { $_ -and (Test-Path -LiteralPath $_) }
     if ($iconCandidates) {
       $ni.Icon = New-Object System.Drawing.Icon($iconCandidates[0])
@@ -62,10 +73,52 @@ function Show-Notification {
   } catch {}
 }
 
-$ScriptDir = if ($PSScriptRoot) { $PSScriptRoot } elseif ($MyInvocation.MyCommand -and $MyInvocation.MyCommand.Path) { Split-Path -Parent $MyInvocation.MyCommand.Path } else { (Get-Location).Path }
-if (-not $ScriptDir) { $ScriptDir = (Get-Location).Path }
-$Port = 47825
-$StartupScript = Join-Path $ScriptDir 'install-startup.ps1'
+function Get-ControllerStatus {
+  try {
+    return Invoke-RestMethod -Uri "http://127.0.0.1:$Port/status" -TimeoutSec 3 -ErrorAction Stop
+  } catch {
+    return $null
+  }
+}
+
+function Get-TrayProcess {
+  Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+    Where-Object {
+      ($_.Name -eq 'powershell.exe' -or $_.Name -eq 'pwsh.exe') -and
+      $_.ProcessId -ne $PID -and
+      $_.CommandLine -and
+      $_.CommandLine -like "*tray.ps1*" -and
+      $_.CommandLine -notlike "*-Command*" -and
+      $_.CommandLine -notlike "*Get-CimInstance*" -and
+      $_.CommandLine -notlike "*Select-String*"
+    }
+}
+
+function Start-TrayCompanion {
+  if (Get-TrayProcess) { return }
+  $trayCandidates = @(
+    (Join-Path $DataRoot 'tray.ps1'),
+    (Join-Path $ScriptDir 'tray.ps1'),
+    'D:\x2wa-publisher\scripts\windows\tray.ps1'
+  ) | Where-Object { $_ -and (Test-Path -LiteralPath $_) }
+
+  if ($trayCandidates) {
+    $tScript = $trayCandidates[0]
+    $tCmd = "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$tScript`""
+    try {
+      Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $tCmd } -ErrorAction Stop | Out-Null
+      return
+    } catch {}
+    try {
+      $ws = New-Object -ComObject WScript.Shell
+      $ws.Run($tCmd, 0, $false) | Out-Null
+      return
+    } catch {}
+    try {
+      Start-Process powershell.exe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$tScript`"" -WindowStyle Hidden | Out-Null
+    } catch {}
+  }
+}
 
 if (-not $Silent) {
   Write-Host ""
@@ -75,22 +128,21 @@ if (-not $Silent) {
   Write-Host ""
 }
 
-function Get-ControllerStatus {
-  try {
-    return Invoke-RestMethod -Uri "http://127.0.0.1:$Port/status" -TimeoutSec 3 -ErrorAction Stop
-  } catch {
-    return $null
-  }
+$status = Get-ControllerStatus
+$trayRunning = [bool](Get-TrayProcess)
+
+# Ensure tray companion is launched if not already running
+if (-not $trayRunning) {
+  Start-TrayCompanion
 }
 
-$status = Get-ControllerStatus
 $needsRestart = $Force -or ($null -eq $status) -or ($status.state -ne 'ready')
 
 if (-not $needsRestart) {
   if ($Silent) {
-    # Ensure tray companion is running too
-    & powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File $StartupScript start | Out-Null
-    Show-Notification -Title "X -> WhatsApp Controller" -Message "Controller is already connected and ready." -IconType 'Info'
+    # Controller is ready and tray companion is ensured running
+    $acct = if ($status.me -and $status.me._serialized) { " ($($status.me._serialized))" } else { "" }
+    Show-Notification -Title "X -> WhatsApp Controller" -Message "Controller connected and ready!$acct" -IconType 'Info'
     exit 0
   }
   Write-Host "[OK] Controller is already running and connected!" -ForegroundColor Green
@@ -130,10 +182,14 @@ if (-not $needsRestart) {
 }
 
 if ($Silent) {
-  & powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File $StartupScript restart | Out-Null
+  if ($StartupScript) {
+    & powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File $StartupScript restart | Out-Null
+  }
 } else {
   Write-Host "Restarting controller and cleaning up stale processes..." -ForegroundColor Cyan
-  & powershell -NoProfile -ExecutionPolicy Bypass -File $StartupScript restart
+  if ($StartupScript) {
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $StartupScript restart
+  }
   Write-Host ""
   Write-Host "Checking connection status..." -ForegroundColor Cyan
 }
