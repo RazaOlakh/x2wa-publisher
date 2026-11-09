@@ -48,6 +48,8 @@ public class Win32Window {
   public static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);
   [DllImport("kernel32.dll")]
   public static extern IntPtr GetConsoleWindow();
+  [DllImport("user32.dll")]
+  public static extern IntPtr GetAncestor(IntPtr hWnd, uint gaFlags);
 }
 '@
   if (-not ([System.Management.Automation.PSTypeName]'Win32Window').Type) {
@@ -56,6 +58,10 @@ public class Win32Window {
   $consoleHandle = [Win32Window]::GetConsoleWindow()
   if ($consoleHandle -and $consoleHandle -ne [IntPtr]::Zero) {
     [Win32Window]::ShowWindowAsync($consoleHandle, 0) | Out-Null
+    $root = [Win32Window]::GetAncestor($consoleHandle, 2)
+    if ($root -and $root -ne [IntPtr]::Zero -and $root -ne $consoleHandle) {
+      [Win32Window]::ShowWindowAsync($root, 0) | Out-Null
+    }
   }
 } catch {}
 

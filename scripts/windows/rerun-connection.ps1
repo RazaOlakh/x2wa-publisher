@@ -18,6 +18,8 @@ public class Win32Rerun {
   public static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);
   [DllImport("kernel32.dll")]
   public static extern IntPtr GetConsoleWindow();
+  [DllImport("user32.dll")]
+  public static extern IntPtr GetAncestor(IntPtr hWnd, uint gaFlags);
 }
 '@
     if (-not ([System.Management.Automation.PSTypeName]'Win32Rerun').Type) {
@@ -26,6 +28,10 @@ public class Win32Rerun {
     $consoleHandle = [Win32Rerun]::GetConsoleWindow()
     if ($consoleHandle -and $consoleHandle -ne [IntPtr]::Zero) {
       [Win32Rerun]::ShowWindowAsync($consoleHandle, 0) | Out-Null
+      $root = [Win32Rerun]::GetAncestor($consoleHandle, 2)
+      if ($root -and $root -ne [IntPtr]::Zero -and $root -ne $consoleHandle) {
+        [Win32Rerun]::ShowWindowAsync($root, 0) | Out-Null
+      }
     }
   } catch {}
 }
@@ -96,6 +102,27 @@ function Get-TrayProcess {
 
 function Start-TrayCompanion {
   if (Get-TrayProcess) { return }
+  $vbsCandidates = @(
+    (Join-Path $DataRoot 'tray.vbs'),
+    (Join-Path $ScriptDir 'tray.vbs'),
+    'D:\x2wa-publisher\scripts\windows\tray.vbs'
+  ) | Where-Object { $_ -and (Test-Path -LiteralPath $_) }
+
+  if ($vbsCandidates) {
+    $vbsPath = $vbsCandidates[0]
+    $wscriptExe = Join-Path $env:SystemRoot 'System32\wscript.exe'
+    if (-not (Test-Path -LiteralPath $wscriptExe)) { $wscriptExe = 'wscript.exe' }
+    try {
+      $ws = New-Object -ComObject WScript.Shell
+      $ws.Run("`"$wscriptExe`" `"$vbsPath`"", 0, $false) | Out-Null
+      return
+    } catch {}
+    try {
+      Start-Process -FilePath $wscriptExe -ArgumentList "`"$vbsPath`"" -WindowStyle Hidden | Out-Null
+      return
+    } catch {}
+  }
+
   $trayCandidates = @(
     (Join-Path $DataRoot 'tray.ps1'),
     (Join-Path $ScriptDir 'tray.ps1'),
@@ -106,16 +133,8 @@ function Start-TrayCompanion {
     $tScript = $trayCandidates[0]
     $tCmd = "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$tScript`""
     try {
-      Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $tCmd } -ErrorAction Stop | Out-Null
-      return
-    } catch {}
-    try {
       $ws = New-Object -ComObject WScript.Shell
       $ws.Run($tCmd, 0, $false) | Out-Null
-      return
-    } catch {}
-    try {
-      Start-Process powershell.exe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$tScript`"" -WindowStyle Hidden | Out-Null
     } catch {}
   }
 }

@@ -79,6 +79,22 @@ WshShell.Run "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hid
 Set-Content -LiteralPath $VbsWrapper -Value $vbsContent -Encoding ASCII
 try { Set-Content -LiteralPath $dataVbsWrapper -Value $vbsContent -Encoding ASCII } catch {}
 
+# Generate silent VBScript launcher for tray companion
+$trayVbs = Join-Path $ScriptDir 'tray.vbs'
+$dataTrayVbs = Join-Path $DataRoot 'tray.vbs'
+$trayVbsContent = @"
+Set WshShell = CreateObject("WScript.Shell")
+Set fso = CreateObject("Scripting.FileSystemObject")
+appData = WshShell.ExpandEnvironmentStrings("%LOCALAPPDATA%")
+psScript = appData & "\x-whatsapp-poster\tray.ps1"
+If Not fso.FileExists(psScript) Then
+  psScript = "$ScriptDir\tray.ps1"
+End If
+WshShell.Run "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File """ & psScript & """", 0, False
+"@
+Set-Content -LiteralPath $trayVbs -Value $trayVbsContent -Encoding ASCII
+try { Set-Content -LiteralPath $dataTrayVbs -Value $trayVbsContent -Encoding ASCII } catch {}
+
 # Find Chrome icon if available, otherwise use shell32 icon
 $chromeIcon = @(
   (Join-Path ${env:ProgramFiles} 'Google\Chrome\Application\chrome.exe'),
