@@ -89,14 +89,26 @@ function Clear-SessionLocks {
 
 function Get-TrayProcess {
   Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-    Where-Object { ($_.Name -eq 'powershell.exe' -or $_.Name -eq 'pwsh.exe') -and $_.CommandLine -and $_.CommandLine -like "*tray.ps1*" }
+    Where-Object {
+      ($_.Name -eq 'powershell.exe' -or $_.Name -eq 'pwsh.exe') -and
+      $_.ProcessId -ne $PID -and
+      $_.CommandLine -and
+      $_.CommandLine -like "*tray.ps1*" -and
+      $_.CommandLine -notlike "*Get-CimInstance*" -and
+      $_.CommandLine -notlike "*Select-String*"
+    }
 }
 
 function Start-Tray {
   if (Get-TrayProcess) { return }
   if (Test-Path -LiteralPath $TrayScript) {
+    $cmd = "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$TrayScript`""
     try {
-      $cmd = "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$TrayScript`""
+      $ws = New-Object -ComObject WScript.Shell
+      $ws.Run($cmd, 0, $false) | Out-Null
+      return
+    } catch {}
+    try {
       Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $cmd } -ErrorAction Stop | Out-Null
     } catch {
       Start-Process powershell.exe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$TrayScript`"" -WindowStyle Hidden | Out-Null
@@ -258,11 +270,16 @@ switch ($Action) {
     if (-not (Test-Path -LiteralPath $VbsLauncherPath) -and -not (Test-Path -LiteralPath $LegacyCmdPath)) { throw "not installed - run: $PSCommandPath install" }
     New-Launcher
     $toStart = if (Test-Path -LiteralPath $VbsLauncherPath) { $VbsLauncherPath } else { $LegacyCmdPath }
+    $cmdLine = if ($toStart -like '*.vbs') { "wscript.exe `"$toStart`"" } else { "cmd.exe /c `"$toStart`"" }
     try {
-      $cmdLine = if ($toStart -like '*.vbs') { "wscript.exe `"$toStart`"" } else { "cmd.exe /c `"$toStart`"" }
-      Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $cmdLine } -ErrorAction Stop | Out-Null
+      $ws = New-Object -ComObject WScript.Shell
+      $ws.Run($cmdLine, 0, $false) | Out-Null
     } catch {
-      Start-Process -FilePath $toStart | Out-Null
+      try {
+        Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $cmdLine } -ErrorAction Stop | Out-Null
+      } catch {
+        Start-Process -FilePath $toStart | Out-Null
+      }
     }
     if ($manageTray) { Start-Tray }
     Start-Sleep -Seconds 12
@@ -282,11 +299,16 @@ switch ($Action) {
     if (-not (Test-Path -LiteralPath $VbsLauncherPath) -and -not (Test-Path -LiteralPath $LegacyCmdPath)) { throw "not installed - run: $PSCommandPath install" }
     New-Launcher
     $toStart = if (Test-Path -LiteralPath $VbsLauncherPath) { $VbsLauncherPath } else { $LegacyCmdPath }
+    $cmdLine = if ($toStart -like '*.vbs') { "wscript.exe `"$toStart`"" } else { "cmd.exe /c `"$toStart`"" }
     try {
-      $cmdLine = if ($toStart -like '*.vbs') { "wscript.exe `"$toStart`"" } else { "cmd.exe /c `"$toStart`"" }
-      Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $cmdLine } -ErrorAction Stop | Out-Null
+      $ws = New-Object -ComObject WScript.Shell
+      $ws.Run($cmdLine, 0, $false) | Out-Null
     } catch {
-      Start-Process -FilePath $toStart | Out-Null
+      try {
+        Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $cmdLine } -ErrorAction Stop | Out-Null
+      } catch {
+        Start-Process -FilePath $toStart | Out-Null
+      }
     }
     Start-Sleep -Seconds 12
     & $PSCommandPath status

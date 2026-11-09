@@ -27,10 +27,38 @@ param()
 
 $ErrorActionPreference = 'Stop'
 
+# Ensure any console window hosting this script is hidden immediately
+try {
+  $win32Def = @'
+using System;
+using System.Runtime.InteropServices;
+public class Win32Window {
+  [DllImport("user32.dll")]
+  public static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);
+  [DllImport("kernel32.dll")]
+  public static extern IntPtr GetConsoleWindow();
+}
+'@
+  if (-not ([System.Management.Automation.PSTypeName]'Win32Window').Type) {
+    Add-Type -TypeDefinition $win32Def -ErrorAction SilentlyContinue
+  }
+  $consoleHandle = [Win32Window]::GetConsoleWindow()
+  if ($consoleHandle -and $consoleHandle -ne [IntPtr]::Zero) {
+    [Win32Window]::ShowWindowAsync($consoleHandle, 0) | Out-Null
+  }
+} catch {}
+
 # Prevent duplicate tray icon instances
 $currentPid = $PID
 $existing = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-  Where-Object { ($_.Name -eq 'powershell.exe' -or $_.Name -eq 'pwsh.exe') -and $_.ProcessId -ne $currentPid -and $_.CommandLine -and $_.CommandLine -like "*tray.ps1*" }
+  Where-Object {
+    ($_.Name -eq 'powershell.exe' -or $_.Name -eq 'pwsh.exe') -and
+    $_.ProcessId -ne $currentPid -and
+    $_.CommandLine -and
+    $_.CommandLine -like "*tray.ps1*" -and
+    $_.CommandLine -notlike "*Get-CimInstance*" -and
+    $_.CommandLine -notlike "*Select-String*"
+  }
 if ($existing) {
   exit 0
 }
@@ -40,7 +68,7 @@ $StatusUri = "http://127.0.0.1:$Port/status"
 $DataRoot = Join-Path $env:LOCALAPPDATA 'x-whatsapp-poster'
 $SessionDir = Join-Path $DataRoot 'whatsapp-session'
 $LogFile = Join-Path $DataRoot 'controller.log'
-$ScriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
+$ScriptDir = if ($PSScriptRoot) { $PSScriptRoot } elseif ($MyInvocation.MyCommand -and $MyInvocation.MyCommand.Path) { Split-Path -Parent $MyInvocation.MyCommand.Path } else { (Get-Location).Path }
 if (-not $ScriptDir) { $ScriptDir = (Get-Location).Path }
 $StartupScript = Join-Path $ScriptDir 'install-startup.ps1'
 
@@ -94,8 +122,14 @@ function Restart-Controller {
   if (Test-Path -LiteralPath $lockFile) { Remove-Item -LiteralPath $lockFile -Force -ErrorAction SilentlyContinue }
 
   $env:X2WA_RESTARTING_FROM_TRAY = '1'
-  $restartCmd = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command `"`$env:X2WA_RESTARTING_FROM_TRAY='1'; & '$StartupScript' restart -SkipTray`""
-  Start-Process powershell.exe -ArgumentList $restartCmd -WindowStyle Hidden -ErrorAction SilentlyContinue | Out-Null
+  $fullRestartCmd = "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command `"`$env:X2WA_RESTARTING_FROM_TRAY='1'; & '$StartupScript' restart -SkipTray`""
+  try {
+    $ws = New-Object -ComObject WScript.Shell
+    $ws.Run($fullRestartCmd, 0, $false) | Out-Null
+  } catch {
+    $restartCmd = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command `"`$env:X2WA_RESTARTING_FROM_TRAY='1'; & '$StartupScript' restart -SkipTray`""
+    Start-Process powershell.exe -ArgumentList $restartCmd -WindowStyle Hidden -ErrorAction SilentlyContinue | Out-Null
+  }
 }
 
 function Stop-Controller {
