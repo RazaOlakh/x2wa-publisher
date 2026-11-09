@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Checks and reruns the X -> WhatsApp controller connection if stopped.
+  Checks and reruns the X -> WhatsApp controller and tray companion connection (2-in-1).
 #>
 [CmdletBinding()]
 param(
@@ -40,9 +40,12 @@ function Show-Notification {
     Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
     Add-Type -AssemblyName System.Drawing -ErrorAction SilentlyContinue
     $ni = New-Object System.Windows.Forms.NotifyIcon
-    $iconPath = Join-Path $PSScriptRoot 'x2wa.ico'
-    if (Test-Path -LiteralPath $iconPath) {
-      $ni.Icon = New-Object System.Drawing.Icon($iconPath)
+    $iconCandidates = @(
+      (Join-Path $PSScriptRoot 'x2wa.ico'),
+      (Join-Path $env:LOCALAPPDATA 'x-whatsapp-poster\x2wa.ico')
+    ) | Where-Object { $_ -and (Test-Path -LiteralPath $_) }
+    if ($iconCandidates) {
+      $ni.Icon = New-Object System.Drawing.Icon($iconCandidates[0])
     } else {
       $ni.Icon = [System.Drawing.SystemIcons]::Information
     }
@@ -59,8 +62,10 @@ function Show-Notification {
   } catch {}
 }
 
+$ScriptDir = if ($PSScriptRoot) { $PSScriptRoot } elseif ($MyInvocation.MyCommand -and $MyInvocation.MyCommand.Path) { Split-Path -Parent $MyInvocation.MyCommand.Path } else { (Get-Location).Path }
+if (-not $ScriptDir) { $ScriptDir = (Get-Location).Path }
 $Port = 47825
-$StartupScript = Join-Path $PSScriptRoot 'install-startup.ps1'
+$StartupScript = Join-Path $ScriptDir 'install-startup.ps1'
 
 if (-not $Silent) {
   Write-Host ""
