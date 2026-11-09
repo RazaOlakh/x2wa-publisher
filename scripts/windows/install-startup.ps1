@@ -94,6 +94,7 @@ function Get-TrayProcess {
       $_.ProcessId -ne $PID -and
       $_.CommandLine -and
       $_.CommandLine -like "*tray.ps1*" -and
+      $_.CommandLine -notlike "*-Command*" -and
       $_.CommandLine -notlike "*Get-CimInstance*" -and
       $_.CommandLine -notlike "*Select-String*"
     }

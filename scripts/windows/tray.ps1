@@ -56,6 +56,7 @@ $existing = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
     $_.ProcessId -ne $currentPid -and
     $_.CommandLine -and
     $_.CommandLine -like "*tray.ps1*" -and
+    $_.CommandLine -notlike "*-Command*" -and
     $_.CommandLine -notlike "*Get-CimInstance*" -and
     $_.CommandLine -notlike "*Select-String*"
   }
