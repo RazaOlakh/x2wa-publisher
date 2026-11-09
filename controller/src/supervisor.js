@@ -19,7 +19,9 @@
 // anything; see controller/test/supervisor.test.js.
 
 const path = require('path');
+const fs = require('fs');
 const { spawn } = require('child_process');
+const { sessionDir, isAlive } = require('./platform');
 
 const DEFAULTS = {
   // First restart wait; it doubles for each quick exit in a row.
@@ -81,8 +83,27 @@ function main(argv, env) {
       if (stopping) { log('info', 'supervised-exit', { code, signal }); return; }
       const ranForMs = Date.now() - startedAt;
       // Exit 3 is the controller refusing to start because another one owns the
-      // session. Restarting would only collide again, so stop quietly.
-      if (code === 3) { log('warn', 'session-locked', { code }); process.exit(0); }
+      // session. If the lock PID is dead, clean it and retry; only give up if verified live.
+      if (code === 3) {
+        const lockPath = path.join(sessionDir(), 'controller.lock');
+        let lockPid = null;
+        if (fs.existsSync(lockPath)) {
+          try { lockPid = parseInt(fs.readFileSync(lockPath, 'utf8').trim(), 10); } catch {}
+        }
+        if (lockPid && isAlive(lockPid)) {
+          log('warn', 'session-locked', { code, pid: lockPid });
+          process.exit(0);
+        } else if (fs.existsSync(lockPath)) {
+          log('warn', 'stale-lock-removed', { code, pid: lockPid });
+          try { fs.rmSync(lockPath, { force: true }); } catch {}
+          const retryDelay = cfg.restartMs < 3000 ? cfg.restartMs : 3000;
+          setTimeout(launch, retryDelay);
+          return;
+        } else {
+          log('warn', 'session-locked', { code });
+          process.exit(0);
+        }
+      }
       const decision = afterExit(consecutive, ranForMs, cfg);
       consecutive = decision.consecutive;
       if (decision.action === 'give-up') {

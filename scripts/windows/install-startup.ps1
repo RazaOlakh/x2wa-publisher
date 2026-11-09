@@ -21,7 +21,8 @@
 [CmdletBinding()]
 param(
   [ValidateSet('install', 'uninstall', 'status', 'restart', 'start')]
-  [string]$Action = 'install'
+  [string]$Action = 'install',
+  [switch]$SkipTray
 )
 
 $ErrorActionPreference = 'Stop'
@@ -63,8 +64,27 @@ function Get-ControllerProcess {
 }
 
 function Get-SessionChromeProcesses {
-  Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" -ErrorAction SilentlyContinue |
+  $p1 = Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" -ErrorAction SilentlyContinue |
     Where-Object { $_.CommandLine -and $_.CommandLine -like "*$SessionDir*" }
+  $p2 = Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" -ErrorAction SilentlyContinue |
+    Where-Object { $_.CommandLine -and ($_.CommandLine -like "*x-whatsapp-poster*" -or $_.CommandLine -like "*whatsapp-session*") }
+  @($p1; $p2) | Where-Object { $_ } | Sort-Object -Property ProcessId -Unique
+}
+
+function Clear-SessionLocks {
+  $lockTargets = @(
+    $SessionDir,
+    (Join-Path $SessionDir 'session'),
+    (Join-Path $SessionDir 'session\Default'),
+    (Join-Path $SessionDir 'Default')
+  )
+  foreach ($dir in $lockTargets) {
+    if (Test-Path -LiteralPath $dir) {
+      Get-ChildItem -LiteralPath $dir -Force -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -in @('SingletonLock', 'SingletonCookie', 'SingletonSocket') } |
+        Remove-Item -Force -ErrorAction SilentlyContinue
+    }
+  }
 }
 
 function Get-TrayProcess {
@@ -225,7 +245,8 @@ switch ($Action) {
   'restart' {
     foreach ($p in (Get-ControllerProcess)) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }
     foreach ($p in (Get-SessionChromeProcesses)) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }
-    Stop-Tray
+    $manageTray = (-not $SkipTray) -and ($env:X2WA_RESTARTING_FROM_TRAY -ne '1')
+    if ($manageTray) { Stop-Tray }
     for ($i = 0; $i -lt 10; $i++) {
       if (-not (Get-ControllerProcess)) { break }
       Start-Sleep -Seconds 1
@@ -233,6 +254,7 @@ switch ($Action) {
     Start-Sleep -Seconds 2
     $lockFile = Join-Path $SessionDir 'controller.lock'
     if (Test-Path -LiteralPath $lockFile) { Remove-Item -LiteralPath $lockFile -Force -ErrorAction SilentlyContinue }
+    Clear-SessionLocks
     if (-not (Test-Path -LiteralPath $VbsLauncherPath) -and -not (Test-Path -LiteralPath $LegacyCmdPath)) { throw "not installed - run: $PSCommandPath install" }
     New-Launcher
     $toStart = if (Test-Path -LiteralPath $VbsLauncherPath) { $VbsLauncherPath } else { $LegacyCmdPath }
@@ -242,12 +264,13 @@ switch ($Action) {
     } catch {
       Start-Process -FilePath $toStart | Out-Null
     }
-    Start-Tray
+    if ($manageTray) { Start-Tray }
     Start-Sleep -Seconds 12
     & $PSCommandPath status
   }
   'start' {
-    Start-Tray
+    $manageTray = (-not $SkipTray) -and ($env:X2WA_RESTARTING_FROM_TRAY -ne '1')
+    if ($manageTray) { Start-Tray }
     if (Get-ControllerProcess) {
       Write-Host "already running" -ForegroundColor Yellow
       & $PSCommandPath status
@@ -255,6 +278,7 @@ switch ($Action) {
     }
     $lockFile = Join-Path $SessionDir 'controller.lock'
     if (Test-Path -LiteralPath $lockFile) { Remove-Item -LiteralPath $lockFile -Force -ErrorAction SilentlyContinue }
+    Clear-SessionLocks
     if (-not (Test-Path -LiteralPath $VbsLauncherPath) -and -not (Test-Path -LiteralPath $LegacyCmdPath)) { throw "not installed - run: $PSCommandPath install" }
     New-Launcher
     $toStart = if (Test-Path -LiteralPath $VbsLauncherPath) { $VbsLauncherPath } else { $LegacyCmdPath }
